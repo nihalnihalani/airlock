@@ -119,13 +119,13 @@ Pinned source audits are [07](07-openbot-audit.md) and [08](08-openmuse-audit.md
 | 0:20–1:05 | Start case: model plan, actual reproduction, source edit and execution events. | The agent performs work rather than describes it |
 | 1:05–1:30 | Fresh baseline vs candidate observations; regression checks complete. | The worker cannot declare itself successful |
 | 1:30–1:55 | Try the patched report, change a header/width, download the patch. | The result is usable and persists as an artifact |
-| 1:55–2:20 | Separately labelled unsafe-code fixture hits its timeout in a disposable task. Healthy report interaction remains available. | Actual unsafe execution is contained; the supervisor disposes of it |
+| 1:55–2:20 | A judge types `rm -rf /` (or a fork bomb, or a metadata `curl`) into the Hostile input panel. The blast-radius card shows what died (that sandbox, its runtime and guest kernel) and what survived (control plane, supervisor, the other task, the host sentinel), then the destroy event and "(no sandboxes)". Healthy report interaction remains available. | The literal answer to "if I paste `rm -rf /`, what dies?"; the supervisor disposes of the sandbox |
 | 2:20–2:40 | Optional negative control: broken source plus fabricated “tests passed” log is rejected by external checks. | The result comes from observed behavior, not the agent's story |
 | 2:40–3:00 | One trust-boundary diagram, result digest and destroyed-task record; close on working report. | Vultr runs the control plane, inference and execution; scoped claim is reviewable |
 
-Times are targets. The negative-control beat is cut first if timing is tight. Do not wait for the model to spontaneously misbehave; label the containment/false-log fixtures as controlled tests. Do not induce a fake error just to show a retry; keep a genuine recorded error/retry if the live run succeeds immediately.
+Times are targets. Keep all beats; the forged-log negative control is Airlock's most distinctive one. Do not wait for the model to spontaneously misbehave; label the containment/false-log fixtures as controlled tests. A separately labelled runaway-timeout fixture remains available as a second containment beat. Do not induce a fake error just to show a retry; keep a genuine recorded error/retry if the live run succeeds immediately.
 
-**60-second submission:** 0–8 crash, 8–27 real model/execution, 27–40 independent checks and working export, 40–53 actual timeout containment and healthy task, 53–60 artifact/lifecycle. Record actual deployed behavior. Prewarmed clean environments are fine if labelled; cached agent traces must be labelled recorded/replay. A live-agent requirement is not satisfied by a replay-only product.
+**60-second submission:** 0–8 crash, 8–27 real model/execution, 27–40 independent checks and working export, 40–53 hostile command absorbed by a disposable sandbox while the app stays healthy, 53–60 artifact/lifecycle (add the zero-inbound firewall views only if the NetBird add-on is done). Record actual deployed behavior. Prewarmed clean environments are fine if labelled; cached agent traces must be labelled recorded/replay. A live-agent requirement is not satisfied by a replay-only product.
 
 ## 8. Why this choice survives the research
 
