@@ -1,5 +1,7 @@
 # 14 · NetBird Bonus Plan: Go/No-Go, Topology, Lifecycle Binding
 
+> **Amended by the organizers' clarification (see [01 §2c-1](01-rules-and-compliance.md) and [38 §3.4/§4](38-kickoff-decks-and-netbird-clarification.md)).** The three bullets are **not cumulative tiers**: any one approach qualifies, and a fourth approach, **peer-to-peer connectivity over WireGuard**, was added. NetBird remains an **optional add-on attempted only after Airlock's core works**; if attempted, the plan is approach 3 for the controller → supervisor link (supervisor bound to its NetBird address, zero inbound rules on VM B, deny-by-default access policy), combined with approaches 1 and 2 for the public URL and the judge role. §3 (lifecycle-bound URLs) is **not pursued** for Airlock, whose preview has no per-task URL by design. §2's topology, §4's judge access and the self-hosting facts in §1 still apply; the go/no-go clocks in §6 do not.
+
 Re-verified **2026-09-26 11:00–11:15 UTC (16:30–16:45 IST, 04:00–04:15 PDT)** with fresh fetches of the NetBird docs and the GitHub releases API. Raw pages are in `raw/vultr/netbird/`. This builds on `03-netbird-bonus.md` (API payloads, gotchas and pain points are not repeated here).
 
 Organizer requirement IDs NB-01…NB-06 are defined in `01-rules-and-compliance.md` §2c.

@@ -99,6 +99,31 @@ Other CV flags, checked live:
 | NB-05 | "Keep one service live for judging and put any credentials in your README- ephemeral URLs expire about 90 seconds after the client stops." | NB doc | Organizer doc | A **permanent** judge service plus a README credential for a **low-privilege judge role only** | README | Low. Publishing credentials in a public repo is intended. Scope them. |
 | NB-06 | "Self-host the management server on Vultr and the whole path stays on your own infrastructure." | NB doc | Organizer doc | Deploy the NetBird Marketplace app on Vultr | Console | Low. Phrased as description, not a hard requirement. NetBird Cloud would likely score lower (inferred). |
 
+#### 2c-1. Organizer clarification (Discord, after kickoff) — supersedes the cumulative-tier reading of NB-01…NB-04
+
+Authority: organizer doc. Quoted verbatim:
+
+> **Clarification: Zero-Port Access Bonus**
+>
+> Hi everyone! A few of you have noticed that the participant guide and the kickoff slide describe the bonus criteria a little differently. Here's the official clarification.
+>
+> You do not need to demonstrate every criterion. The bonus is awarded for meaningful use of NetBird in your Challenge 1 or Challenge 2 project, and any of the following approaches qualifies:
+>
+> 1. No open ports: your public demo URL is served through the NetBird reverse proxy, with no inbound application ports open on your Vultr VM.
+> 2. Gated access: the exposed service sits behind SSO, password, PIN, or header auth, matched to a real user role.
+> 3. Peer-to-peer connectivity: machines on your NetBird network reach each other directly over WireGuard.
+> 4. Lifecycle-bound URLs: task or session URLs that expire along with the workload.
+>
+> Combining approaches is welcome and may strengthen your submission.
+>
+> To make sure judges can credit you, please show how you're using NetBird in your demo or README (for example, a screenshot of your proxy config, access policy, or peer connections).
+
+| ID | Meaning | Design implication | Proof |
+|---|---|---|---|
+| NB-07 | Any **one** of the four approaches qualifies; combining "may strengthen". The bullets are not cumulative tiers (answers Q-09). | Pick by fit to the product, not by tier count. Airlock: approach 3 for the controller → supervisor link, plus 1 and 2 for the public URL (38 §3.4). Approach 4 is not pursued. | — |
+| NB-08 | New approach: **peer-to-peer connectivity** over WireGuard between machines on the NetBird network. | No reverse proxy, domain, wildcard cert or expose cap needed for this approach. | Dashboard peer list showing a direct connection; access policy; `ss -ltn` on the target bound to the NetBird address |
+| NB-09 | Evidence may be in the **demo or README**, e.g. screenshots of proxy config, access policy, or peer connections. Softens NB-04's "zero-ports moment in the video". | Put screenshots and the judge credentials in the README; still show the firewall/URL beat on video. | README section + video beat |
+
 ---
 
 ## 3. Discrepancy register
@@ -222,7 +247,8 @@ The requirements are the rows in §2. The items below are **our safeguards**. No
 - **Q-01:** Are credits $200 per participant or per team leader? Can each teammate redeem?
 - **Q-02:** Is the demo video strictly ≤ 1 minute? Can it exceed 60 s to fit the containment moment and the NetBird zero-ports moment?
 - **Q-03:** For the NetBird bonus with a self-hosted management server, is it acceptable that the NetBird VM exposes 80/443/3478 while the *app* VM has zero inbound ports? Can SSH (22) stay open on the app VM if restricted to our IP, or must it be zero inbound?
-- **Q-04:** Does NetBird Cloud (not self-hosted) still qualify for the bonus?
+- **Q-04:** Does NetBird Cloud (not self-hosted) still qualify for the bonus? (Still open after the clarification in §2c-1; it says "meaningful use of NetBird" without naming self-hosting. Self-host anyway.)
+- **Q-09 (answered):** the bonus bullets are not cumulative; any one approach qualifies (§2c-1).
 - **Q-05:** Are any non-Vultr model calls allowed at all (e.g. a local embedding model), or strictly Vultr Inference for everything model-shaped?
 - **Q-06:** Is 12:00 PDT a hard deadline for the form, given it stays open until 17:00 (+6 h)?
 - **Q-07:** What are the event-specific submit-form questions? Do we declare the challenge and bonus tiers there?
