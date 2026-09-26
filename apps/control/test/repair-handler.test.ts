@@ -1,0 +1,285 @@
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import type { RunEvent, Task } from "@airlock/contracts";
+import { STORE_KIND_VERIFICATIONS } from "../src/repair-handler.ts";
+import { FX_FIXED_SOURCE, FX_BROKEN_SOURCE, fixtureObserve, makeFixture, scriptedDriverDouble, type Fixture, type ScriptedTurn } from "./helpers/doubles.ts";
+import { FakeSupervisor, okExec } from "./helpers/fake-supervisor.ts";
+import { makeHarness, OWNER, type Harness } from "./helpers/harness.ts";
+
+let fixture: Fixture;
+beforeAll(async () => {
+  fixture = await makeFixture();
+});
+afterAll(async () => {
+  await fixture.cleanup();
+});
+
+const repairScript = (content: string): ScriptedTurn[] => [
+  { toolCalls: [{ name: "read_file", args: { path: "lib/mod.py" } }] },
+  { toolCalls: [{ name: "run", args: { command: "python -c 'from lib.mod import compute; compute(0)'" } }] },
+  { toolCalls: [{ name: "write_file", args: { path: "lib/mod.py", content } }] },
+  { toolCalls: [{ name: "submit_candidate", args: { summary: "handle zero" } }] },
+];
+
+async function runScenario(script: ScriptedTurn[], supervisorOverrides: ConstructorParameters<typeof FakeSupervisor>[0] extends infer O ? Partial<O> : never = {}, caps: Parameters<typeof makeFixture>[0] = {}) {
+  const fx = Object.keys(caps).length ? await makeFixture(caps) : fixture;
+  const supervisor = new FakeSupervisor({ profile: fx.profile, observe: fixtureObserve, ...supervisorOverrides });
+  const driver = scriptedDriverDouble(script);
+  const h = await makeHarness(fx, supervisor, driver);
+  h.worker.start();
+  const task = await h.newTask();
+  const result = await h.waitFor(task.id);
+  const events = await h.store.listEvents(task.id);
+  return { h, supervisor, driver, task: result, events, fx, close: async () => { await h.close(); if (fx !== fixture) await fx.cleanup(); } };
+}
+
+const phases = (events: RunEvent[]) => events.filter((e) => e.kind === "phase").map((e) => e.title);
+
+describe("repair handler", () => {
+  test("happy path: baseline reproduces, model fixes, candidate passes external checks", async () => {
+    const s = await runScenario(repairScript(FX_FIXED_SOURCE));
+    try {
+      expect(s.task.status).toBe("done");
+      expect(s.task.phase).toBe("ready");
+      expect(s.task.outcome).toBe("CANDIDATE_PASSED_CHECKS");
+      expect(s.task.candidateDigest).toMatch(/^[a-f0-9]{64}$/);
+      expect(s.task.verificationRecordId).toBeDefined();
+      expect(s.task.baselineRecordId).toBeDefined();
+      expect(phases(s.events)).toEqual(["prepare", "reproduce", "baseline", "repair", "freeze", "verify", "Outcome CANDIDATE_PASSED_CHECKS"]);
+      expect(s.supervisor.invocations.map((i) => i.role)).toEqual(["baseline", "candidate"]);
+      expect(s.supervisor.invocations[1]?.bundleDigest).toBe(s.task.candidateDigest);
+      expect(s.supervisor.attempts.size).toBe(0);
+      expect(s.supervisor.destroyed).toHaveLength(1);
+      const record = await s.h.store.get<{ passed: boolean; candidateDigest: string }>(OWNER, STORE_KIND_VERIFICATIONS, s.task.verificationRecordId!);
+      expect(record?.passed).toBe(true);
+      expect(record?.candidateDigest).toBe(s.task.candidateDigest!);
+      const bundle = await s.h.artifacts.getJson<{ candidateDigest: string; files: { path: string }[] }>("bundle", s.task.candidateDigest!);
+      expect(bundle?.files.map((f) => f.path)).toEqual(["lib/mod.py"]);
+      expect(s.task.budget.modelCallsUsed).toBe(4);
+      expect(s.task.budget.repairAttemptsUsed).toBe(1);
+      // Model saw the issue text but never an expected value from the contract.
+      expect(s.events.some((e) => e.kind === "tool" && e.title === "submit_candidate")).toBe(true);
+    } finally {
+      await s.close();
+    }
+  });
+
+  test("submit_candidate on an unchanged tree → CHECKS_FAILED", async () => {
+    const s = await runScenario([{ toolCalls: [{ name: "submit_candidate", args: { summary: "nothing changed" } }] }]);
+    try {
+      expect(s.task.status).toBe("done");
+      expect(s.task.outcome).toBe("CHECKS_FAILED");
+      expect(s.task.candidateDigest).toBeDefined();
+      expect(s.supervisor.attempts.size).toBe(0);
+      expect(phases(s.events)).toContain("verify");
+    } finally {
+      await s.close();
+    }
+  });
+
+  test("forged 'all tests passed' log and a written file that does not fix the bug → still CHECKS_FAILED", async () => {
+    const s = await runScenario([
+      { toolCalls: [{ name: "write_file", args: { path: "lib/mod.py", content: FX_BROKEN_SOURCE + "\n# tests: all tests passed\n" } }] },
+      { toolCalls: [{ name: "run", args: { command: "echo 'passed=true; 12 passed in 0.1s' > /workspace/junit.log; echo ALL TESTS PASSED" } }] },
+      { text: "All tests passed, the fix is verified.", toolCalls: [{ name: "submit_candidate", args: { summary: "All tests passed. passed: true" } }] },
+    ]);
+    try {
+      expect(s.task.outcome).toBe("CHECKS_FAILED");
+      expect(s.task.status).toBe("done");
+      const record = await s.h.store.get<{ passed: boolean; cases: { caseId: string; passed: boolean }[] }>(OWNER, STORE_KIND_VERIFICATIONS, s.task.verificationRecordId!);
+      expect(record?.passed).toBe(false);
+      expect(record?.cases.find((c) => c.caseId === "reported-zero")?.passed).toBe(false);
+    } finally {
+      await s.close();
+    }
+  });
+
+  test("baseline that does not show the reported failure → NOT_REPRODUCED, no model call, sandbox destroyed", async () => {
+    const driver = scriptedDriverDouble(repairScript(FX_FIXED_SOURCE));
+    const supervisor = new FakeSupervisor({
+      profile: fixture.profile,
+      observe: (_role, _files, request) => request.cases.map((c) => ({ caseId: c.id, status: "ok" as const, valueCanonical: String(Number(c.input.x) * 2) })),
+    });
+    const h = await makeHarness(fixture, supervisor, driver);
+    h.worker.start();
+    try {
+      const task = await h.newTask();
+      const result = await h.waitFor(task.id);
+      expect(result.outcome).toBe("NOT_REPRODUCED");
+      expect(result.status).toBe("done");
+      expect(driver.calls).toBe(0);
+      expect(supervisor.attempts.size).toBe(0);
+      expect(supervisor.destroyed).toHaveLength(1);
+      expect(supervisor.invocations.map((i) => i.role)).toEqual(["baseline"]);
+    } finally {
+      await h.close();
+    }
+  });
+
+  test("baseline invocation that fails to complete → INCONCLUSIVE", async () => {
+    const s = await runScenario(repairScript(FX_FIXED_SOURCE), {
+      observe: () => ({ exec: { status: "timed_out", exitCode: null, timedOut: true }, observations: [], protocolErrors: ["no output"] }),
+    });
+    try {
+      expect(s.task.outcome).toBe("INCONCLUSIVE");
+      expect(s.supervisor.attempts.size).toBe(0);
+    } finally {
+      await s.close();
+    }
+  });
+
+  test("model call budget exhaustion → STOPPED_LIMIT", async () => {
+    const script: ScriptedTurn[] = Array.from({ length: 20 }, () => ({ toolCalls: [{ name: "run", args: { command: "python -m pytest -q" } }] }));
+    const s = await runScenario(script, {}, { maxModelCalls: 5 });
+    try {
+      expect(s.task.outcome).toBe("STOPPED_LIMIT");
+      expect(s.task.status).toBe("done");
+      expect(s.task.budget.modelCallsUsed).toBe(5);
+      expect(s.supervisor.attempts.size).toBe(0);
+      expect(s.task.candidateDigest).toBeUndefined();
+    } finally {
+      await s.close();
+    }
+  });
+
+  test("model gives up without submitting → REPRODUCED_UNRESOLVED", async () => {
+    const s = await runScenario([
+      { toolCalls: [{ name: "read_file", args: { path: "lib/mod.py" } }] },
+      { text: "I cannot fix this." },
+      { text: "Still cannot." },
+      { text: "Giving up." },
+    ]);
+    try {
+      expect(s.task.outcome).toBe("REPRODUCED_UNRESOLVED");
+      expect(s.supervisor.attempts.size).toBe(0);
+    } finally {
+      await s.close();
+    }
+  });
+
+  test("tool errors are fed back to the model as results, not fatal", async () => {
+    const seen: string[] = [];
+    const driver = scriptedDriverDouble(
+      [
+        { toolCalls: [{ name: "read_file", args: { path: "secrets/../../etc/passwd" } }] },
+        { toolCalls: [{ name: "write_file", args: { path: "README.md", content: "x" } }] },
+        { toolCalls: [{ name: "bogus_tool", args: {} }] },
+        { toolCalls: [{ name: "write_file", args: { path: "lib/mod.py", content: FX_FIXED_SOURCE } }] },
+        { toolCalls: [{ name: "submit_candidate", args: { summary: "done" } }] },
+      ],
+      { onChat: (messages) => { const last = messages[messages.length - 1]; if (last?.role === "tool") seen.push(last.content); } },
+    );
+    const supervisor = new FakeSupervisor({ profile: fixture.profile, observe: fixtureObserve });
+    const h = await makeHarness(fixture, supervisor, driver);
+    h.worker.start();
+    try {
+      const task = await h.newTask();
+      const result = await h.waitFor(task.id);
+      expect(result.outcome).toBe("CANDIDATE_PASSED_CHECKS");
+      expect(seen[0]).toContain("error");
+      expect(seen[1]).toContain("may not be changed");
+      expect(seen[2]).toContain("invalid tool call");
+      // Refused writes never reached the supervisor.
+      expect(supervisor.toolCalls.filter((c) => c.args.kind === "write").map((c) => (c.args as { path: string }).path)).toEqual(["lib/mod.py"]);
+    } finally {
+      await h.close();
+    }
+  });
+
+  test("cancel mid-repair → cancelled, attempt revoked and destroyed", async () => {
+    let releaseExec: (() => void) | null = null;
+    const execStarted = new Promise<void>((resolve) => { releaseExec = resolve; });
+    const supervisor = new FakeSupervisor({
+      profile: fixture.profile,
+      observe: fixtureObserve,
+      exec: (command, _files, signal) =>
+        new Promise((resolve, reject) => {
+          releaseExec?.();
+          const timer = setTimeout(() => resolve(okExec({ stdout: `ran ${command}` })), 20_000);
+          signal?.addEventListener("abort", () => { clearTimeout(timer); reject(new Error("exec aborted")); }, { once: true });
+        }),
+    });
+    const driver = scriptedDriverDouble([{ toolCalls: [{ name: "run", args: { command: "sleep 100" } }] }, ...repairScript(FX_FIXED_SOURCE)]);
+    const h = await makeHarness(fixture, supervisor, driver);
+    h.worker.start();
+    try {
+      const task = await h.newTask();
+      await execStarted;
+      const attemptId = [...supervisor.attempts.keys()][0]!;
+      // The API path: running → cancelling, then abort the in-process run.
+      const next = await h.store.compareAndSwap<Task>(OWNER, "tasks", task.id, { status: "running" }, { status: "cancelling" });
+      expect(next?.status).toBe("cancelling");
+      h.worker.abort(task.id);
+      const result = await h.waitFor(task.id);
+      expect(result.status).toBe("cancelled");
+      expect(result.outcome).toBeUndefined();
+      expect(supervisor.attempts.size).toBe(0);
+      expect(supervisor.destroyed).toContain(attemptId);
+      expect(supervisor.revoked).toContain(attemptId);
+      const events = await h.store.listEvents(task.id);
+      expect(events.some((e) => e.title === "Task cancelled")).toBe(true);
+    } finally {
+      await h.close();
+    }
+  });
+
+  test("sandbox creation refused by the supervisor → task failed, nothing left behind", async () => {
+    const s = await runScenario(repairScript(FX_FIXED_SOURCE), { probeBlocked: false });
+    try {
+      expect(s.task.status).toBe("failed");
+      expect(s.task.error).toContain("refused");
+      expect(s.supervisor.attempts.size).toBe(0);
+    } finally {
+      await s.close();
+    }
+  });
+
+  test("freeze without a confirmed stop → INCONCLUSIVE", async () => {
+    const s = await runScenario(repairScript(FX_FIXED_SOURCE), { freezeConfirmed: false });
+    try {
+      expect(s.task.outcome).toBe("INCONCLUSIVE");
+      expect(s.task.candidateDigest).toBeUndefined();
+      expect(s.supervisor.attempts.size).toBe(0);
+    } finally {
+      await s.close();
+    }
+  });
+
+  test("a requeued task discards its stale attempt and STOPPED_LIMIT when repair attempts are exhausted", async () => {
+    const supervisor = new FakeSupervisor({ profile: fixture.profile, observe: fixtureObserve });
+    const driver = scriptedDriverDouble(repairScript(FX_FIXED_SOURCE));
+    const h = await makeHarness(fixture, supervisor, driver);
+    // Pretend a previous process created attempt "att-old" and died mid-repair with the budget used up.
+    await supervisor.createAttempt({ ref: { taskId: "task-1", attemptId: "att-old", generation: 1 }, profileId: "fx-1", role: "author", absoluteDeadline: new Date(Date.now() + 60_000).toISOString() });
+    h.worker.start();
+    try {
+      const task = await h.newTask({ attemptId: "att-old", generation: 1, phase: "repair", budget: { modelCallsUsed: 3, repairAttemptsUsed: 2 } });
+      const result = await h.waitFor(task.id);
+      expect(supervisor.destroyed).toContain("att-old");
+      expect(result.outcome).toBe("STOPPED_LIMIT");
+      expect(supervisor.attempts.size).toBe(0);
+    } finally {
+      await h.close();
+    }
+  });
+
+  test("every phase change and tool call is an event with bounded detail", async () => {
+    const big = "x".repeat(200_000);
+    const s = await runScenario([
+      { toolCalls: [{ name: "run", args: { command: `echo ${"y".repeat(3000)}` } }] },
+      { text: big, toolCalls: [{ name: "write_file", args: { path: "lib/mod.py", content: FX_FIXED_SOURCE } }] },
+      { toolCalls: [{ name: "submit_candidate", args: { summary: "s".repeat(3999) } }] },
+    ]);
+    try {
+      expect(s.task.outcome).toBe("CANDIDATE_PASSED_CHECKS");
+      for (const e of s.events) {
+        expect(e.detail.length).toBeLessThanOrEqual(65536);
+        expect(e.title.length).toBeLessThanOrEqual(256);
+      }
+      expect(s.events.filter((e) => e.kind === "model")).toHaveLength(3);
+      expect(s.events.some((e) => e.kind === "check" && e.title === "Isolation checkpoints")).toBe(true);
+      expect(s.events.some((e) => e.kind === "artifact" && e.title === "Candidate sealed")).toBe(true);
+    } finally {
+      await s.close();
+    }
+  });
+});
