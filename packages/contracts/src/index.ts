@@ -201,6 +201,8 @@ export const ProfileManifest = z.object({
   issueUrl: z.string().url(),
   repository: z.string().url(),
   baselineCommit: gitSha,
+  /** sha256 over the sorted `path sha256` lines of every tracked file at baselineCommit. */
+  baselineTreeDigest: sha256Hex,
   /** Never supplied to any sandbox. Exists so maintainers can validate the exercise. */
   referenceCommitMaintainerOnly: gitSha.optional(),
   runtimeImage: z.string(),
@@ -641,7 +643,10 @@ function sortKeys(value: unknown): unknown {
 
 export async function sha256(text: string | Uint8Array): Promise<string> {
   const bytes = typeof text === "string" ? new TextEncoder().encode(text) : text;
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  // Copy into a fresh ArrayBuffer so SharedArrayBuffer-backed views satisfy BufferSource.
+  const buffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(buffer).set(bytes);
+  const digest = await crypto.subtle.digest("SHA-256", buffer);
   return Array.from(new Uint8Array(digest))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
