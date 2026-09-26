@@ -172,7 +172,7 @@ Top pain points, ranked by severity × frequency × demo-ability:
 
 - **Challenge 1:** Vultr published 10 starter ideas (CSV Analyst, Prove-It Code Reviewer, Chart Anything, File Fixer, Self-Healing Runner, Comparison Shopper, Form Filler, Site QA Sweep, Research with Receipts, Page Watcher). Expect many teams on each. Also crowded: "Docker exec + chat UI", an E2B clone, a regex command firewall, and plain `rm -rf` as the only containment moment.
 - **Challenge 2:** fleet dashboards, drone dispatch, Isaac Sim digital twins, robot governance layers, SDR/sales agents, meeting assistants, onboarding bots, invoice reconciliation (all past Vultr winners), and HR screeners (banned).
-- **NetBird:** one static URL with a password. It meets tier 1 only.
+- **NetBird:** one static URL with a password. (Per the organizers' clarification it now qualifies on its own, so it is the crowded baseline; 38 §3.4 combines it with the peer-to-peer link.)
 
 ## 6. Shortlisted project angles
 

@@ -96,7 +96,7 @@ Successful phase progression: `prepare → reproduce → baseline → repair →
 
 ## The execution bridge
 
-`--network none` is deliberate for all task roles. Therefore **do not retain OpenBot's in-sandbox HTTP transport**. VM A calls a private authenticated supervisor on VM B; that supervisor starts a fixed runner through Docker exec with bounded stdin/stdout, or starts a fresh fixed one-shot container. Only the author operation permits a shell command, passed as data to a command executed inside that sandbox. No host shell interpolation, arbitrary proxy URL or Docker configuration is accepted.
+`--network none` is deliberate for all task roles. Therefore **do not retain OpenBot's in-sandbox HTTP transport**. VM A calls a private authenticated supervisor on VM B over the Vultr VPC, with the supervisor bound to the VPC address only and no public inbound rule for it. (Optional NetBird add-on, only after the core works: move that link onto the NetBird peer-to-peer WireGuard mesh with a deny-by-default access policy so VM B has zero inbound rules; 38 §3.4.) That supervisor starts a fixed runner through Docker exec with bounded stdin/stdout, or starts a fresh fixed one-shot container. Only the author operation permits a shell command, passed as data to a command executed inside that sandbox. No host shell interpolation, arbitrary proxy URL or Docker configuration is accepted.
 
 Illustrative new supervisor contract:
 
@@ -210,10 +210,11 @@ Start with API and TaskWorker in one controller process. No Redis, Kubernetes, f
 | Execution / OpenBot | Fixed profile, private supervisor, actual exec, deadlines and deletion | Runtime inspection passes; background child dies on stop; expired ID cannot restart; altered flags fail attachment; task cannot exhaust host storage |
 | Verifier / artifact | Frozen contract, stopped collection, pristine replay, same-digest export | Original fails as expected; candidate behavior compared externally; forged pass log has no authority; symlink/oversize candidate rejected |
 | Product / demo | Issue → observed crash → repair → try input → download; containment moment | Real public deployed run with visible useful output; no prerecorded events presented as live; a judge-typed `rm -rf /` in the Hostile input panel produces a blast-radius card (what died, what survived, destroy event) while the app continues |
+| NetBird add-on (optional, after everything above) | Controller ↔ supervisor over the NetBird peer link; then public URL via the self-hosted reverse proxy with password → judge role | VM A and VM B show zero inbound firewall rules; supervisor bound to the NetBird address only; access policy denies everything but `control → execution`; screenshots and judge credentials in the README. Not attempted → core submission unchanged, bonus not claimed |
 
 First prove a **vertical slice**, not four parallel frameworks: a fixed failing base and a known diagnostic candidate through create → exec → stop → collect → fresh compare → preview → export. A diagnostic patch is clearly labelled test data. Then replace it with an actual Vultr-driven repair and meet 35's live-repair gate (at least two successes in three fresh hero attempts with the external verifier). No native local test or static source audit counts as proof of Vultr deployment or isolation.
 
-If the model repair gate fails, retain the same architecture for a useful reproduction result and visibly disable the repair promise. If containment, candidate identity or comparator isolation fails, the project has not met its central claim: fix that before adding features. Browser automation and NetBird bonus work follow only after the working code-execution path; neither is needed to make this repaired-library preview interactive.
+If the model repair gate fails, retain the same architecture for a useful reproduction result and visibly disable the repair promise. If containment, candidate identity or comparator isolation fails, the project has not met its central claim: fix that before adding features. Browser automation is not needed to make this repaired-library preview interactive and is not planned. NetBird is an optional add-on attempted only after the core works (38 §3.4): the peer link first, then the reverse-proxy public URL and judge gating.
 
 ## Demo payoff
 
