@@ -1,0 +1,222 @@
+/**
+ * A fake DockerApi for tests: records every call in order, keeps containers/volumes in memory,
+ * reports an inspect detail that mirrors the create spec (so hardening checks pass unless a test
+ * tampers with it), and answers execs from a scripted handler that emits multiplexed frames.
+ */
+import { Readable } from "node:stream";
+import type { ContainerCreateSpec, ContainerDetail, DockerApi, ExecSession, ExecSpec } from "../src/docker-api";
+
+export interface ScriptedExec {
+  stdout?: string;
+  stderr?: string;
+  exitCode?: number | null;
+  /** Delay before the stream ends. */
+  delayMs?: number;
+  /** Never end the stream (simulates a hung process). */
+  hang?: boolean;
+  /** Emit a stream error instead of ending. */
+  error?: string;
+  /** Send stdout in chunks of this many bytes. */
+  chunk?: number;
+}
+
+export function frame(type: 1 | 2, data: Uint8Array): Uint8Array {
+  const out = new Uint8Array(8 + data.length);
+  out[0] = type;
+  new DataView(out.buffer).setUint32(4, data.length, false);
+  out.set(data, 8);
+  return out;
+}
+
+export function fakeSession(script: ScriptedExec, signal?: AbortSignal): ExecSession {
+  const stream = new Readable({ read() {} });
+  const enc = new TextEncoder();
+  const chunk = script.chunk ?? 65536;
+  const push = (type: 1 | 2, text: string) => {
+    const bytes = enc.encode(text);
+    for (let i = 0; i < bytes.length; i += chunk) stream.push(frame(type, bytes.subarray(i, Math.min(i + chunk, bytes.length))));
+  };
+  let ended = false;
+  const finish = () => {
+    if (ended) return;
+    ended = true;
+    if (script.error) stream.destroy(new Error(script.error));
+    else stream.push(null);
+  };
+  setTimeout(() => {
+    if (script.stdout) push(1, script.stdout);
+    if (script.stderr) push(2, script.stderr);
+    if (!script.hang) setTimeout(finish, script.delayMs ?? 0);
+  }, 0);
+  signal?.addEventListener("abort", () => stream.destroy(), { once: true });
+  return {
+    stream,
+    async exitCode() {
+      return script.exitCode === undefined ? 0 : script.exitCode;
+    },
+    abort() {
+      stream.destroy();
+    },
+  };
+}
+
+export type ExecHandler = (container: string, spec: ExecSpec) => ScriptedExec;
+
+export const PROBE_OK = JSON.stringify({ metadataEndpoint: "BLOCKED", dns: "BLOCKED", outboundTcp: "BLOCKED", dockerSocket: "BLOCKED", hostMounts: "BLOCKED", allBlocked: true });
+
+export function defaultHandler(overrides: Partial<Record<"uname" | "hostname" | "probe" | "materialize" | "collector" | "adapter" | "author" | "head", ScriptedExec>> = {}): ExecHandler {
+  return (_container, spec) => {
+    const cmd = spec.cmd.join(" ");
+    if (cmd.includes("/bin/uname")) return overrides.uname ?? { stdout: "Linux fake 6.1.0 #1 SMP x86_64 GNU/Linux\n" };
+    if (cmd.includes("/bin/hostname")) return overrides.hostname ?? { stdout: "sandbox\n" };
+    if (cmd.includes("probe.sh")) return overrides.probe ?? { stdout: `${PROBE_OK}\n` };
+    if (cmd.includes("materialize.py")) return overrides.materialize ?? { stdout: '{"materialized": 10, "replaced": []}\n' };
+    if (cmd.includes("collector.py")) return overrides.collector ?? { stdout: JSON.stringify({ schemaVersion: 1, files: [], rejected: [] }) };
+    if (cmd.includes("adapter.py")) return overrides.adapter ?? { stdout: "" };
+    if (cmd.includes("/usr/bin/head")) return overrides.head ?? { stdout: "file contents" };
+    return overrides.author ?? { stdout: "1\n" };
+  };
+}
+
+export class FakeDocker implements DockerApi {
+  readonly calls: string[] = [];
+  readonly containers = new Map<string, { spec: ContainerCreateSpec; running: boolean }>();
+  readonly volumes = new Map<string, Record<string, string>>();
+  handler: ExecHandler;
+  runtimes = ["runc", "io.containerd.runc.v2"];
+  defaultRuntime = "runc";
+  /** Mutate the detail before it is returned (to make inspection fail in tests). */
+  tamper: ((detail: ContainerDetail) => ContainerDetail) | undefined;
+  /** Track abort signals handed to exec so tests can assert revocation reached the stream. */
+  readonly execSignals: AbortSignal[] = [];
+
+  constructor(handler: ExecHandler = defaultHandler()) {
+    this.handler = handler;
+  }
+
+  private record(call: string) {
+    this.calls.push(call);
+  }
+
+  async ping() {
+    this.record("ping");
+    return true;
+  }
+  async version() {
+    return "fake-1.0";
+  }
+  async info() {
+    return { runtimes: this.runtimes, defaultRuntime: this.defaultRuntime };
+  }
+  async inspectImage(ref: string) {
+    return { id: `sha256:${"0".repeat(64)}`, repoDigests: [`${ref.split(":")[0]}@sha256:${"1".repeat(64)}`] };
+  }
+  async createVolume(name: string, labels: Record<string, string>) {
+    this.record(`createVolume ${name}`);
+    if (this.volumes.has(name)) throw Object.assign(new Error("conflict"), { statusCode: 409 });
+    this.volumes.set(name, labels);
+  }
+  async inspectVolume(name: string) {
+    const labels = this.volumes.get(name);
+    return labels ? { name, labels, driver: "local", scope: "local", options: {} } : null;
+  }
+  async removeVolume(name: string) {
+    this.record(`removeVolume ${name}`);
+    this.volumes.delete(name);
+  }
+  async listVolumes(labelFilters: string[]) {
+    return [...this.volumes.entries()].filter(([, labels]) => matches(labels, labelFilters)).map(([name, labels]) => ({ name, labels }));
+  }
+  async createContainer(spec: ContainerCreateSpec) {
+    this.record(`createContainer ${spec.name}`);
+    if (this.containers.has(spec.name)) throw Object.assign(new Error("conflict"), { statusCode: 409 });
+    this.containers.set(spec.name, { spec, running: false });
+  }
+  async startContainer(name: string) {
+    this.record(`startContainer ${name}`);
+    const c = this.containers.get(name);
+    if (!c) throw Object.assign(new Error("no such container"), { statusCode: 404 });
+    c.running = true;
+  }
+  async stopContainer(name: string, timeoutSeconds: number) {
+    this.record(`stopContainer ${name} t=${timeoutSeconds}`);
+    const c = this.containers.get(name);
+    if (c) c.running = false;
+  }
+  async removeContainer(name: string, force: boolean) {
+    this.record(`removeContainer ${name} force=${force}`);
+    this.containers.delete(name);
+  }
+  async inspectContainer(name: string): Promise<ContainerDetail | null> {
+    this.record(`inspectContainer ${name}`);
+    const c = this.containers.get(name);
+    if (!c) return null;
+    const s = c.spec;
+    const detail: ContainerDetail = {
+      id: `id-${name}`,
+      name,
+      image: `sha256:${"0".repeat(64)}`,
+      state: { status: c.running ? "running" : "exited", running: c.running, exitCode: 0, oomKilled: false, startedAt: "", finishedAt: "" },
+      config: {
+        user: s.user,
+        workingDir: s.workingDir,
+        env: [...s.env, "PATH=/usr/local/bin:/usr/bin:/bin", "PYTHON_VERSION=3.12.0"],
+        entrypoint: s.entrypoint,
+        cmd: s.cmd,
+        labels: s.labels,
+        image: s.image,
+        exposedPorts: {},
+      },
+      hostConfig: {
+        Runtime: s.hostConfig.runtime,
+        NetworkMode: s.hostConfig.networkMode,
+        ReadonlyRootfs: true,
+        CapDrop: ["ALL"],
+        CapAdd: null,
+        SecurityOpt: ["no-new-privileges"],
+        PidsLimit: s.hostConfig.pidsLimit,
+        Memory: s.hostConfig.memory,
+        MemorySwap: s.hostConfig.memorySwap,
+        NanoCpus: s.hostConfig.nanoCpus,
+        IpcMode: "private",
+        RestartPolicy: { Name: "no" },
+        Tmpfs: s.hostConfig.tmpfs,
+        Binds: null,
+        Devices: [],
+        DeviceRequests: null,
+        PidMode: "",
+        UsernsMode: "",
+        PortBindings: {},
+        PublishAllPorts: false,
+        Privileged: false,
+      },
+      mounts: s.hostConfig.mounts.map((m) => ({ type: "volume", name: m.source, source: "", destination: m.target, rw: !m.readOnly })),
+      networks: { none: {} },
+    };
+    return this.tamper ? this.tamper(detail) : detail;
+  }
+  async listContainers(labelFilters: string[]) {
+    return [...this.containers.entries()]
+      .filter(([, c]) => matches(c.spec.labels, labelFilters))
+      .map(([name, c]) => ({ name, labels: c.spec.labels, state: c.running ? "running" : "exited" }));
+  }
+  async putArchive(name: string, tar: Uint8Array, path: string) {
+    this.record(`putArchive ${name} ${path} ${tar.length}b`);
+    if (!this.containers.has(name)) throw Object.assign(new Error("no such container"), { statusCode: 404 });
+  }
+  async exec(name: string, spec: ExecSpec, signal: AbortSignal): Promise<ExecSession> {
+    this.record(`exec ${name} ${spec.cmd.join(" ")}`);
+    const c = this.containers.get(name);
+    if (!c) throw Object.assign(new Error("No such container"), { statusCode: 404 });
+    if (!c.running) throw Object.assign(new Error("Container is not running"), { statusCode: 409 });
+    this.execSignals.push(signal);
+    return fakeSession(this.handler(name, spec), signal);
+  }
+}
+
+function matches(labels: Record<string, string>, filters: string[]): boolean {
+  return filters.every((f) => {
+    const [k, v] = f.split("=");
+    return k !== undefined && labels[k] === v;
+  });
+}
