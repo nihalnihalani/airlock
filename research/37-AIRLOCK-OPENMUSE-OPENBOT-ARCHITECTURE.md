@@ -1,6 +1,6 @@
 # Airlock: architecture from OpenMuse and OpenBot
 
-**Decision, 26 September 2026. Design, not an implemented integration.** This is the detailed implementation architecture for [35 — Airlock / Repro-to-Repair](35-AIRLOCK-MAIN-CHALLENGE.md). It supersedes that document's abbreviated reuse table where more specific. Three source-audit workstreams informed it: [OpenMuse](36a-openmuse-control-plane.md), [OpenBot](36b-openbot-execution-plane.md), and [GPT-6 Astra's adversarial review](36c-architecture-adversarial-review.md).
+**Decision, 26 September 2026. Design, not an implemented integration.** This is the detailed implementation architecture for [35 — Airlock / Repro-to-Repair](35-AIRLOCK-MAIN-CHALLENGE.md). It supersedes that document's abbreviated reuse table where more specific. Three source-audit workstreams informed it: [OpenMuse](36a-openmuse-control-plane.md), [OpenBot](36b-openbot-execution-plane.md), and [GPT-6 Astra's adversarial review](36c-architecture-adversarial-review.md). Amended by [38](38-kickoff-decks-and-netbird-clarification.md) after Vultr's kickoff decks: runtime tier (Kata on VX1 over a gVisor floor, inspected and recorded), the shape of the optional NetBird add-on, five-checkpoint run records, and a judge-typed hostile command as the containment moment.
 
 ## Start from the main challenge
 
@@ -57,7 +57,7 @@ The supervisor creates these roles as needed; they are not five permanently runn
 | External comparator | Required case IDs, expected behavior, comparisons and completion count | Verdict or coverage to stdout, pytest/JUnit, or agent narration |
 | Artifact service | Canonical bytes, digests, diff against exact base, download identity | Artifact identity to agent-generated manifests or git output |
 
-Two VMs are our recommended layout, not a statement that the challenge mandates two. The baseline trust model assumes the execution host/runtime remains intact: a full compromise of VM B could falsify observations from its containers. A separate verifier execution host is a later extension for that stronger threat model. Finite checks also do not establish general correctness.
+Two VMs are our recommended layout, not a statement that the challenge mandates two; Vultr's kickoff deck shows the same two-instance shape (control plane, sandbox host, private dispatch link), so treat it as the expected baseline rather than a differentiator (38 §2). The baseline trust model assumes the execution host/runtime remains intact: a full compromise of VM B could falsify observations from its containers. A separate verifier execution host is a later extension for that stronger threat model. Finite checks also do not establish general correctness.
 
 ## What we actually reuse
 
@@ -123,13 +123,13 @@ An adapter running with candidate Python is still inside the untrusted environme
 
 Start with a pinned lean Python image and prebuilt dependencies, explicit non-root UID/GID, read-only runtime, private IPC/PID namespaces, capabilities dropped, no-new-privileges, no network or published ports, restart disabled, and a task-only writable workspace. No browser profile, SPIRE socket, Docker socket or credentials enter it. Inspect the **effective** configuration before dispatch, borrowing OpenMuse's fail-closed attachment checks.
 
-Adapt those checks to the actual Python image: environment allowlist, executable paths, workspace ownership and cache locations must agree with the image. Replace OpenBot's browser/Bun-port healthcheck with this runner's readiness check. Add explicit gVisor selection and runtime inspection; upstream OpenMuse's inspected profile does not itself check `runsc`. Do not weaken inspection to make an incompatible image start.
+Adapt those checks to the actual Python image: environment allowlist, executable paths, workspace ownership and cache locations must agree with the image. Replace OpenBot's browser/Bun-port healthcheck with this runner's readiness check. Add explicit runtime selection and inspection: the deployment profile names the runtime (`kata` on a VX1 host, else `runsc`), the supervisor checks the effective runtime on every container and reads `uname -r`/`hostname` from inside it, and both go into the verification record; upstream OpenMuse's inspected profile does not itself check the runtime. Do not weaken inspection to make an incompatible image start.
 
 Initial engineering targets, subject to the deployment probe: 1 CPU, 512 MiB RAM, 64 PIDs, 30 seconds per author command, 64 KiB combined captured output, 5 minutes per author attempt, 2 repair attempts, 1 MiB per accepted source file and 4 MiB total candidate source changes. CPU share/caps do not bound total runtime; the supervisor enforces deadlines separately. These are proposed caps, not measured supported settings or performance claims.
 
 Author workspaces use dedicated named volumes retained only through stopped-container collection. A tmpfs workspace would disappear at stop, so do not combine it with this freeze design. Provision and test a hard per-volume storage quota, plus host-wide admission and disk headroom; per-write limits do not constrain arbitrary shell writes. Quota mechanism and gVisor/runtime compatibility are deployment gates. Do not advertise those protections before measuring them. The control plane remains available when a task exhausts its allotted resources.
 
-Use Docker + gVisor if the actual Vultr deployment smoke test passes. A Docker-only fallback changes the isolation claim and must be explicitly documented. The supervisor enforces its own deadline and kills the whole container; an in-container timeout or process-group kill alone cannot reliably remove all descendant processes.
+Runtime tier (38 §3.1): **Kata Containers on the VX1 sandbox host is the target**, because it gives each task container its own guest kernel while keeping the Docker API this supervisor is built on (dockerode, named volumes, `--network none`, resource flags, stopped-container collection); Microsandbox/libkrun would replace that control surface. **gVisor is the floor.** If Kata fails its deployment probe (no `/dev/kvm`, virtiofs volume or read-only collector-mount problems), ship gVisor and record it. A plain runc container is not an acceptable runtime for any task role, so there is no Docker-only fallback. The supervisor enforces its own deadline and kills the whole container; an in-container timeout or process-group kill alone cannot reliably remove all descendant processes.
 
 ## Cancellation, recovery and identity
 
