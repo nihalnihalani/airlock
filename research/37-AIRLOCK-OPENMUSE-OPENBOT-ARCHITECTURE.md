@@ -125,6 +125,8 @@ Start with a pinned lean Python image and prebuilt dependencies, explicit non-ro
 
 Adapt those checks to the actual Python image: environment allowlist, executable paths, workspace ownership and cache locations must agree with the image. Replace OpenBot's browser/Bun-port healthcheck with this runner's readiness check. Add explicit runtime selection and inspection: the deployment profile names the runtime (`kata` on a VX1 host, else `runsc`), the supervisor checks the effective runtime on every container and reads `uname -r`/`hostname` from inside it, and both go into the verification record; upstream OpenMuse's inspected profile does not itself check the runtime. Do not weaken inspection to make an incompatible image start.
 
+Every author sandbox also runs a fixed **isolation probe** before agent work (metadata endpoint, DNS, outbound TCP, Docker socket, host mounts), each expected BLOCKED; a sandbox whose probe is not fully blocked is destroyed and the run refused. The host check (CPU virtualization, `/dev/kvm`, available runtimes), the probe result, the in-sandbox `uname`/`hostname`, the execution log and the post-run "(no sandboxes)" listing form the five-checkpoint skeleton of every run record (38 §3.3).
+
 Initial engineering targets, subject to the deployment probe: 1 CPU, 512 MiB RAM, 64 PIDs, 30 seconds per author command, 64 KiB combined captured output, 5 minutes per author attempt, 2 repair attempts, 1 MiB per accepted source file and 4 MiB total candidate source changes. CPU share/caps do not bound total runtime; the supervisor enforces deadlines separately. These are proposed caps, not measured supported settings or performance claims.
 
 Author workspaces use dedicated named volumes retained only through stopped-container collection. A tmpfs workspace would disappear at stop, so do not combine it with this freeze design. Provision and test a hard per-volume storage quota, plus host-wide admission and disk headroom; per-write limits do not constrain arbitrary shell writes. Quota mechanism and gVisor/runtime compatibility are deployment gates. Do not advertise those protections before measuring them. The control plane remains available when a task exhausts its allotted resources.
@@ -157,6 +159,8 @@ CandidateDigest = SHA256(canonical SourceManifest)
 VerificationRecord = candidateDigest + runtimeImageDigest + adapterDigest
                    + contractDigest + case observations + comparatorVersion
                    + actual execution metadata + outcome
+                   + runtimeProfile (runtime name, guest uname, host check,
+                     isolation-probe result, teardown listing)
 
 ExportGrant = owner/session scope + candidateDigest + verificationRecordDigest
             + expiry + explicit user action
