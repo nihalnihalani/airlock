@@ -151,16 +151,20 @@ The research team's product and engineering reviews support this narrow repro-to
 
 ### Build gates from the permitted hacking start
 
+The hour targets below are **loose guidelines only**. They order the work and say roughly when to expect each gate; they are never a reason to reduce the project's scope. Scope is reduced only when a gate fails on its evidence (38 §3.5).
+
 | Gate | Target | Decision |
 |---|---|---|
 | Inference + runner | +1 h | Real parsed Vultr tool call, limited code execution on Vultr, timeout and teardown. These are requirements for every variant. |
-| Repair viability | +2 h | At least 2/3 fresh runs on the pinned tabulate task produce a source patch passing the frozen reported case and basic regression cases through a minimal trusted external comparator, without upstream fix access. Agent-local checks do not count; build that small comparator as part of this spike. If not, one focused hour to simplify prompt/tooling; at +3 h commit to reproduction-only for this submission and say so. |
+| Runtime tier | with the runner | The chosen runtime (Kata on VX1, else gVisor) passes inspection and containment probes: effective config inspected, background child dies on stop, expired attempt cannot restart, isolation probe fully BLOCKED, storage quota holds. Fall back one tier only (Kata → gVisor), record it, never below gVisor. |
+| Repair viability | +2 h | At least 2/3 fresh runs on the pinned tabulate task produce a source patch passing the frozen reported case and basic regression cases through a minimal trusted external comparator, without upstream fix access. Agent-local checks do not count; build that small comparator as part of this spike. If not, simplify prompt/tooling and rerun; only if the gate still fails on evidence, commit to reproduction-only for this submission and say so. |
 | Trusted path | +4 h | Fresh base/candidate run through external comparator, frozen digest, patch export. Fake pass log cannot change verdict. No candidate code imported into verifier. |
 | Public useful flow | +8 h | Public URL runs issue→execution→checks→interactive result→download without terminal rescue. |
 | Safety and failure handling | +10 h | Independent time/memory limits, task-file isolation, no metadata/general network, cancellation fencing, output size caps, and no artifact mutation after verification. |
 | Freeze | Final 6 h | Stop adding adapters; test reset/failure paths, record video, document limits and submit early. |
+| NetBird add-on | optional, after Freeze | Controller reaches the supervisor over the NetBird peer link; VM B has zero inbound rules; the access policy denies everything else; screenshots in the README. If not attempted or not working, leave the VPC link in place and do not claim the bonus; the core submission is unaffected. |
 
-If the +3 h gate selects reproduction-only, disable repair/patch export in the public UI and replace candidate-preview requirements with a runnable reproduction bundle and original/reference version observations. Use the repro artifact as the demo payoff and say repair is unavailable. Rewrite the video and closing line accordingly; do not retain a “fixed” claim from this intended repair plan. This is an explicit reduced submission scope, not success on the original repair goal.
+If the repair gate selects reproduction-only, disable repair/patch export in the public UI and replace candidate-preview requirements with a runnable reproduction bundle and original/reference version observations. Use the repro artifact as the demo payoff and say repair is unavailable. Rewrite the video and closing line accordingly; do not retain a “fixed” claim from this intended repair plan. This is an explicit reduced submission scope, not success on the original repair goal.
 
 The 2/3 gate is an initial feasibility threshold, not production reliability. Before presenting, target ten fresh successful rehearsals on the deployed hero task and exercise at least three input variants. Report the actual count, failures and latency; do not convert repeated runs of one known bug into a general repair-success claim.
 
