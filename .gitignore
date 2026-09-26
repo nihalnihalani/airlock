@@ -8,3 +8,8 @@ build/
 .firecrawl/
 research/reference-repos/
 research/raw/
+
+# Airlock
+data/
+*.sqlite
+.env

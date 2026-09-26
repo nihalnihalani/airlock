@@ -1,0 +1,17 @@
+{
+  "name": "airlock",
+  "private": true,
+  "workspaces": ["packages/*", "apps/*"],
+  "scripts": {
+    "typecheck": "bun run --filter '*' typecheck",
+    "test": "bun test",
+    "dev:control": "bun run --cwd apps/control dev",
+    "dev:supervisor": "bun run --cwd apps/supervisor dev",
+    "dev:web": "bun run --cwd apps/web dev"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "bun-types": "^1.4.2",
+    "typescript": "^5.9.3"
+  }
+}
