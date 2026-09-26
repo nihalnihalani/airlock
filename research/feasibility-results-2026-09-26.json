@@ -1,0 +1,221 @@
+{
+  "kind": "pre-event local feasibility, not product validation",
+  "postgresql": {
+    "postgres": "17.11 (Homebrew)",
+    "tests": [
+      {
+        "name": "release_then_real_booking",
+        "passed": true,
+        "detail": {
+          "released": 2,
+          "booking_persisted": true
+        }
+      },
+      {
+        "name": "renewal",
+        "passed": true,
+        "detail": {
+          "result": "stale",
+          "batch_changes": 0
+        }
+      },
+      {
+        "name": "phantom",
+        "passed": true,
+        "detail": {
+          "result": "stale",
+          "batch_changes": 0
+        }
+      },
+      {
+        "name": "capacity_drift",
+        "passed": true,
+        "detail": {
+          "result": "stale",
+          "batch_changes": 0
+        }
+      },
+      {
+        "name": "mid_batch_failure_atomicity",
+        "passed": true,
+        "detail": {
+          "partial_effects": 0,
+          "receipt_count": 0
+        }
+      },
+      {
+        "name": "retry_after_rollback",
+        "passed": true,
+        "detail": {
+          "result": "applied"
+        }
+      },
+      {
+        "name": "eight_parallel_apply_connections",
+        "passed": true,
+        "detail": {
+          "outcomes": [
+            "already_applied",
+            "applied",
+            "already_applied",
+            "already_applied",
+            "already_applied",
+            "already_applied",
+            "already_applied",
+            "already_applied"
+          ]
+        }
+      },
+      {
+        "name": "ordinary_writer_blocked_during_compare_apply",
+        "passed": true,
+        "detail": {
+          "write_lock_timeout_ms": 100,
+          "mutation_applied": false
+        }
+      },
+      {
+        "name": "fresh_rehearsal_preserves_renewed_hold",
+        "passed": true,
+        "detail": {
+          "renewed_hold": "held",
+          "expired_hold": "released"
+        }
+      },
+      {
+        "name": "ddl_denied",
+        "passed": true,
+        "detail": {
+          "denied": true
+        }
+      },
+      {
+        "name": "expiry_mutation_denied",
+        "passed": true,
+        "detail": {
+          "denied": true
+        }
+      }
+    ],
+    "assertions": 11,
+    "apply_10_runs_ms_including_psql_start": {
+      "min": 11.92699998500757,
+      "median": 13.106729005812667,
+      "max": 14.176584023516625
+    },
+    "limits": "Temporary local PostgreSQL; trusted fixed SQL probe only, no model, no sandbox, no cloud; fixed cutoff 100; function default public EXECUTE not production hardened"
+  },
+  "sqlite": {
+    "environment": {
+      "os": "macOS-27.0-arm64-arm-64bit-Mach-O",
+      "python": "3.14.3",
+      "sqlite": "3.53.4"
+    },
+    "tests": [
+      {
+        "name": "real_release_then_booking",
+        "passed": true,
+        "detail": {
+          "released": 2,
+          "available_after_release": 2,
+          "customer_booking": "persisted"
+        }
+      },
+      {
+        "name": "renewed_hold",
+        "passed": true,
+        "detail": {
+          "result": "stale",
+          "batch_changes": 0
+        }
+      },
+      {
+        "name": "phantom_insert",
+        "passed": true,
+        "detail": {
+          "result": "stale",
+          "batch_changes": 0
+        }
+      },
+      {
+        "name": "crash_mid_batch",
+        "passed": true,
+        "detail": {
+          "result": "rolled_back",
+          "partial_effects": 0
+        }
+      },
+      {
+        "name": "retry_after_rollback",
+        "passed": true,
+        "detail": {
+          "result": "applied"
+        }
+      },
+      {
+        "name": "eight_concurrent_approvals",
+        "passed": true,
+        "detail": {
+          "outcomes": [
+            "applied",
+            "already_applied",
+            "already_applied",
+            "already_applied",
+            "already_applied",
+            "already_applied",
+            "already_applied",
+            "already_applied"
+          ]
+        }
+      },
+      {
+        "name": "hash",
+        "passed": true,
+        "detail": {
+          "result": "hash_mismatch",
+          "changes": 0
+        }
+      },
+      {
+        "name": "target",
+        "passed": true,
+        "detail": {
+          "result": "target_mismatch",
+          "changes": 0
+        }
+      },
+      {
+        "name": "expiry",
+        "passed": true,
+        "detail": {
+          "result": "expired",
+          "changes": 0
+        }
+      },
+      {
+        "name": "unsupported",
+        "passed": true,
+        "detail": {
+          "result": "rolled_back",
+          "changes": 0
+        }
+      },
+      {
+        "name": "per_row_hash_phantom_counterexample",
+        "passed": true,
+        "detail": {
+          "old_row_hashes_unchanged": true,
+          "tenant_revision_changed": true
+        }
+      }
+    ],
+    "test_count": 11,
+    "timing_30_runs_ms": {
+      "min": 0.40137500036507845,
+      "median": 0.4868539981544018,
+      "max": 0.7124999829102308
+    },
+    "scope": "SQLite logic only; no model, PostgreSQL, sandbox, network enforcement or Vultr measured",
+    "temp_fixture_dir": "/var/folders/3k/bfy_yh4s0z5bv5d9g_hp3f9m0000gn/T/dress-logic-emjy_9t_"
+  }
+}

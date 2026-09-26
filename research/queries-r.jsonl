@@ -1,0 +1,29 @@
+{"query": "AI slop issues open source maintainers GitHub", "tool": "firecrawl search", "params": {"tbs": "qdr:m", "limit": 10}, "time": "2026-09-26", "results_count": 10, "useful": true}
+{"query": "maintainer AI-generated bug reports cannot reproduce 2026", "tool": "firecrawl search", "params": {"tbs": "qdr:m", "limit": 10}, "time": "2026-09-26", "results_count": 10, "useful": true}
+{"query": "GitHub new feature limit issues pull requests from new contributors spam 2026", "tool": "firecrawl search", "params": {"limit": 10}, "time": "2026-09-26", "results_count": 10, "useful": true}
+{"query": "linux kernel security list flooded AI bug reports duplicate 2026", "tool": "firecrawl search", "params": {"tbs": "qdr:m", "limit": 10}, "time": "2026-09-26", "results_count": 10, "useful": true}
+{"query": "Torvalds \"almost entirely unmanageable\" security list AI reports", "tool": "firecrawl search", "params": {"limit": 8}, "time": "2026-09-26", "results_count": 8, "useful": true}
+{"query": "HackerOne Internet Bug Bounty paused submissions AI reports 2026", "tool": "firecrawl search", "params": {"limit": 8}, "time": "2026-09-26", "results_count": 8, "useful": true}
+{"query": "site:daniel.haxx.se curl summer of bliss", "tool": "firecrawl search", "params": {"limit": 5}, "time": "2026-09-26", "results_count": 5, "useful": true}
+{"query": "site:daniel.haxx.se 2026 security reports AI", "tool": "firecrawl search", "params": {"limit": 8}, "time": "2026-09-26", "results_count": 8, "useful": true}
+{"query": "AI agent automatically reproduces GitHub bug reports sandbox startup", "tool": "firecrawl search", "params": {"limit": 10}, "time": "2026-09-26", "results_count": 10, "useful": true}
+{"query": "GitHub Copilot issue triage agent reproduce bug 2026 docs", "tool": "firecrawl search", "params": {"limit": 10}, "time": "2026-09-26", "results_count": 10, "useful": false}
+{"query": "HackerOne Hai agentic triage validation reproduce vulnerability report 2026", "tool": "firecrawl search", "params": {"limit": 8}, "time": "2026-09-26", "results_count": 8, "useful": true}
+{"query": "Bugcrowd AI triage validate reproduce submissions 2026", "tool": "firecrawl search", "params": {"limit": 6}, "time": "2026-09-26", "results_count": 6, "useful": false}
+{"query": "SWT-bench leaderboard reproduction test generation success rate 2026 arxiv", "tool": "firecrawl search", "params": {"limit": 10}, "time": "2026-09-26", "results_count": 10, "useful": true}
+{"query": "arxiv issue reproduction test generation agent fail-to-pass rate SWT-bench Verified 2026", "tool": "firecrawl search", "params": {"limit": 10}, "time": "2026-09-26", "results_count": 10, "useful": true}
+{"query": "empirical study bug reports missing steps to reproduce percentage non-reproducible bugs", "tool": "firecrawl search", "params": {"limit": 10}, "time": "2026-09-26", "results_count": 10, "useful": true}
+{"query": "arxiv 2026 empirical study LLM-generated issue reports GitHub maintainers invalid", "tool": "firecrawl search", "params": {"limit": 8}, "time": "2026-09-26", "results_count": 8, "useful": false}
+{"query": "SWE-bench Verified underspecified problem statements 38.3% annotators filtered 68.3%", "tool": "firecrawl search", "params": {"limit": 5}, "time": "2026-09-26", "results_count": 5, "useful": true}
+{"query": "Chaparro detecting missing information bug descriptions steps to reproduce percentage bug reports lack", "tool": "firecrawl search", "params": {"limit": 6}, "time": "2026-09-26", "results_count": 6, "useful": true}
+{"query": "LogicStar AI autonomous bug reproduction fix product", "tool": "firecrawl search", "params": {"limit": 5}, "time": "2026-09-26", "results_count": 5, "useful": true}
+{"query": "Agentic bug reproduction for effective automated program repair at Google BRT arxiv", "tool": "firecrawl search", "params": {"limit": 5}, "time": "2026-09-26", "results_count": 5, "useful": true}
+{"query": "AI generated issue cannot reproduce (created>=2026-08-27)", "tool": "gh search issues", "params": {"limit": 30}, "time": "2026-09-26", "results_count": 0, "useful": false}
+{"query": "label:\"needs reproduction\" created:>=2026-08-27 vs 2025-08-27..2025-09-26", "tool": "gh api search/issues", "params": {}, "time": "2026-09-26", "results_count": 2, "useful": false}
+{"query": "\"AI slop\" is:issue created:>=2026-08-27 vs prior year", "tool": "gh api search/issues", "params": {"per_page": 40}, "time": "2026-09-26", "results_count": 40, "useful": false}
+{"query": "\"appears to be AI-generated\" is:issue created:>=2026-08-27", "tool": "gh api search/issues", "params": {"per_page": 35}, "time": "2026-09-26", "results_count": 33, "useful": true}
+{"query": "\"AI-generated\" \"reproduce\" in:comments is:issue is:closed created:>=2026-08-27 comments:>1", "tool": "gh api search/issues", "params": {"per_page": 30}, "time": "2026-09-26", "results_count": 30, "useful": true}
+{"query": "\"reproduction\" \"AI-generated\" in:comments is:issue is:closed reason:not planned created:>=2026-08-27", "tool": "gh api search/issues", "params": {"per_page": 30}, "time": "2026-09-26", "results_count": 30, "useful": false}
+{"query": "repo:<16 small python libs> is:issue is:closed reason:completed created:>=2024-06-01 with ClosedEvent closer", "tool": "gh api graphql", "params": {"first": 15}, "time": "2026-09-26", "results_count": 51, "useful": true}
+{"query": "repo:<16 small python libs> is:issue is:closed reason:not planned created:>=2025-01-01 comments:>0", "tool": "gh api search/issues", "params": {"per_page": 20}, "time": "2026-09-26", "results_count": 71, "useful": true}
+{"query": "org:pallets label:\"rejected AI\" (windows)", "tool": "gh api search/issues", "params": {}, "time": "2026-09-26", "results_count": 6, "useful": true}

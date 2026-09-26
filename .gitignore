@@ -5,3 +5,6 @@ dist/
 build/
 .DS_Store
 *.log
+.firecrawl/
+research/reference-repos/
+research/raw/
