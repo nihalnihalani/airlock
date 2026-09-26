@@ -13,3 +13,6 @@ research/raw/
 data/
 *.sqlite
 .env
+__pycache__/
+*.pyc
+.pytest_cache/
