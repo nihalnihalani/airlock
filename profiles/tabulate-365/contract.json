@@ -1,0 +1,162 @@
+{
+  "cases": [
+    {
+      "baseline": {
+        "exceptionType": "IndexError",
+        "kind": "raises",
+        "messageIncludes": "list index out of range"
+      },
+      "candidate": {
+        "kind": "returns",
+        "valueCanonical": "\"Name    Value\\n------  -------\""
+      },
+      "id": "reported-empty-headers-maxheader",
+      "input": {
+        "headers": [
+          "Name",
+          "Value"
+        ],
+        "maxheadercolwidths": 5,
+        "tabular_data": []
+      },
+      "kind": "reported",
+      "title": "Empty table with headers and maxheadercolwidths (issue #365)"
+    },
+    {
+      "baseline": {
+        "kind": "returns",
+        "valueCanonical": "\"Long      Val\\nhead\\ner\\n------  -----\\nalpha       1\\nbeta        2\""
+      },
+      "candidate": {
+        "kind": "returns",
+        "valueCanonical": "\"Long      Val\\nhead\\ner\\n------  -----\\nalpha       1\\nbeta        2\""
+      },
+      "id": "reg-small-table-maxheader",
+      "input": {
+        "headers": [
+          "Longheader",
+          "Val"
+        ],
+        "maxheadercolwidths": 4,
+        "tabular_data": [
+          [
+            "alpha",
+            1
+          ],
+          [
+            "beta",
+            2
+          ]
+        ]
+      },
+      "kind": "regression",
+      "title": "Small table, header wrapping still applies"
+    },
+    {
+      "baseline": {
+        "kind": "returns",
+        "valueCanonical": "\"Name      Value\\n------  -------\\nalpha         1\\nbeta          2\""
+      },
+      "candidate": {
+        "kind": "returns",
+        "valueCanonical": "\"Name      Value\\n------  -------\\nalpha         1\\nbeta          2\""
+      },
+      "id": "reg-small-table-plain",
+      "input": {
+        "headers": [
+          "Name",
+          "Value"
+        ],
+        "tabular_data": [
+          [
+            "alpha",
+            1
+          ],
+          [
+            "beta",
+            2
+          ]
+        ]
+      },
+      "kind": "regression",
+      "title": "Small table without wrapping options"
+    },
+    {
+      "baseline": {
+        "kind": "returns",
+        "valueCanonical": "\"Name    Value\\n------  -------\""
+      },
+      "candidate": {
+        "kind": "returns",
+        "valueCanonical": "\"Name    Value\\n------  -------\""
+      },
+      "id": "reg-empty-headers-no-option",
+      "input": {
+        "headers": [
+          "Name",
+          "Value"
+        ],
+        "tabular_data": []
+      },
+      "kind": "regression",
+      "title": "Empty table with headers, no wrapping option"
+    },
+    {
+      "baseline": {
+        "kind": "returns",
+        "valueCanonical": "\"Text      N\\n------  ---\\na very    1\\nlong\\ncell\\nvalue\\nhere\""
+      },
+      "candidate": {
+        "kind": "returns",
+        "valueCanonical": "\"Text      N\\n------  ---\\na very    1\\nlong\\ncell\\nvalue\\nhere\""
+      },
+      "id": "reg-maxcolwidths-wrap",
+      "input": {
+        "headers": [
+          "Text",
+          "N"
+        ],
+        "maxcolwidths": [
+          8,
+          null
+        ],
+        "tabular_data": [
+          [
+            "a very long cell value here",
+            1
+          ]
+        ]
+      },
+      "kind": "regression",
+      "title": "Cell wrapping via maxcolwidths unaffected"
+    },
+    {
+      "baseline": {
+        "kind": "returns",
+        "valueCanonical": "\"Hea      Val\\nder       ue\\n-----  -----\\nx          1\""
+      },
+      "candidate": {
+        "kind": "returns",
+        "valueCanonical": "\"Hea      Val\\nder       ue\\n-----  -----\\nx          1\""
+      },
+      "id": "reg-scalar-maxheader-int",
+      "input": {
+        "headers": [
+          "Header",
+          "Value"
+        ],
+        "maxheadercolwidths": 3,
+        "tabular_data": [
+          [
+            "x",
+            1
+          ]
+        ]
+      },
+      "kind": "regression",
+      "title": "Scalar maxheadercolwidths expands to all columns"
+    }
+  ],
+  "profileId": "tabulate-365",
+  "schemaVersion": 1
+}

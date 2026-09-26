@@ -1,0 +1,37 @@
+{
+  "adapterModule": "airlock_adapter_tabulate",
+  "allowedReplacementPaths": [
+    "tabulate/__init__.py"
+  ],
+  "baselineCommit": "e13a4d0dd292cade200e653eb9155a1ca0f1dbea",
+  "baselineTreeDigest": "d20b5bf8d4cefe19d3579d864269f0c04f7ded6f0a6ea75b93801b0e16693b06",
+  "caps": {
+    "attemptTimeoutMs": 300000,
+    "commandTimeoutMs": 30000,
+    "cpus": 1,
+    "maxFileBytes": 1048576,
+    "maxFiles": 4,
+    "maxModelCalls": 40,
+    "maxRepairAttempts": 2,
+    "maxTotalBytes": 4194304,
+    "memoryBytes": 536870912,
+    "outputBytes": 65536,
+    "pidsLimit": 64
+  },
+  "contractPath": "contract.json",
+  "displayName": "python-tabulate #365: empty table with maxheadercolwidths crashes",
+  "id": "tabulate-365",
+  "issueUrl": "https://github.com/astanin/python-tabulate/issues/365",
+  "language": "python",
+  "readablePaths": [
+    "tabulate/__init__.py",
+    "README.md",
+    "CHANGELOG",
+    "pyproject.toml"
+  ],
+  "referenceCommitMaintainerOnly": "87a9a4e07a5efb39b81fdb6ac513b1d345bb21fb",
+  "repository": "https://github.com/astanin/python-tabulate",
+  "runtimeImage": "airlock-runtime-python:tabulate-365",
+  "schemaVersion": 1,
+  "sourceRoot": "/workspace/src"
+}
