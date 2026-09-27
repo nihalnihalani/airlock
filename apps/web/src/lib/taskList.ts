@@ -6,7 +6,8 @@
  * them; nothing here infers success from anything else.
  */
 import type { Task } from "@airlock/contracts";
-import { OUTCOME_LABEL, outcomeTone, PHASE_LABEL, STATUS_LABEL, type Tone } from "./format";
+import { isTerminalStatus, OUTCOME_LABEL, outcomeTone, PHASE_LABEL, STATUS_LABEL, type Tone } from "./format";
+import { cleanupView, profileShortName } from "./general";
 
 export const TITLE_MAX = 120;
 
@@ -25,6 +26,11 @@ export interface TaskRowView {
   relative: string;
   /** Set on diagnostic runs driven by a scripted model (never a live repair). */
   scripted: string | null;
+  kind: "repair" | "general";
+  /** What the row names as its profile: the id for repair, a short profile name for general tasks. */
+  profileLabel: string;
+  /** General tasks only: the cleanup dimension, shown beside the result once it matters. */
+  cleanup: { label: string; tone: Tone } | null;
 }
 
 /**
@@ -97,7 +103,18 @@ export function taskRowView(task: Task, nowMs: number): TaskRowView {
     at,
     relative: relativeTime(at, nowMs),
     scripted: task.scriptedDriver ?? null,
+    kind: task.kind === "general" ? "general" : "repair",
+    profileLabel: task.kind === "general" ? profileShortName(task.profileId) : task.profileId,
+    cleanup: generalCleanupBadge(task),
   };
+}
+
+/** Shown once a sandbox existed or the task ended; hidden for repair tasks (their cleanup lives in events). */
+export function generalCleanupBadge(task: Pick<Task, "kind" | "cleanup" | "status">): { label: string; tone: Tone } | null {
+  if (task.kind !== "general") return null;
+  if ((task.cleanup === undefined || task.cleanup.status === "none") && !isTerminalStatus(task.status)) return null;
+  const c = cleanupView(task.cleanup, task.status);
+  return { label: c.label, tone: c.tone };
 }
 
 /** Newest first by creation time, id as a stable tie-break. */

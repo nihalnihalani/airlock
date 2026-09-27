@@ -1,0 +1,8 @@
+# Tool-call round trip — 20260927T155745Z
+probe-model: base https://api.vultrinference.com/v1; 1 model(s) from argv
+model    ok   tool_call  used_result  no_tool_answer  turn1_ms  turn2_ms  in_tok  out_tok  error
+-------  ---  ---------  -----------  --------------  --------  --------  ------  -------  -----
+glm-5.3  yes  yes        yes          no              1625      921       533     62            
+
+Recommended: AIRLOCK_MODEL=glm-5.3   (2546 ms round trip, 533+62 tokens)
+The driver appends -normalize automatically; set the bare id.

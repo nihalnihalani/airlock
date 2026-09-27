@@ -1,0 +1,866 @@
+{
+  "updatedAt": "2026-09-27T17:03:45.568Z",
+  "revision": "f223c19aa19d0429c0d51dd033fca61e9ac8baea",
+  "category": "real Vultr compute + live model",
+  "environment": "real Vultr compute (control vc2-2c-4gb @ 155.138.198.12, sandbox vx1-g-4c-16g-240s @ 144.202.28.80, region atl, Kata) + live model (glm-5.3 via Vultr Serverless Inference); public HTTPS API https://155-138-198-12.sslip.io",
+  "rows": [
+    {
+      "id": "V-K-hostile-kata",
+      "requirement": "Containment on Kata: hostile panel as judge (fork bomb, rm -rf / --no-preserve-root, curl 169.254.169.254) → card shows kata, died/survived, controlPlane healthy, teardown '(no sandboxes)'",
+      "command": "bun scripts/acceptance/vultr.ts V-K-hostile-kata",
+      "category": "real Vultr compute + live model",
+      "environment": "real Vultr compute (control vc2-2c-4gb @ 155.138.198.12, sandbox vx1-g-4c-16g-240s @ 144.202.28.80, region atl, Kata) + live model (glm-5.3 via Vultr Serverless Inference); public HTTPS API https://155-138-198-12.sslip.io",
+      "startedAt": "2026-09-27T17:01:53.784Z",
+      "timestamp": "2026-09-27T17:03:25.926Z",
+      "revision": "f223c19aa19d0429c0d51dd033fca61e9ac8baea",
+      "result": "PASS",
+      "checks": [
+        {
+          "ok": true,
+          "what": "fork-bomb: POST /api/hostile → 200 "
+        },
+        {
+          "ok": true,
+          "what": "fork-bomb: sandbox runtime kata (devUnsafe false; guest Linux sandbox 6.18.35 #1 SMP Mon Jun 15 12:55:58 UTC 2026 x8)"
+        },
+        {
+          "ok": true,
+          "what": "fork-bomb: died: airlock-hostile-hostile-op-op-5937bb532e79564ed555c04c — the command was killed at the per-command timeout; the whole container was stopped because the super"
+        },
+        {
+          "ok": true,
+          "what": "fork-bomb: survived: supervisor true, host sentinel true, control plane true/true"
+        },
+        {
+          "ok": true,
+          "what": "fork-bomb: teardown host listing \"(no sandboxes)\" (containers 0, networks 0, volumes 0)"
+        },
+        {
+          "ok": true,
+          "what": "fork-bomb: /api/health answered 62× during the run, 0 failures, max 4223 ms"
+        },
+        {
+          "ok": true,
+          "what": "rm-rf: POST /api/hostile → 200 "
+        },
+        {
+          "ok": true,
+          "what": "rm-rf: sandbox runtime kata (devUnsafe false; guest Linux sandbox 6.18.35 #1 SMP Mon Jun 15 12:55:58 UTC 2026 x8)"
+        },
+        {
+          "ok": true,
+          "what": "rm-rf: died: airlock-hostile-hostile-op-op-accb60696cf0996aa79f24a6 — the command exited 0; then the container and its volume were destroyed"
+        },
+        {
+          "ok": true,
+          "what": "rm-rf: survived: supervisor true, host sentinel true, control plane true/true"
+        },
+        {
+          "ok": true,
+          "what": "rm-rf: teardown host listing \"(no sandboxes)\" (containers 0, networks 0, volumes 0)"
+        },
+        {
+          "ok": true,
+          "what": "rm-rf: /api/health answered 5× during the run, 0 failures, max 886 ms"
+        },
+        {
+          "ok": true,
+          "what": "metadata: POST /api/hostile → 200 "
+        },
+        {
+          "ok": true,
+          "what": "metadata: sandbox runtime kata (devUnsafe false; guest Linux sandbox 6.18.35 #1 SMP Mon Jun 15 12:55:58 UTC 2026 x8)"
+        },
+        {
+          "ok": true,
+          "what": "metadata: died: airlock-hostile-hostile-op-op-251028c1f17cc36238a8402f — the command exited 0; then the container and its volume were destroyed"
+        },
+        {
+          "ok": true,
+          "what": "metadata: survived: supervisor true, host sentinel true, control plane true/true"
+        },
+        {
+          "ok": true,
+          "what": "metadata: teardown host listing \"(no sandboxes)\" (containers 0, networks 0, volumes 0)"
+        },
+        {
+          "ok": true,
+          "what": "metadata: /api/health answered 10× during the run, 0 failures, max 1221 ms"
+        },
+        {
+          "ok": true,
+          "what": "metadata unreachable from the sandbox by python urllib and bash /dev/tcp (curl_rc=127 py_err URLError <urlopen error [Errno 101] Network is unreachable> tcp_rc=1 /bin/bash: line 1: curl: command not found bash: connect: Network is unreachable bash: line 1: /dev/tcp/169.254.169.254/80: Network is unreachable )"
+        },
+        {
+          "ok": true,
+          "what": "operator cannot run the hostile panel (403)"
+        }
+      ],
+      "evidence": "docs/evidence/vultr/acceptance-f223c19/V-K-hostile-kata.json"
+    },
+    {
+      "id": "V-D-hero-web-analysis-live",
+      "requirement": "Combined hero (D): live web-analysis on https://forms.155-138-198-12.sslip.io/data/regional-sales (allowlist forms.155-138-198-12.sslip.io only; disclosed synthetic fixture) → download CSV, offline analysis, chart, cite → RESULT_VERIFIED (South); ?variant=b → different correct answer (North)",
+      "command": "bun scripts/acceptance/vultr.ts V-D-hero-web-analysis-live",
+      "category": "real Vultr compute + live model",
+      "environment": "real Vultr compute (control vc2-2c-4gb @ 155.138.198.12, sandbox vx1-g-4c-16g-240s @ 144.202.28.80, region atl, Kata) + live model (glm-5.3 via Vultr Serverless Inference); public HTTPS API https://155-138-198-12.sslip.io",
+      "startedAt": "2026-09-27T16:54:35.092Z",
+      "timestamp": "2026-09-27T16:57:04.106Z",
+      "revision": "f223c19aa19d0429c0d51dd033fca61e9ac8baea",
+      "result": "PASS",
+      "checks": [
+        {
+          "ok": true,
+          "what": "variant a: create live web-analysis task → 201 task-e36fb5d7541976ec"
+        },
+        {
+          "ok": true,
+          "what": "variant a: live model run (11 model events)"
+        },
+        {
+          "ok": true,
+          "what": "variant a: outcome done/RESULT_VERIFIED"
+        },
+        {
+          "ok": true,
+          "what": "variant a: screenshot screenshot-003-1.png (87018 B) downloaded via /api/artifacts and /api/tasks/:id/artifacts, sha256 = recorded 30befdfb5e35"
+        },
+        {
+          "ok": true,
+          "what": "variant a: download regional-sales.csv (74 B) downloaded via /api/artifacts and /api/tasks/:id/artifacts, sha256 = recorded 3e4765316eef"
+        },
+        {
+          "ok": true,
+          "what": "variant a: output chart.png (34468 B) downloaded via /api/artifacts and /api/tasks/:id/artifacts, sha256 = recorded 8775463f08cc"
+        },
+        {
+          "ok": true,
+          "what": "variant a: output summary.json (280 B) downloaded via /api/artifacts and /api/tasks/:id/artifacts, sha256 = recorded 4ed560cb10f5"
+        },
+        {
+          "ok": true,
+          "what": "variant a: the saved CSV (download:regional-sales.csv) is byte-identical to the served dataset (sha256 3e4765316eef)"
+        },
+        {
+          "ok": true,
+          "what": "variant a: data crossed browser → code sandbox via browser_download_save"
+        },
+        {
+          "ok": true,
+          "what": "variant a: offline code ran (2 code_run events)"
+        },
+        {
+          "ok": true,
+          "what": "variant a: answer \"South (attainment 0.727)\" = South 0.727 (computed here)"
+        },
+        {
+          "ok": true,
+          "what": "variant a: chart.png valid PNG 840x540"
+        },
+        {
+          "ok": true,
+          "what": "variant a: 1 screenshot(s), valid PNG"
+        },
+        {
+          "ok": true,
+          "what": "variant b: create live web-analysis task → 201 task-f262993e7dfeca51"
+        },
+        {
+          "ok": true,
+          "what": "variant b: live model run (11 model events)"
+        },
+        {
+          "ok": true,
+          "what": "variant b: outcome done/RESULT_VERIFIED"
+        },
+        {
+          "ok": true,
+          "what": "variant b: screenshot screenshot-003-1.png (86372 B) downloaded via /api/artifacts and /api/tasks/:id/artifacts, sha256 = recorded 3eefb1fe292c"
+        },
+        {
+          "ok": true,
+          "what": "variant b: download regional-sales.csv (75 B) downloaded via /api/artifacts and /api/tasks/:id/artifacts, sha256 = recorded 677656757736"
+        },
+        {
+          "ok": true,
+          "what": "variant b: output chart.png (30404 B) downloaded via /api/artifacts and /api/tasks/:id/artifacts, sha256 = recorded f92310c95918"
+        },
+        {
+          "ok": true,
+          "what": "variant b: output summary.json (325 B) downloaded via /api/artifacts and /api/tasks/:id/artifacts, sha256 = recorded bdef1c869288"
+        },
+        {
+          "ok": true,
+          "what": "variant b: the saved CSV (download:regional-sales.csv) is byte-identical to the served dataset (sha256 677656757736)"
+        },
+        {
+          "ok": true,
+          "what": "variant b: data crossed browser → code sandbox via browser_download_save"
+        },
+        {
+          "ok": true,
+          "what": "variant b: offline code ran (2 code_run events)"
+        },
+        {
+          "ok": true,
+          "what": "variant b: answer \"North (0.750)\" = North 0.750 (computed here)"
+        },
+        {
+          "ok": true,
+          "what": "variant b: chart.png valid PNG 960x600"
+        },
+        {
+          "ok": true,
+          "what": "variant b: 1 screenshot(s), valid PNG"
+        },
+        {
+          "ok": true,
+          "what": "changed input → changed answer (\"South (attainment 0.727)\" vs \"North (0.750)\")"
+        }
+      ],
+      "evidence": "docs/evidence/vultr/acceptance-f223c19/V-D-hero-web-analysis-live.json"
+    },
+    {
+      "id": "V-A-analysis-live",
+      "requirement": "Analysis (A): fresh CSV upload → live analysis task → RESULT_VERIFIED with the correct answer (computed here); outputs download and match sha256",
+      "command": "bun scripts/acceptance/vultr.ts V-A-analysis-live",
+      "category": "real Vultr compute + live model",
+      "environment": "real Vultr compute (control vc2-2c-4gb @ 155.138.198.12, sandbox vx1-g-4c-16g-240s @ 144.202.28.80, region atl, Kata) + live model (glm-5.3 via Vultr Serverless Inference); public HTTPS API https://155-138-198-12.sslip.io",
+      "startedAt": "2026-09-27T16:54:35.092Z",
+      "timestamp": "2026-09-27T16:56:17.685Z",
+      "revision": "f223c19aa19d0429c0d51dd033fca61e9ac8baea",
+      "result": "PASS",
+      "checks": [
+        {
+          "ok": true,
+          "what": "upload → 201, recorded sha256 = sha256(bytes sent)"
+        },
+        {
+          "ok": true,
+          "what": "create live analysis task → 201 task-17e6c6f804086963"
+        },
+        {
+          "ok": true,
+          "what": "live model run (12 model events, glm-5.3-normalize)"
+        },
+        {
+          "ok": true,
+          "what": "outcome done/RESULT_VERIFIED"
+        },
+        {
+          "ok": true,
+          "what": "cleanup confirmed"
+        },
+        {
+          "ok": true,
+          "what": "analysis: output chart.png (44294 B) downloaded via /api/artifacts and /api/tasks/:id/artifacts, sha256 = recorded 27c1a4522855"
+        },
+        {
+          "ok": true,
+          "what": "analysis: output summary.json (1739 B) downloaded via /api/artifacts and /api/tasks/:id/artifacts, sha256 = recorded 576f321eed59"
+        },
+        {
+          "ok": true,
+          "what": "answer \"Birch: 16931.66\" names Birch with 16931.66 (computed here)"
+        },
+        {
+          "ok": true,
+          "what": "total_revenue 24385.75 = 24385.75 (computed here)"
+        },
+        {
+          "ok": true,
+          "what": "chart.png valid PNG 1050x675"
+        }
+      ],
+      "evidence": "docs/evidence/vultr/acceptance-f223c19/V-A-analysis-live.json"
+    },
+    {
+      "id": "V-E-approvals-live",
+      "requirement": "Approvals (C25–C27): live web-research submits https://forms.155-138-198-12.sslip.io/f/contact-request via browser_propose_submit; changed digest 409; exact digest approve; controller submits; proposal confirmed with the destination's receipt; replay 409; model never sees the approval code; unapproved direct submits refused (destination 403)",
+      "command": "bun scripts/acceptance/vultr.ts V-E-approvals-live",
+      "category": "real Vultr compute + live model",
+      "environment": "real Vultr compute (control vc2-2c-4gb @ 155.138.198.12, sandbox vx1-g-4c-16g-240s @ 144.202.28.80, region atl, Kata) + live model (glm-5.3 via Vultr Serverless Inference); public HTTPS API https://155-138-198-12.sslip.io",
+      "startedAt": "2026-09-27T16:56:37.875Z",
+      "timestamp": "2026-09-27T16:57:37.350Z",
+      "revision": "f223c19aa19d0429c0d51dd033fca61e9ac8baea",
+      "result": "PASS",
+      "checks": [
+        {
+          "ok": true,
+          "what": "unapproved direct submits to the destination refused: no code → 403 (approval:missing); forged code → 403 (approval:mismatch)"
+        },
+        {
+          "ok": true,
+          "what": "create live web-research task → 201 task-3577b126555442f2"
+        },
+        {
+          "ok": true,
+          "what": "a proposal is pending (prop-93222f63011888430e98; form contact-request on https://forms.155-138-198-12.sslip.io; digest 41a68f7ccabdadf3)"
+        },
+        {
+          "ok": true,
+          "what": "proposed fields are exactly the requested values ({\"name\":\"Airlock Acceptance\",\"email\":\"acceptance@example.test\",\"message\":\"Vultr acceptance run c971ae66: please ignore.\"})"
+        },
+        {
+          "ok": true,
+          "what": "approve with a changed digest → 409 {\"error\":\"payloadDigest does not match the proposal: approve exactly the payload you reviewed\"}"
+        },
+        {
+          "ok": true,
+          "what": "another judge session approving → 404"
+        },
+        {
+          "ok": true,
+          "what": "approve with the exact digest → 200 approved"
+        },
+        {
+          "ok": true,
+          "what": "replayed decide → 409 {\"error\":\"the proposal was already decided (claimed); an approval is one-use\"}"
+        },
+        {
+          "ok": true,
+          "what": "proposal → confirmed; receipt rcpt_7lM8jp6MST5PCx3O9iGLxw"
+        },
+        {
+          "ok": true,
+          "what": "destination's own receipt store: 200 confirmed rcpt_7lM8jp6MST5PCx3O9iGLxw digest 41a68f7ccabdadf3 (matches proposal)"
+        },
+        {
+          "ok": true,
+          "what": "direct submit of the same values after approval, without the code → 403 (approval:missing)"
+        },
+        {
+          "ok": true,
+          "what": "task done/RESULT_VERIFIED"
+        },
+        {
+          "ok": true,
+          "what": "decide after the task ended → 409"
+        },
+        {
+          "ok": true,
+          "what": "no approval code (pattern or computed MAC) in 59 events (39412 B incl. model calls/tool results) or the task view"
+        }
+      ],
+      "evidence": "docs/evidence/vultr/acceptance-f223c19/V-E-approvals-live.json"
+    },
+    {
+      "id": "V-C-repair-live",
+      "requirement": "Repair (C): fresh live repair from profiles/tabulate-365/issue.md as a judge → CANDIDATE_PASSED_CHECKS; export zip sha256 = x-airlock-zip-sha256, identical on repeat; preview with a changed input returns the fixed behaviour",
+      "command": "bun scripts/acceptance/vultr.ts V-C-repair-live",
+      "category": "real Vultr compute + live model",
+      "environment": "real Vultr compute (control vc2-2c-4gb @ 155.138.198.12, sandbox vx1-g-4c-16g-240s @ 144.202.28.80, region atl, Kata) + live model (glm-5.3 via Vultr Serverless Inference); public HTTPS API https://155-138-198-12.sslip.io",
+      "startedAt": "2026-09-27T16:54:35.092Z",
+      "timestamp": "2026-09-27T16:56:28.612Z",
+      "revision": "f223c19aa19d0429c0d51dd033fca61e9ac8baea",
+      "result": "PASS",
+      "checks": [
+        {
+          "ok": true,
+          "what": "repair availability: live gate passed 3 of 3 on kata with glm-5.3-normalize (2026-09-27T16:45:49.029Z)"
+        },
+        {
+          "ok": true,
+          "what": "create live repair task → 201 task-8c04acc7d173484d"
+        },
+        {
+          "ok": true,
+          "what": "live model run: 11 model events, models glm-5.3-normalize, hosts https://api.vultrinference.com/v1"
+        },
+        {
+          "ok": true,
+          "what": "outcome done/CANDIDATE_PASSED_CHECKS"
+        },
+        {
+          "ok": true,
+          "what": "baseline reproduced (true); verification passed (true, 6/6 cases)"
+        },
+        {
+          "ok": true,
+          "what": "verification ran on kata (devUnsafe false)"
+        },
+        {
+          "ok": true,
+          "what": "export grant → 201"
+        },
+        {
+          "ok": true,
+          "what": "zip sha256 342434c7a9ab58aa = x-airlock-zip-sha256 342434c7a9ab58aa = grant.zipDigest"
+        },
+        {
+          "ok": true,
+          "what": "repeat export+download byte-identical (342434c7a9ab58aa; grant same)"
+        },
+        {
+          "ok": true,
+          "what": "zip carries patch.diff touching tabulate/__init__.py (16 lines)"
+        },
+        {
+          "ok": true,
+          "what": "the unpatched base raises IndexError for the changed input (locally)"
+        },
+        {
+          "ok": true,
+          "what": "preview (changed input) → 200 ok: \"Qty    Sum    Avg\\n-----  -----  -----\" (expected \"Qty    Sum    Avg\\n-----  -----  -----\") on kata"
+        },
+        {
+          "ok": true,
+          "what": "preview with a foreign digest refused (409)"
+        }
+      ],
+      "evidence": "docs/evidence/vultr/acceptance-f223c19/V-C-repair-live.json"
+    },
+    {
+      "id": "V-F-takeover-live",
+      "requirement": "Takeover (C22–C24): owner takes control of a running live browser task; one human navigate + screenshot inside the allowlist; navigate outside → 422; human submit of the form without approval refused; release; the agent must observe afresh",
+      "command": "bun scripts/acceptance/vultr.ts V-F-takeover-live",
+      "category": "real Vultr compute + live model",
+      "environment": "real Vultr compute (control vc2-2c-4gb @ 155.138.198.12, sandbox vx1-g-4c-16g-240s @ 144.202.28.80, region atl, Kata) + live model (glm-5.3 via Vultr Serverless Inference); public HTTPS API https://155-138-198-12.sslip.io",
+      "startedAt": "2026-09-27T16:58:18.756Z",
+      "timestamp": "2026-09-27T16:59:17.728Z",
+      "revision": "f223c19aa19d0429c0d51dd033fca61e9ac8baea",
+      "result": "PASS",
+      "checks": [
+        {
+          "ok": true,
+          "what": "create live web-research task → 201 task-18f2abb96399bad1"
+        },
+        {
+          "ok": true,
+          "what": "task running with a live browser"
+        },
+        {
+          "ok": true,
+          "what": "another judge session cannot take control (404)"
+        },
+        {
+          "ok": true,
+          "what": "owner take → 200 holder=human fence=2 (tries: 200)"
+        },
+        {
+          "ok": true,
+          "what": "human navigate https://forms.155-138-198-12.sslip.io/f/contact-request (allowlisted) → 200 ok=true http=completed"
+        },
+        {
+          "ok": true,
+          "what": "human screenshot → 200, artifact art-1761a547683363788e71 valid PNG 1280x800"
+        },
+        {
+          "ok": true,
+          "what": "human navigate https://example.com/ (outside the allowlist) → 422 {\"ok\":false,\"error\":\"example.com is not an allowed destination for this task. Allowed: forms.155-138-198-12.sslip.io. The list is set by the user and cannot be "
+        },
+        {
+          "ok": true,
+          "what": "human click on Submit without an approval code refused (click 200 ok=true: {\"ok\":true,\"result\":{\"response\":{\"schemaVersion\":1,\"id\":\"op-8a2e4bd53de4d3ff04e88e98\",\"op\":\"click\",\"ok\":true,\"result\":{\"generation\":5,\"invalidated\":true,\"url\":\"; page after: Submission refused (Airlock demo fixture))"
+        },
+        {
+          "ok": true,
+          "what": "release → 200 holder=agent fence=6"
+        },
+        {
+          "ok": true,
+          "what": "no agent browser op started/completed while the human held control ()"
+        },
+        {
+          "ok": true,
+          "what": "\"Control returned to the agent\": released by judge; the agent must observe the page before any ref-bound action"
+        },
+        {
+          "ok": true,
+          "what": "after release no ref-bound agent op completed before a fresh observe (first observe seq 42; first ref-bound browser_click@38 failed; stale refusals 1)"
+        },
+        {
+          "ok": true,
+          "what": "agent resumed after release (15 completed agent browser ops)"
+        },
+        {
+          "ok": true,
+          "what": "task done/RESULT_VERIFIED; cleanup confirmed"
+        }
+      ],
+      "evidence": "docs/evidence/vultr/acceptance-f223c19/V-F-takeover-live.json"
+    },
+    {
+      "id": "V-Z-host-cleanup",
+      "requirement": "Cleanup: after everything, the host-wide listing on VM B (label airlock.supervisor=true) is empty: containers, networks, volumes; supervisor host listing empty",
+      "command": "bun scripts/acceptance/vultr.ts V-Z-host-cleanup",
+      "category": "real Vultr compute + live model",
+      "environment": "real Vultr compute (control vc2-2c-4gb @ 155.138.198.12, sandbox vx1-g-4c-16g-240s @ 144.202.28.80, region atl, Kata) + live model (glm-5.3 via Vultr Serverless Inference); public HTTPS API https://155-138-198-12.sslip.io",
+      "startedAt": "2026-09-27T17:03:25.927Z",
+      "timestamp": "2026-09-27T17:03:31.753Z",
+      "revision": "f223c19aa19d0429c0d51dd033fca61e9ac8baea",
+      "result": "PASS",
+      "checks": [
+        {
+          "ok": true,
+          "what": "no task is still running (none)"
+        },
+        {
+          "ok": true,
+          "what": "ssh VM B (144.202.28.80) listing exit 0 "
+        },
+        {
+          "ok": true,
+          "what": "containers with label airlock.supervisor=true: 0 "
+        },
+        {
+          "ok": true,
+          "what": "networks: 0 "
+        },
+        {
+          "ok": true,
+          "what": "volumes: 0 "
+        }
+      ],
+      "evidence": "docs/evidence/vultr/acceptance-f223c19/V-Z-host-cleanup.json"
+    },
+    {
+      "id": "V-B-web-research-live",
+      "requirement": "Web research (B): live web-research on example.com + iana.org (allowlisted) → RESULT_VERIFIED; screenshot artifact is a valid PNG",
+      "command": "bun scripts/acceptance/vultr.ts V-B-web-research-live",
+      "category": "real Vultr compute + live model",
+      "environment": "real Vultr compute (control vc2-2c-4gb @ 155.138.198.12, sandbox vx1-g-4c-16g-240s @ 144.202.28.80, region atl, Kata) + live model (glm-5.3 via Vultr Serverless Inference); public HTTPS API https://155-138-198-12.sslip.io",
+      "startedAt": "2026-09-27T16:54:35.092Z",
+      "timestamp": "2026-09-27T16:55:12.073Z",
+      "revision": "f223c19aa19d0429c0d51dd033fca61e9ac8baea",
+      "result": "PASS",
+      "checks": [
+        {
+          "ok": true,
+          "what": "create live web-research task → 201 task-0c7ff1a7a202dc83"
+        },
+        {
+          "ok": true,
+          "what": "live model run (7 model events)"
+        },
+        {
+          "ok": true,
+          "what": "outcome done/RESULT_VERIFIED"
+        },
+        {
+          "ok": true,
+          "what": "browser_navigate completed: browser_navigate https://example.com/"
+        },
+        {
+          "ok": true,
+          "what": "browser container isolation probe: all BLOCKED"
+        },
+        {
+          "ok": true,
+          "what": "web: screenshot screenshot-003-1.png (16409 B) downloaded via /api/artifacts and /api/tasks/:id/artifacts, sha256 = recorded 74055151462e"
+        },
+        {
+          "ok": true,
+          "what": "web: screenshot screenshot-006-2.png (86658 B) downloaded via /api/artifacts and /api/tasks/:id/artifacts, sha256 = recorded 8e396907da4d"
+        },
+        {
+          "ok": true,
+          "what": "2 screenshot artifact(s), all valid PNG (1280x800, 1280x800)"
+        },
+        {
+          "ok": true,
+          "what": "cleanup confirmed"
+        }
+      ],
+      "evidence": "docs/evidence/vultr/acceptance-f223c19/V-B-web-research-live.json"
+    },
+    {
+      "id": "V-T-two-judge-isolation",
+      "requirement": "Two judge sessions cannot see each other's tasks, events, artifacts, approvals, control, exports (404) on the deployed stack",
+      "command": "bun scripts/acceptance/vultr.ts V-T-two-judge-isolation",
+      "category": "real Vultr compute + live model",
+      "environment": "real Vultr compute (control vc2-2c-4gb @ 155.138.198.12, sandbox vx1-g-4c-16g-240s @ 144.202.28.80, region atl, Kata) + live model (glm-5.3 via Vultr Serverless Inference); public HTTPS API https://155-138-198-12.sslip.io",
+      "startedAt": "2026-09-27T17:00:55.379Z",
+      "timestamp": "2026-09-27T17:01:28.964Z",
+      "revision": "f223c19aa19d0429c0d51dd033fca61e9ac8baea",
+      "result": "PASS",
+      "checks": [
+        {
+          "ok": true,
+          "what": "both sessions are judge, different owners"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-17e6c6f804086963 → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-17e6c6f804086963/events?lastEventId=0 → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-17e6c6f804086963/artifacts → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/artifacts/art-90990b48f174835e926e → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-17e6c6f804086963/artifacts/art-90990b48f174835e926e → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B POST /api/tasks/task-17e6c6f804086963/export → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B POST /api/tasks/task-17e6c6f804086963/cancel → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-e36fb5d7541976ec → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-e36fb5d7541976ec/events?lastEventId=0 → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-e36fb5d7541976ec/artifacts → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/artifacts/art-2641b3c1869308cf1128 → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-e36fb5d7541976ec/artifacts/art-2641b3c1869308cf1128 → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-e36fb5d7541976ec/approvals → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-e36fb5d7541976ec/control → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B POST /api/tasks/task-e36fb5d7541976ec/control/take → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B POST /api/tasks/task-e36fb5d7541976ec/approvals/prop-00000000/decide → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B POST /api/tasks/task-e36fb5d7541976ec/export → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B POST /api/tasks/task-e36fb5d7541976ec/cancel → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-f262993e7dfeca51 → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-f262993e7dfeca51/events?lastEventId=0 → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-f262993e7dfeca51/artifacts → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/artifacts/art-a1b033acee520b2905a5 → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-f262993e7dfeca51/artifacts/art-a1b033acee520b2905a5 → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-f262993e7dfeca51/approvals → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-f262993e7dfeca51/control → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B POST /api/tasks/task-f262993e7dfeca51/control/take → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B POST /api/tasks/task-f262993e7dfeca51/approvals/prop-00000000/decide → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B POST /api/tasks/task-f262993e7dfeca51/export → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B POST /api/tasks/task-f262993e7dfeca51/cancel → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-0c7ff1a7a202dc83 → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-0c7ff1a7a202dc83/events?lastEventId=0 → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-0c7ff1a7a202dc83/artifacts → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/artifacts/art-44737dbc2424d0a08b81 → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-0c7ff1a7a202dc83/artifacts/art-44737dbc2424d0a08b81 → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-0c7ff1a7a202dc83/approvals → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-0c7ff1a7a202dc83/control → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B POST /api/tasks/task-0c7ff1a7a202dc83/control/take → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B POST /api/tasks/task-0c7ff1a7a202dc83/approvals/prop-00000000/decide → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B POST /api/tasks/task-0c7ff1a7a202dc83/export → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B POST /api/tasks/task-0c7ff1a7a202dc83/cancel → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-18f2abb96399bad1 → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-18f2abb96399bad1/events?lastEventId=0 → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-18f2abb96399bad1/artifacts → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/artifacts/art-905e7757c7bab89f3269 → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-18f2abb96399bad1/artifacts/art-905e7757c7bab89f3269 → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-18f2abb96399bad1/approvals → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-18f2abb96399bad1/control → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B POST /api/tasks/task-18f2abb96399bad1/control/take → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B POST /api/tasks/task-18f2abb96399bad1/approvals/prop-00000000/decide → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B POST /api/tasks/task-18f2abb96399bad1/export → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B POST /api/tasks/task-18f2abb96399bad1/cancel → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-3577b126555442f2 → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-3577b126555442f2/events?lastEventId=0 → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-3577b126555442f2/artifacts → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/artifacts/art-9be24a497f5473acf6cf → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-3577b126555442f2/artifacts/art-9be24a497f5473acf6cf → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-3577b126555442f2/approvals → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-3577b126555442f2/control → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B POST /api/tasks/task-3577b126555442f2/control/take → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B POST /api/tasks/task-3577b126555442f2/approvals/prop-00000000/decide → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B POST /api/tasks/task-3577b126555442f2/export → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B POST /api/tasks/task-3577b126555442f2/cancel → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-8c04acc7d173484d → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-8c04acc7d173484d/events?lastEventId=0 → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-8c04acc7d173484d/artifacts → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B POST /api/tasks/task-8c04acc7d173484d/export → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B POST /api/tasks/task-8c04acc7d173484d/cancel → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B's task list (0) excludes the other sessions' 7 tasks"
+        },
+        {
+          "ok": true,
+          "what": "the owning judge session still reads its task (200)"
+        },
+        {
+          "ok": true,
+          "what": "anonymous → 401"
+        }
+      ],
+      "evidence": "docs/evidence/vultr/acceptance-f223c19/V-T-two-judge-isolation.json"
+    }
+  ]
+}

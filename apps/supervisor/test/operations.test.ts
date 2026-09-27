@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { SupervisorError } from "../src/errors";
@@ -16,6 +17,7 @@ function record(overrides: Partial<AttemptRecord> = {}): AttemptRecord {
     volume: "airlock-ws-t1-a1",
     status: "running",
     deadline: new Date(Date.now() + 60_000).toISOString(),
+    authorizedUntil: new Date(Date.now() + 60_000).toISOString(),
     revoked: false,
     devUnsafe: true,
     createdAt: now,
@@ -53,7 +55,7 @@ describe("operations journal", () => {
     second.close();
   });
 
-  test("fence: unknown → 404, stale generation → 409, revoked → 409, destroyed → 409, newer generation is recorded", () => {
+  test("fence: unknown → 404, stale generation → 409, revoked → 409, destroyed → 409, newer generation never dispatches", () => {
     const journal = new Journal(join(tempDir(), "j.sqlite"));
     expect(() => journal.fence({ taskId: "t1", attemptId: "nope", generation: 1 })).toThrow(SupervisorError);
     try {
@@ -66,8 +68,13 @@ describe("operations journal", () => {
     expect(() => journal.fence({ taskId: "t1", attemptId: "a1", generation: 1 })).toThrow(/older than the recorded/);
     // wrong task for a known attempt: identifiers are not bearer tokens
     expect(() => journal.fence({ taskId: "other", attemptId: "a1", generation: 2 })).toThrow(/does not belong/);
-    // newer generation fences out the previous one
-    expect(journal.fence({ taskId: "t1", attemptId: "a1", generation: 3 }).generation).toBe(3);
+    // M1: a newer generation no longer silently takes over a live attempt. It cannot dispatch or
+    // freeze (fenced, 409) and the recorded generation is unchanged ...
+    expect(() => journal.fence({ taskId: "t1", attemptId: "a1", generation: 3 })).toThrow(/must revoke/);
+    expect(() => journal.fenceLifecycle({ taskId: "t1", attemptId: "a1", generation: 3 })).toThrow(/must revoke/);
+    expect(journal.getAttempt("a1")?.generation).toBe(2);
+    // ... it may revoke/destroy it (allowNewer), which records the newer generation and fences the previous owner.
+    expect(journal.fenceLifecycle({ taskId: "t1", attemptId: "a1", generation: 3 }, { allowNewer: true }).generation).toBe(3);
     expect(() => journal.fence({ taskId: "t1", attemptId: "a1", generation: 2 })).toThrow(/older than the recorded/);
     journal.revoke("a1", "revoked");
     expect(() => journal.fence({ taskId: "t1", attemptId: "a1", generation: 3 })).toThrow(/revoked/);
@@ -75,6 +82,43 @@ describe("operations journal", () => {
     expect(journal.fenceLifecycle({ taskId: "t1", attemptId: "a1", generation: 3 }).revoked).toBe(true);
     journal.updateAttempt("a1", { status: "destroyed" });
     expect(() => journal.fenceLifecycle({ taskId: "t1", attemptId: "a1", generation: 3 })).toThrow(/destroyed/);
+    journal.close();
+  });
+
+  test("fence: dispatch closes once the execution authorization lapses, even before any timer fires", () => {
+    const journal = new Journal(":memory:");
+    journal.insertAttempt(record({ authorizedUntil: new Date(Date.now() - 1).toISOString() }));
+    expect(() => journal.fence({ taskId: "t1", attemptId: "a1", generation: 1 })).toThrow(/past its execution authorization/);
+    // lifecycle verbs (destroy) still reach it
+    expect(journal.fenceLifecycle({ taskId: "t1", attemptId: "a1", generation: 1 }).attemptId).toBe("a1");
+    journal.close();
+  });
+
+  test("migration: a journal written before authorized_until gets the column; old rows are authorized until their deadline", () => {
+    const path = join(tempDir(), "old.sqlite");
+    const old = new Database(path, { create: true });
+    old.exec(`CREATE TABLE attempts (attempt_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, generation INTEGER NOT NULL, role TEXT NOT NULL, profile_id TEXT NOT NULL, container TEXT NOT NULL, volume TEXT NOT NULL, status TEXT NOT NULL, deadline TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, dev_unsafe INTEGER NOT NULL DEFAULT 0, inspection_json TEXT, probe_json TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`);
+    const deadline = new Date(Date.now() + 60_000).toISOString();
+    old.query("INSERT INTO attempts (attempt_id, task_id, generation, role, profile_id, container, volume, status, deadline, created_at, updated_at) VALUES ('a1','t1',1,'author','p','c','v','running',?, 'x','x')").run(deadline);
+    old.close();
+    const journal = new Journal(path);
+    expect(journal.getAttempt("a1")?.authorizedUntil).toBe(deadline);
+    expect(journal.fence({ taskId: "t1", attemptId: "a1", generation: 1 }).attemptId).toBe("a1");
+    journal.updateAttempt("a1", { authorizedUntil: new Date(Date.now() + 5_000).toISOString() });
+    expect(journal.getAttempt("a1")?.authorizedUntil).not.toBe(deadline);
+    journal.close();
+    // reopening is idempotent
+    expect(new Journal(path).getAttempt("a1")?.status).toBe("running");
+  });
+
+  test("abandonOperation forgets only a pending operation", () => {
+    const journal = new Journal(":memory:");
+    journal.beginOperation({ operationId: "op1", requestDigest: digestA }, "invoke:baseline");
+    journal.abandonOperation("op1");
+    expect(journal.beginOperation({ operationId: "op1", requestDigest: digestA }, "invoke:baseline")).toEqual({ kind: "new" });
+    journal.completeOperation("op1", 200, {});
+    journal.abandonOperation("op1");
+    expect(journal.beginOperation({ operationId: "op1", requestDigest: digestA }, "invoke:baseline").kind).toBe("replay");
     journal.close();
   });
 

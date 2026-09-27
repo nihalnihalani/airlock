@@ -66,6 +66,10 @@ export const OUTCOME_LABEL: Record<Outcome, string> = {
   CHECKS_FAILED: "Checks failed",
   INCONCLUSIVE: "Inconclusive",
   STOPPED_LIMIT: "Stopped at limit",
+  RESULT_VERIFIED: "Result verified",
+  RESULT_PARTIAL: "Partial result",
+  RESULT_FAILED: "No acceptable result",
+  UNSUPPORTED: "Unsupported",
 };
 
 export const OUTCOME_HINT: Record<Outcome, string> = {
@@ -76,6 +80,10 @@ export const OUTCOME_HINT: Record<Outcome, string> = {
   CHECKS_FAILED: "A candidate was sealed and verified, and at least one frozen case did not pass.",
   INCONCLUSIVE: "Verification could not complete (timeout, protocol error, launch failure or incomplete output). Nothing passed.",
   STOPPED_LIMIT: "The run stopped at a budget or deadline limit before a verdict.",
+  RESULT_VERIFIED: "Every completion check of the task profile passed on the collected outputs and evidence. The checks are finite; this is not a guarantee of correctness.",
+  RESULT_PARTIAL: "Outputs were produced, but at least one required completion check did not pass.",
+  RESULT_FAILED: "No output met the task profile's completion checks.",
+  UNSUPPORTED: "The goal needs a capability this deployment does not offer; nothing was simulated.",
 };
 
 export const PHASE_LABEL: Record<Phase, string> = {
@@ -83,6 +91,7 @@ export const PHASE_LABEL: Record<Phase, string> = {
   reproduce: "Reproduce",
   baseline: "Baseline",
   repair: "Repair",
+  execute: "Execute",
   freeze: "Freeze",
   verify: "Verify",
   ready: "Ready",
@@ -113,8 +122,8 @@ export function hostnameOf(url: string): string {
 export type Tone = "neutral" | "ok" | "warn" | "bad" | "info";
 
 export function outcomeTone(outcome: Outcome): Tone {
-  if (outcome === "CANDIDATE_PASSED_CHECKS") return "ok";
-  if (outcome === "INCONCLUSIVE" || outcome === "STOPPED_LIMIT" || outcome === "NOT_REPRODUCED") return "warn";
+  if (outcome === "CANDIDATE_PASSED_CHECKS" || outcome === "RESULT_VERIFIED") return "ok";
+  if (outcome === "INCONCLUSIVE" || outcome === "STOPPED_LIMIT" || outcome === "NOT_REPRODUCED" || outcome === "RESULT_PARTIAL" || outcome === "UNSUPPORTED") return "warn";
   return "bad";
 }
 

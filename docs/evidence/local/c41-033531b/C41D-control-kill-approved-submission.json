@@ -1,0 +1,716 @@
+{
+  "id": "C41D-control-kill-approved-submission",
+  "requirement": "C41: control plane SIGKILLed during an approved submission. (a) real path: a proposal to the configured-but-unreachable https://forms.example.com is approved and the kill lands while the controller holds it; (b) store level: two proposals on the loopback fixtures destination are left `submitted` (its submission really reached the destination) and `claimed` (never reached it). After restart: claimed/submitted → outcome_unknown, reconciled ONLY by receipt reads; the reached one becomes confirmed with the destination's receipt; nothing is re-submitted",
+  "command": "bun scripts/acceptance/local.ts C41D-control-kill-approved-submission",
+  "environment": "real local runc (dev-unsafe, Colima); stack = git archive of 033531b34aeb",
+  "timestamp": "2026-09-27T13:40:37.972Z",
+  "revision": "033531b34aebf221836c79fe2e3204e082232803",
+  "result": "PASS",
+  "evidence": {
+    "timeline": {
+      "taskId": "task-64936a54523e973c",
+      "realProposal": {
+        "id": "prop-81363488ae06b0cc6d30",
+        "statesSeen": [
+          "approved",
+          "claimed"
+        ],
+        "atKill": "claimed"
+      },
+      "kill": {
+        "process": "control",
+        "pid": 95435,
+        "signal": "SIGKILL",
+        "at": "2026-09-27T13:39:31.778Z",
+        "dead": true
+      },
+      "storeAtKill": {
+        "taskStatus": "running",
+        "taskPhase": "execute",
+        "leaseUntil": "2026-09-27T13:40:25.569Z",
+        "realProposalStatusInStore": "claimed"
+      },
+      "restart": {
+        "code": 0,
+        "ms": 864,
+        "lines": [
+          "supervisor already running (pid 94324)",
+          "fixtures already running (pid 94333)"
+        ],
+        "err": ""
+      },
+      "destinationPost": {
+        "status": 200
+      },
+      "acceptedBefore": {
+        "reached": 1,
+        "notReached": 0,
+        "real": 0
+      },
+      "acceptedAfter": {
+        "reached": 1,
+        "notReached": 0,
+        "real": 0
+      }
+    },
+    "injected": [
+      {
+        "label": "reached",
+        "schemaVersion": 1,
+        "id": "prop-c41r847964",
+        "owner": "judge-f5e5ec0f7cc76634e35eb261",
+        "taskId": "task-64936a54523e973c",
+        "attemptId": "att-69b2e471331617c544b6",
+        "browserGeneration": 0,
+        "destination": "http://127.0.0.1:3100",
+        "adapter": "airlock-forms-v1",
+        "formId": "contact-request",
+        "payloadDigest": "d2f2a7f58f48e5444c92ddedd168255bc69507a45bf4076b3c226a55ca0baf76",
+        "summary": "C41 store-level injection (reached)",
+        "createdAt": "2026-09-27T13:38:33.599Z",
+        "expiresAt": "2026-09-27T13:49:33.599Z",
+        "status": "submitted",
+        "decidedBy": "verifier_tester (store-level injection)",
+        "decidedAt": "2026-09-27T13:39:03.599Z",
+        "fields": {
+          "name": "C41 reached",
+          "email": "c41@example.com",
+          "message": "store-level submitted proposal (reached)"
+        }
+      },
+      {
+        "label": "not-reached",
+        "schemaVersion": 1,
+        "id": "prop-c41n262494",
+        "owner": "judge-f5e5ec0f7cc76634e35eb261",
+        "taskId": "task-64936a54523e973c",
+        "attemptId": "att-69b2e471331617c544b6",
+        "browserGeneration": 0,
+        "destination": "http://127.0.0.1:3100",
+        "adapter": "airlock-forms-v1",
+        "formId": "contact-request",
+        "payloadDigest": "e8ba85d7650d15d40dfeaa9eb9171b2e8ae13258831da843b02bbe6eca8c6bc7",
+        "summary": "C41 store-level injection (not-reached)",
+        "createdAt": "2026-09-27T13:38:33.600Z",
+        "expiresAt": "2026-09-27T13:49:33.600Z",
+        "status": "claimed",
+        "decidedBy": "verifier_tester (store-level injection)",
+        "decidedAt": "2026-09-27T13:39:03.600Z",
+        "fields": {
+          "name": "C41 not-reached",
+          "email": "c41@example.com",
+          "message": "store-level claimed proposal (not-reached)"
+        }
+      }
+    ],
+    "proposalsFinal": [
+      {
+        "id": "prop-c41r847964",
+        "status": "confirmed",
+        "destination": "http://127.0.0.1:3100",
+        "payloadDigest": "d2f2a7f58f48e5444c92ddedd168255bc69507a45bf4076b3c226a55ca0baf76",
+        "receipt": {
+          "at": "2026-09-27T13:39:33.000Z",
+          "receiptId": "rcpt_uAPG07h9kfOsjEnrQoDorQ",
+          "payloadDigest": "d2f2a7f58f48e5444c92ddedd168255bc69507a45bf4076b3c226a55ca0baf76"
+        }
+      },
+      {
+        "id": "prop-c41n262494",
+        "status": "outcome_unknown",
+        "destination": "http://127.0.0.1:3100",
+        "payloadDigest": "e8ba85d7650d15d40dfeaa9eb9171b2e8ae13258831da843b02bbe6eca8c6bc7",
+        "receipt": null
+      },
+      {
+        "id": "prop-81363488ae06b0cc6d30",
+        "status": "outcome_unknown",
+        "destination": "https://forms.example.com",
+        "payloadDigest": "b695c7a8953a56f33585145f6b68d5d0d885a0899fe46fd08a5a299f59eaf606",
+        "receipt": null
+      },
+      {
+        "id": "prop-f40c944c33aaf798405a",
+        "status": "rejected",
+        "destination": "https://forms.example.com",
+        "payloadDigest": "b695c7a8953a56f33585145f6b68d5d0d885a0899fe46fd08a5a299f59eaf606",
+        "receipt": null
+      }
+    ],
+    "final": {
+      "status": "done",
+      "outcome": "RESULT_VERIFIED",
+      "recoveries": 1,
+      "cleanup": {
+        "at": "2026-09-27T13:40:35.298Z",
+        "detail": "supervisor confirmed teardown of 2 attempt(s)",
+        "status": "confirmed"
+      }
+    },
+    "events": [
+      {
+        "seq": 1,
+        "at": "2026-09-27T13:39:24.616Z",
+        "kind": "lifecycle",
+        "title": "Task created",
+        "detail": "general task, profile web-research v1; destinations example.com, forms.example.com; diagnostic (scripted:acc-c41-propose), not a model run"
+      },
+      {
+        "seq": 2,
+        "at": "2026-09-27T13:39:25.575Z",
+        "kind": "phase",
+        "title": "prepare",
+        "detail": "general task profile web-research v1; tools: browser_navigate, browser_observe, browser_click, browser_type, browser_key, browser_scroll, browser_screenshot, browser_tabs, browser_download_list, browser_download_save, browser_propose_submit, submit_result; destinations: example.com, forms.example.com"
+      },
+      {
+        "seq": 3,
+        "at": "2026-09-27T13:39:25.575Z",
+        "kind": "check",
+        "title": "dev-unsafe runtime",
+        "detail": "supervisor host runs runc with AIRLOCK_DEV_UNSAFE; results are not a deployment measurement"
+      },
+      {
+        "seq": 4,
+        "at": "2026-09-27T13:39:25.576Z",
+        "kind": "phase",
+        "title": "execute",
+        "detail": "model loop for goal under profile web-research"
+      },
+      {
+        "seq": 5,
+        "at": "2026-09-27T13:39:25.578Z",
+        "kind": "model",
+        "title": "Model turn 1",
+        "detail": "Opening example.com."
+      },
+      {
+        "seq": 6,
+        "at": "2026-09-27T13:39:25.579Z",
+        "kind": "tool",
+        "title": "browser_navigate allowed",
+        "detail": "example.com is inside the task's destinations",
+        "tool": "browser_navigate",
+        "opState": "allowed",
+        "actor": "agent"
+      },
+      {
+        "seq": 7,
+        "at": "2026-09-27T13:39:25.580Z",
+        "kind": "lifecycle",
+        "title": "Creating browser sandbox",
+        "detail": "attempt att-69b2e471331617c544b6, generation 1, deadline 2026-09-27T13:54:25.580Z; egress allowed to example.com, forms.example.com",
+        "attemptId": "att-69b2e471331617c544b6"
+      },
+      {
+        "seq": 8,
+        "at": "2026-09-27T13:39:31.511Z",
+        "kind": "lifecycle",
+        "title": "browser sandbox created",
+        "detail": "container airlock-browser-task-64936a54523e973c-att-69b2e471331617c544b6; runtime runc (dev-unsafe)",
+        "opState": "completed",
+        "operationId": "op-104dd33d16b623482a4633f1",
+        "attemptId": "att-69b2e471331617c544b6"
+      },
+      {
+        "seq": 9,
+        "at": "2026-09-27T13:39:31.512Z",
+        "kind": "tool",
+        "title": "browser_navigate started",
+        "tool": "browser_navigate",
+        "opState": "started",
+        "operationId": "op-025569fbfdc4aa36c0007f6d",
+        "attemptId": "att-69b2e471331617c544b6"
+      },
+      {
+        "seq": 10,
+        "at": "2026-09-27T13:39:31.737Z",
+        "kind": "tool",
+        "title": "browser_navigate https://example.com/",
+        "detail": "status 200",
+        "tool": "browser_navigate",
+        "opState": "completed",
+        "operationId": "op-025569fbfdc4aa36c0007f6d",
+        "attemptId": "att-69b2e471331617c544b6",
+        "status": 200
+      },
+      {
+        "seq": 11,
+        "at": "2026-09-27T13:39:31.738Z",
+        "kind": "model",
+        "title": "Model turn 2",
+        "detail": "Proposal."
+      },
+      {
+        "seq": 12,
+        "at": "2026-09-27T13:39:31.740Z",
+        "kind": "tool",
+        "title": "browser_propose_submit contact-request",
+        "detail": "proposal prop-81363488ae06b0cc6d30 recorded; waiting for a person to review it",
+        "tool": "browser_propose_submit",
+        "opState": "allowed",
+        "proposalId": "prop-81363488ae06b0cc6d30"
+      },
+      {
+        "seq": 13,
+        "at": "2026-09-27T13:39:31.740Z",
+        "kind": "lifecycle",
+        "title": "Waiting for review",
+        "detail": "contact-request on https://forms.example.com: Acceptance proposal C41 (expires 2026-09-27T13:40:31.739Z)",
+        "proposalId": "prop-81363488ae06b0cc6d30"
+      },
+      {
+        "seq": 14,
+        "at": "2026-09-27T13:39:31.772Z",
+        "kind": "lifecycle",
+        "title": "Proposal approved",
+        "detail": "contact-request on https://forms.example.com by judge; payload digest b695c7a8953a56f33585145f6b68d5d0d885a0899fe46fd08a5a299f59eaf606",
+        "proposalId": "prop-81363488ae06b0cc6d30",
+        "status": "approved"
+      },
+      {
+        "seq": 15,
+        "at": "2026-09-27T13:39:31.773Z",
+        "kind": "lifecycle",
+        "title": "Approved: Airlock submits the form",
+        "detail": "approved by judge-f5e5ec0f7cc76634e35eb261; the controller fills in exactly the approved values and the approval code",
+        "proposalId": "prop-81363488ae06b0cc6d30",
+        "status": "claimed"
+      },
+      {
+        "seq": 16,
+        "at": "2026-09-27T13:39:31.774Z",
+        "kind": "tool",
+        "title": "approved_submit allowed",
+        "detail": "forms.example.com is inside the task's destinations",
+        "tool": "approved_submit",
+        "opState": "allowed",
+        "actor": "controller"
+      },
+      {
+        "seq": 17,
+        "at": "2026-09-27T13:39:31.776Z",
+        "kind": "tool",
+        "title": "approved_submit started",
+        "tool": "approved_submit",
+        "opState": "started",
+        "operationId": "op-7dc678bd6a475ed35d69e987",
+        "attemptId": "att-69b2e471331617c544b6"
+      },
+      {
+        "seq": 18,
+        "at": "2026-09-27T13:40:26.239Z",
+        "kind": "phase",
+        "title": "prepare",
+        "detail": "general task profile web-research v1; tools: browser_navigate, browser_observe, browser_click, browser_type, browser_key, browser_scroll, browser_screenshot, browser_tabs, browser_download_list, browser_download_save, browser_propose_submit, submit_result; destinations: example.com, forms.example.com"
+      },
+      {
+        "seq": 19,
+        "at": "2026-09-27T13:40:26.243Z",
+        "kind": "check",
+        "title": "dev-unsafe runtime",
+        "detail": "supervisor host runs runc with AIRLOCK_DEV_UNSAFE; results are not a deployment measurement"
+      },
+      {
+        "seq": 20,
+        "at": "2026-09-27T13:40:26.244Z",
+        "kind": "lifecycle",
+        "title": "Recovering task",
+        "detail": "recovery 1 of 2; the previous run stopped in phase execute",
+        "recoveries": 1
+      },
+      {
+        "seq": 21,
+        "at": "2026-09-27T13:40:26.247Z",
+        "kind": "lifecycle",
+        "title": "Reconciled outstanding supervisor operations",
+        "detail": "browserOp op-7dc678bd6a475ed35d69e987 (intent): not replayed"
+      },
+      {
+        "seq": 22,
+        "at": "2026-09-27T13:40:26.450Z",
+        "kind": "lifecycle",
+        "title": "Discarded attempt from an earlier run",
+        "detail": "browser att-69b2e471331617c544b6: revoked; destroyed; remaining containers=0 volumes=0",
+        "opState": "completed",
+        "attemptId": "att-69b2e471331617c544b6"
+      },
+      {
+        "seq": 23,
+        "at": "2026-09-27T13:40:26.453Z",
+        "kind": "lifecycle",
+        "title": "Final action outcome unknown",
+        "detail": "the run stopped (an earlier run of this task stopped before finishing (restart or lost lease)) while the approved submission was claimed (the submit click may or may not have been sent); it is NOT re-submitted. Reconciling by reading the destination's receipt.",
+        "proposalId": "prop-81363488ae06b0cc6d30",
+        "status": "outcome_unknown"
+      },
+      {
+        "seq": 24,
+        "at": "2026-09-27T13:40:26.460Z",
+        "kind": "check",
+        "title": "Receipt read (reconciliation) 1: error",
+        "detail": "receipt read failed: Unable to connect. Is the computer able to access the url?",
+        "proposalId": "prop-81363488ae06b0cc6d30"
+      },
+      {
+        "seq": 25,
+        "at": "2026-09-27T13:40:26.968Z",
+        "kind": "check",
+        "title": "Receipt read (reconciliation) 2: error",
+        "detail": "receipt read failed: Was there a typo in the url or port?",
+        "proposalId": "prop-81363488ae06b0cc6d30"
+      },
+      {
+        "seq": 26,
+        "at": "2026-09-27T13:40:27.978Z",
+        "kind": "check",
+        "title": "Receipt read (reconciliation) 3: error",
+        "detail": "receipt read failed: Unable to connect. Is the computer able to access the url?",
+        "proposalId": "prop-81363488ae06b0cc6d30"
+      },
+      {
+        "seq": 27,
+        "at": "2026-09-27T13:40:27.982Z",
+        "kind": "lifecycle",
+        "title": "Final action outcome unknown",
+        "detail": "the run stopped (an earlier run of this task stopped before finishing (restart or lost lease)) while the approved submission was submitted; it is NOT re-submitted. Reconciling by reading the destination's receipt.",
+        "proposalId": "prop-c41r847964",
+        "status": "outcome_unknown"
+      },
+      {
+        "seq": 28,
+        "at": "2026-09-27T13:40:27.987Z",
+        "kind": "check",
+        "title": "Receipt read (reconciliation) 1: confirmed",
+        "detail": "receipt rcpt_uAPG07h9kfOsjEnrQoDorQ (payload digest d2f2a7f58f48e5444c92ddedd168255bc69507a45bf4076b3c226a55ca0baf76)",
+        "proposalId": "prop-c41r847964"
+      },
+      {
+        "seq": 29,
+        "at": "2026-09-27T13:40:27.989Z",
+        "kind": "lifecycle",
+        "title": "Final action confirmed by the destination",
+        "detail": "receipt rcpt_uAPG07h9kfOsjEnrQoDorQ: reconciled by reading the destination's receipt; nothing was re-submitted",
+        "proposalId": "prop-c41r847964",
+        "status": "confirmed"
+      },
+      {
+        "seq": 30,
+        "at": "2026-09-27T13:40:27.991Z",
+        "kind": "lifecycle",
+        "title": "Final action outcome unknown",
+        "detail": "the run stopped (an earlier run of this task stopped before finishing (restart or lost lease)) while the approved submission was claimed (the submit click may or may not have been sent); it is NOT re-submitted. Reconciling by reading the destination's receipt.",
+        "proposalId": "prop-c41n262494",
+        "status": "outcome_unknown"
+      },
+      {
+        "seq": 31,
+        "at": "2026-09-27T13:40:27.992Z",
+        "kind": "check",
+        "title": "Receipt read (reconciliation) 1: none",
+        "detail": "the destination has no receipt for this proposal",
+        "proposalId": "prop-c41n262494"
+      },
+      {
+        "seq": 32,
+        "at": "2026-09-27T13:40:27.993Z",
+        "kind": "phase",
+        "title": "execute",
+        "detail": "model loop for goal under profile web-research"
+      },
+      {
+        "seq": 33,
+        "at": "2026-09-27T13:40:27.998Z",
+        "kind": "model",
+        "title": "Model turn 3",
+        "detail": "Opening example.com."
+      },
+      {
+        "seq": 34,
+        "at": "2026-09-27T13:40:28.002Z",
+        "kind": "tool",
+        "title": "browser_navigate allowed",
+        "detail": "example.com is inside the task's destinations",
+        "tool": "browser_navigate",
+        "opState": "allowed",
+        "actor": "agent"
+      },
+      {
+        "seq": 35,
+        "at": "2026-09-27T13:40:28.004Z",
+        "kind": "lifecycle",
+        "title": "Creating browser sandbox",
+        "detail": "attempt att-9f3e8f91e5b443148e27, generation 2, deadline 2026-09-27T13:55:28.003Z; egress allowed to example.com, forms.example.com",
+        "attemptId": "att-9f3e8f91e5b443148e27"
+      },
+      {
+        "seq": 36,
+        "at": "2026-09-27T13:40:33.949Z",
+        "kind": "lifecycle",
+        "title": "browser sandbox created",
+        "detail": "container airlock-browser-task-64936a54523e973c-att-9f3e8f91e5b443148e27; runtime runc (dev-unsafe)",
+        "opState": "completed",
+        "operationId": "op-29341113b6ac492a0bf7e840",
+        "attemptId": "att-9f3e8f91e5b443148e27"
+      },
+      {
+        "seq": 37,
+        "at": "2026-09-27T13:40:33.950Z",
+        "kind": "tool",
+        "title": "browser_navigate started",
+        "tool": "browser_navigate",
+        "opState": "started",
+        "operationId": "op-920c2b6176c4fee15e5a844a",
+        "attemptId": "att-9f3e8f91e5b443148e27"
+      },
+      {
+        "seq": 38,
+        "at": "2026-09-27T13:40:34.551Z",
+        "kind": "tool",
+        "title": "browser_navigate https://example.com/",
+        "detail": "status 200",
+        "tool": "browser_navigate",
+        "opState": "completed",
+        "operationId": "op-920c2b6176c4fee15e5a844a",
+        "attemptId": "att-9f3e8f91e5b443148e27",
+        "status": 200
+      },
+      {
+        "seq": 39,
+        "at": "2026-09-27T13:40:34.552Z",
+        "kind": "model",
+        "title": "Model turn 4",
+        "detail": "Proposal."
+      },
+      {
+        "seq": 40,
+        "at": "2026-09-27T13:40:34.554Z",
+        "kind": "tool",
+        "title": "browser_propose_submit contact-request",
+        "detail": "proposal prop-f40c944c33aaf798405a recorded; waiting for a person to review it",
+        "tool": "browser_propose_submit",
+        "opState": "allowed",
+        "proposalId": "prop-f40c944c33aaf798405a"
+      },
+      {
+        "seq": 41,
+        "at": "2026-09-27T13:40:34.554Z",
+        "kind": "lifecycle",
+        "title": "Waiting for review",
+        "detail": "contact-request on https://forms.example.com: Acceptance proposal C41 (expires 2026-09-27T13:41:34.554Z)",
+        "proposalId": "prop-f40c944c33aaf798405a"
+      },
+      {
+        "seq": 42,
+        "at": "2026-09-27T13:40:34.889Z",
+        "kind": "lifecycle",
+        "title": "Proposal rejected",
+        "detail": "contact-request on https://forms.example.com by judge; payload digest b695c7a8953a56f33585145f6b68d5d0d885a0899fe46fd08a5a299f59eaf606",
+        "proposalId": "prop-f40c944c33aaf798405a",
+        "status": "rejected"
+      },
+      {
+        "seq": 43,
+        "at": "2026-09-27T13:40:34.890Z",
+        "kind": "lifecycle",
+        "title": "Proposal rejected",
+        "detail": "rejected by judge-f5e5ec0f7cc76634e35eb261; nothing was submitted",
+        "proposalId": "prop-f40c944c33aaf798405a",
+        "status": "rejected"
+      },
+      {
+        "seq": 44,
+        "at": "2026-09-27T13:40:34.891Z",
+        "kind": "model",
+        "title": "Model turn 5",
+        "detail": "Screenshot."
+      },
+      {
+        "seq": 45,
+        "at": "2026-09-27T13:40:34.894Z",
+        "kind": "tool",
+        "title": "browser_screenshot started",
+        "tool": "browser_screenshot",
+        "opState": "started",
+        "operationId": "op-c89ee28f5de41b32ccb580f2",
+        "attemptId": "att-9f3e8f91e5b443148e27"
+      },
+      {
+        "seq": 46,
+        "at": "2026-09-27T13:40:34.966Z",
+        "kind": "artifact",
+        "title": "Screenshot stored art-42e0c9be90538541cbea",
+        "detail": "https://example.com/ (1280x800, sha256 74055151462e4f8b960ea307694724a88dc32b73179f9812ebfa3c4d1ab9a81a)",
+        "tool": "browser_screenshot",
+        "operationId": "op-c89ee28f5de41b32ccb580f2",
+        "attemptId": "att-9f3e8f91e5b443148e27",
+        "actor": "agent"
+      },
+      {
+        "seq": 47,
+        "at": "2026-09-27T13:40:34.967Z",
+        "kind": "tool",
+        "title": "browser_screenshot https://example.com/",
+        "detail": "stored as art-42e0c9be90538541cbea",
+        "tool": "browser_screenshot",
+        "opState": "completed",
+        "operationId": "op-c89ee28f5de41b32ccb580f2",
+        "attemptId": "att-9f3e8f91e5b443148e27"
+      },
+      {
+        "seq": 48,
+        "at": "2026-09-27T13:40:34.968Z",
+        "kind": "model",
+        "title": "Model turn 6",
+        "detail": "Submitting."
+      },
+      {
+        "seq": 49,
+        "at": "2026-09-27T13:40:34.968Z",
+        "kind": "tool",
+        "title": "submit_result",
+        "detail": "Acceptance diagnostic (C41): proposal exercised.\noutputs: (none)\nsources: https://example.com/",
+        "tool": "submit_result",
+        "opState": "completed"
+      },
+      {
+        "seq": 50,
+        "at": "2026-09-27T13:40:34.969Z",
+        "kind": "phase",
+        "title": "freeze",
+        "detail": "stopping the sandboxes and collecting outputs/ read-only"
+      },
+      {
+        "seq": 51,
+        "at": "2026-09-27T13:40:35.294Z",
+        "kind": "lifecycle",
+        "title": "browser sandbox destroyed (result submitted)",
+        "detail": "revoked; destroyed; remaining containers=0 volumes=0",
+        "opState": "completed",
+        "attemptId": "att-9f3e8f91e5b443148e27"
+      },
+      {
+        "seq": 52,
+        "at": "2026-09-27T13:40:35.297Z",
+        "kind": "check",
+        "title": "passed: screenshot-evidence",
+        "detail": "1 screenshot(s) stored"
+      },
+      {
+        "seq": 53,
+        "at": "2026-09-27T13:40:35.297Z",
+        "kind": "check",
+        "title": "passed: sources-cited",
+        "detail": "1 source(s) cited"
+      },
+      {
+        "seq": 54,
+        "at": "2026-09-27T13:40:35.297Z",
+        "kind": "check",
+        "title": "passed: sources-visited",
+        "detail": "every cited source was reached by this task's browser"
+      },
+      {
+        "seq": 55,
+        "at": "2026-09-27T13:40:35.298Z",
+        "kind": "check",
+        "title": "passed: sources-in-policy",
+        "detail": "every cited source is inside the allowed destinations"
+      },
+      {
+        "seq": 56,
+        "at": "2026-09-27T13:40:35.298Z",
+        "kind": "phase",
+        "title": "Outcome RESULT_VERIFIED",
+        "detail": "all 4 completion checks of profile web-research passed"
+      }
+    ]
+  },
+  "checks": [
+    {
+      "ok": true,
+      "what": "create → 201"
+    },
+    {
+      "ok": true,
+      "what": "proposal pending (prop-81363488ae06b0cc6d30)"
+    },
+    {
+      "ok": true,
+      "what": "approved with the exact digest → 200"
+    },
+    {
+      "ok": true,
+      "what": "control pid 95435 SIGKILLed with the real proposal claimed (states seen: approved → claimed)"
+    },
+    {
+      "ok": true,
+      "what": "the 'reached' submission was recorded by the destination (200)"
+    },
+    {
+      "ok": true,
+      "what": "control restarted via dev-up.sh (exit 0, 864 ms)"
+    },
+    {
+      "ok": true,
+      "what": "task reclaimed (recovery 1 of 2; the previous run stopped in phase execute)"
+    },
+    {
+      "ok": true,
+      "what": "task reached a terminal status (done/RESULT_VERIFIED), not left running"
+    },
+    {
+      "ok": true,
+      "what": "cleanup confirmed (confirmed: supervisor confirmed teardown of 2 attempt(s))"
+    },
+    {
+      "ok": true,
+      "what": "the interrupted attempt undefined is destroyed at the supervisor (gone)"
+    },
+    {
+      "ok": true,
+      "what": "no live attempt of the task at the supervisor (att-69b2e471331617c544b6:destroyed, att-9f3e8f91e5b443148e27:destroyed)"
+    },
+    {
+      "ok": true,
+      "what": "no container of the task remains (none)"
+    },
+    {
+      "ok": true,
+      "what": "no network of the task remains (none)"
+    },
+    {
+      "ok": true,
+      "what": "real proposal: claimed at the kill → outcome_unknown after restart (forms.example.com is unreachable, so it cannot be confirmed)"
+    },
+    {
+      "ok": true,
+      "what": "'reached' (submitted at the kill) → confirmed, receipt rcpt_uAPG07h9kfOsjEnrQoDorQ with the approved payload digest"
+    },
+    {
+      "ok": true,
+      "what": "'reached': moved to outcome_unknown, then confirmed by a receipt READ (Final action outcome unknown → Receipt read (reconciliation) 1: confirmed → Final action confirmed by the destination)"
+    },
+    {
+      "ok": true,
+      "what": "'not-reached' (claimed at the kill) → outcome_unknown; the destination has no receipt, so it stays outcome_unknown (Final action outcome unknown → Receipt read (reconciliation) 1: none)"
+    },
+    {
+      "ok": true,
+      "what": "nothing re-submitted: destination submission_accepted counts reached=1 (the one pre-crash post), not-reached=0, real=0"
+    },
+    {
+      "ok": true,
+      "what": "no controller submission step after the restart (0 controller events)"
+    },
+    {
+      "ok": true,
+      "what": "destination still has no receipt for 'not-reached' (404)"
+    },
+    {
+      "ok": true,
+      "what": "the replayed script's new proposal prop-f40c944c33aaf798405a needed a fresh decision (rejected → 200); approvals are not carried across the restart"
+    }
+  ],
+  "note": "Part (b) is a store-level injection: the loopback fixtures destination is unreachable from the sandboxed browser, so the controller-driven submit cannot reach it locally. The driver wrote two proposal records (status submitted / claimed) into the dead control plane's PGlite store and posted the 'reached' one once to the fixtures destination with a correctly minted approval code (simulating a submit that landed before the crash). Reconciliation after restart is the product's own code.",
+  "dirtyTree": null
+}

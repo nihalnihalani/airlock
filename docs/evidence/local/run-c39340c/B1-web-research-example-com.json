@@ -1,0 +1,341 @@
+{
+  "id": "B1-web-research-example-com",
+  "requirement": "Useful work (b): web-research on a public allowlisted site (example.com) — Chromium navigates, observes, screenshot artifact is a valid PNG",
+  "command": "bun scripts/acceptance/local.ts B1-web-research-example-com",
+  "environment": "real local runc (dev-unsafe, Colima); stack = git archive of c39340c6091a",
+  "timestamp": "2026-09-27T10:32:20.738Z",
+  "revision": "c39340c6091a32ff8203fba5fd205bccac8614fd",
+  "result": "PASS",
+  "evidence": {
+    "screenshot": {
+      "id": "art-60e221d3bd509e842cd6",
+      "kind": "screenshot",
+      "owner": "judge-25a178d200fc9c390ae3f23b",
+      "sha256": "74055151462e4f8b960ea307694724a88dc32b73179f9812ebfa3c4d1ab9a81a",
+      "source": {
+        "url": "https://example.com/",
+        "step": 3,
+        "tool": "browser_screenshot",
+        "attemptId": "att-a63711927d778804099e"
+      },
+      "taskId": "task-2c31aa58db183345",
+      "filename": "screenshot-003-1.png",
+      "createdAt": "2026-09-27T10:32:20.117Z",
+      "mediaType": "image/png",
+      "byteLength": 16409,
+      "schemaVersion": 1,
+      "png": {
+        "valid": true,
+        "width": 1280,
+        "height": 800
+      }
+    },
+    "task": {
+      "id": "task-2c31aa58db183345",
+      "status": "done",
+      "outcome": "RESULT_VERIFIED",
+      "result": {
+        "checks": [
+          {
+            "name": "screenshot-evidence",
+            "detail": "1 screenshot(s) stored",
+            "passed": true
+          },
+          {
+            "name": "sources-cited",
+            "detail": "1 source(s) cited",
+            "passed": true
+          },
+          {
+            "name": "sources-visited",
+            "detail": "every cited source was reached by this task's browser",
+            "passed": true
+          },
+          {
+            "name": "sources-in-policy",
+            "detail": "every cited source is inside the allowed destinations",
+            "passed": true
+          }
+        ],
+        "sources": [
+          {
+            "url": "https://example.com/",
+            "screenshotArtifactId": "art-60e221d3bd509e842cd6"
+          }
+        ],
+        "summary": "Acceptance diagnostic: example.com was opened, observed and captured.",
+        "outputArtifactIds": []
+      },
+      "cleanup": {
+        "at": "2026-09-27T10:32:20.436Z",
+        "detail": "supervisor confirmed teardown of 1 attempt(s)",
+        "status": "confirmed"
+      }
+    },
+    "browserStatus": {
+      "chromium": "153.0.8010.12",
+      "sandbox": {
+        "renderers": 1,
+        "zygotePresent": true,
+        "anyNoSandboxFlag": false,
+        "chromiumProcesses": 7,
+        "renderersInNestedPidNamespace": true
+      },
+      "inspection": "runc"
+    },
+    "egress": {
+      "summary": {
+        "denied": 0,
+        "allowed": 1
+      },
+      "decisions": [
+        {
+          "at": "2026-09-27T10:32:19.924Z",
+          "host": "example.com",
+          "port": 443,
+          "method": "CONNECT",
+          "reason": "allowlisted",
+          "address": "104.20.23.154",
+          "decision": "allow"
+        }
+      ]
+    },
+    "events": [
+      {
+        "seq": 1,
+        "at": "2026-09-27T10:32:12.662Z",
+        "kind": "lifecycle",
+        "title": "Task created",
+        "detail": "general task, profile web-research v1; destinations example.com; diagnostic (scripted:acc-web), not a model run"
+      },
+      {
+        "seq": 2,
+        "at": "2026-09-27T10:32:13.279Z",
+        "kind": "phase",
+        "title": "prepare",
+        "detail": "general task profile web-research v1; tools: browser_navigate, browser_observe, browser_click, browser_type, browser_key, browser_scroll, browser_screenshot, browser_tabs, browser_download_list, browser_download_save, browser_propose_submit, submit_result; destinations: example.com"
+      },
+      {
+        "seq": 3,
+        "at": "2026-09-27T10:32:13.280Z",
+        "kind": "check",
+        "title": "dev-unsafe runtime",
+        "detail": "supervisor host runs runc with AIRLOCK_DEV_UNSAFE; results are not a deployment measurement"
+      },
+      {
+        "seq": 4,
+        "at": "2026-09-27T10:32:13.281Z",
+        "kind": "phase",
+        "title": "execute",
+        "detail": "model loop for goal under profile web-research"
+      },
+      {
+        "seq": 5,
+        "at": "2026-09-27T10:32:13.283Z",
+        "kind": "model",
+        "title": "Model turn 1",
+        "detail": "Opening example.com."
+      },
+      {
+        "seq": 6,
+        "at": "2026-09-27T10:32:13.285Z",
+        "kind": "tool",
+        "title": "browser_navigate allowed",
+        "detail": "example.com is inside the task's destinations",
+        "tool": "browser_navigate",
+        "opState": "allowed",
+        "actor": "agent"
+      },
+      {
+        "seq": 7,
+        "at": "2026-09-27T10:32:13.286Z",
+        "kind": "lifecycle",
+        "title": "Creating browser sandbox",
+        "detail": "attempt att-a63711927d778804099e, generation 1, deadline 2026-09-27T10:47:13.285Z; egress allowed to example.com"
+      },
+      {
+        "seq": 8,
+        "at": "2026-09-27T10:32:19.743Z",
+        "kind": "lifecycle",
+        "title": "browser sandbox created",
+        "detail": "container airlock-browser-task-2c31aa58db183345-att-a63711927d778804099e; runtime runc (dev-unsafe)",
+        "opState": "completed"
+      },
+      {
+        "seq": 9,
+        "at": "2026-09-27T10:32:19.744Z",
+        "kind": "tool",
+        "title": "browser_navigate started",
+        "tool": "browser_navigate",
+        "opState": "started"
+      },
+      {
+        "seq": 10,
+        "at": "2026-09-27T10:32:20.000Z",
+        "kind": "tool",
+        "title": "browser_navigate https://example.com/",
+        "detail": "status 200",
+        "tool": "browser_navigate",
+        "opState": "completed"
+      },
+      {
+        "seq": 11,
+        "at": "2026-09-27T10:32:20.001Z",
+        "kind": "model",
+        "title": "Model turn 2",
+        "detail": "Observing."
+      },
+      {
+        "seq": 12,
+        "at": "2026-09-27T10:32:20.002Z",
+        "kind": "tool",
+        "title": "browser_observe started",
+        "tool": "browser_observe",
+        "opState": "started"
+      },
+      {
+        "seq": 13,
+        "at": "2026-09-27T10:32:20.059Z",
+        "kind": "tool",
+        "title": "browser_observe https://example.com/",
+        "detail": "Example Domain — 129 chars, 1 controls, 1 tab(s)\n\nExample Domain\n\nThis domain is for use in documentation examples without needing permission. Avoid use in operations.\n\nLearn more",
+        "tool": "browser_observe",
+        "opState": "completed"
+      },
+      {
+        "seq": 14,
+        "at": "2026-09-27T10:32:20.060Z",
+        "kind": "model",
+        "title": "Model turn 3",
+        "detail": "Screenshot."
+      },
+      {
+        "seq": 15,
+        "at": "2026-09-27T10:32:20.061Z",
+        "kind": "tool",
+        "title": "browser_screenshot started",
+        "tool": "browser_screenshot",
+        "opState": "started"
+      },
+      {
+        "seq": 16,
+        "at": "2026-09-27T10:32:20.118Z",
+        "kind": "artifact",
+        "title": "Screenshot stored art-60e221d3bd509e842cd6",
+        "detail": "https://example.com/ (1280x800, sha256 74055151462e4f8b960ea307694724a88dc32b73179f9812ebfa3c4d1ab9a81a)",
+        "tool": "browser_screenshot",
+        "actor": "agent"
+      },
+      {
+        "seq": 17,
+        "at": "2026-09-27T10:32:20.119Z",
+        "kind": "tool",
+        "title": "browser_screenshot https://example.com/",
+        "detail": "stored as art-60e221d3bd509e842cd6",
+        "tool": "browser_screenshot",
+        "opState": "completed"
+      },
+      {
+        "seq": 18,
+        "at": "2026-09-27T10:32:20.120Z",
+        "kind": "model",
+        "title": "Model turn 4",
+        "detail": "Submitting."
+      },
+      {
+        "seq": 19,
+        "at": "2026-09-27T10:32:20.120Z",
+        "kind": "tool",
+        "title": "submit_result",
+        "detail": "Acceptance diagnostic: example.com was opened, observed and captured.\noutputs: (none)\nsources: https://example.com/",
+        "tool": "submit_result",
+        "opState": "completed"
+      },
+      {
+        "seq": 20,
+        "at": "2026-09-27T10:32:20.121Z",
+        "kind": "phase",
+        "title": "freeze",
+        "detail": "stopping the sandboxes and collecting outputs/ read-only"
+      },
+      {
+        "seq": 21,
+        "at": "2026-09-27T10:32:20.432Z",
+        "kind": "lifecycle",
+        "title": "browser sandbox destroyed (result submitted)",
+        "detail": "revoked; destroyed; remaining containers=0 volumes=0",
+        "opState": "completed"
+      },
+      {
+        "seq": 22,
+        "at": "2026-09-27T10:32:20.434Z",
+        "kind": "check",
+        "title": "passed: screenshot-evidence",
+        "detail": "1 screenshot(s) stored"
+      },
+      {
+        "seq": 23,
+        "at": "2026-09-27T10:32:20.435Z",
+        "kind": "check",
+        "title": "passed: sources-cited",
+        "detail": "1 source(s) cited"
+      },
+      {
+        "seq": 24,
+        "at": "2026-09-27T10:32:20.435Z",
+        "kind": "check",
+        "title": "passed: sources-visited",
+        "detail": "every cited source was reached by this task's browser"
+      },
+      {
+        "seq": 25,
+        "at": "2026-09-27T10:32:20.435Z",
+        "kind": "check",
+        "title": "passed: sources-in-policy",
+        "detail": "every cited source is inside the allowed destinations"
+      },
+      {
+        "seq": 26,
+        "at": "2026-09-27T10:32:20.436Z",
+        "kind": "phase",
+        "title": "Outcome RESULT_VERIFIED",
+        "detail": "all 4 completion checks of profile web-research passed"
+      }
+    ]
+  },
+  "checks": [
+    {
+      "ok": true,
+      "what": "create web-research task → 201"
+    },
+    {
+      "ok": true,
+      "what": "done/RESULT_VERIFIED (done/RESULT_VERIFIED)"
+    },
+    {
+      "ok": true,
+      "what": "browser_navigate completed with HTTP 200"
+    },
+    {
+      "ok": true,
+      "what": "browser_observe completed"
+    },
+    {
+      "ok": true,
+      "what": "browser container isolation probe: direct metadata/DNS/TCP/docker socket/host mounts all BLOCKED"
+    },
+    {
+      "ok": true,
+      "what": "a screenshot artifact was stored"
+    },
+    {
+      "ok": true,
+      "what": "screenshot bytes sha256 = recorded, valid PNG 1280x800"
+    },
+    {
+      "ok": true,
+      "what": "teardown clean; host listing (no sandboxes)"
+    }
+  ],
+  "dirtyTree": null
+}

@@ -1,11 +1,13 @@
 /**
- * The one real-docker integration test. Runs on runc with AIRLOCK_DEV_UNSAFE semantics (dev-unsafe,
- * never a deployment default). Skipped automatically when Docker is unreachable or the runtime
- * image airlock-runtime-python:tabulate-365 is absent.
+ * Real-docker integration tests. Run on runc with AIRLOCK_DEV_UNSAFE semantics (dev-unsafe, never a
+ * deployment default). Skipped automatically when Docker is unreachable or the runtime image
+ * airlock-runtime-python:tabulate-365 is absent.
  */
 import { describe, expect, test } from "bun:test";
+import Docker from "dockerode";
 import { join, resolve } from "node:path";
 import type { AttemptRef, AttemptState, BlastRadiusCard, FreezeResult } from "@airlock/contracts";
+import { SupervisorError } from "../src/errors";
 import { resolveDockerSocket } from "../src/config";
 import { checkHost } from "../src/host";
 import { createSentinel, hostileRun } from "../src/hostile";
@@ -23,6 +25,27 @@ const api = createDockerode(resolveDockerSocket(process.env));
 const dockerUp = await api.ping();
 const imagePresent = dockerUp ? (await api.inspectImage(IMAGE)) !== null : false;
 const available = dockerUp && imagePresent;
+const imageId = imagePresent ? ((await api.inspectImage(IMAGE))?.id ?? "") : "";
+const raw = new Docker(resolveDockerSocket(process.env) ? { socketPath: resolveDockerSocket(process.env) } : undefined);
+
+/** Processes Docker reports inside the container, or why it cannot (stopped: 409, gone: 404). */
+async function top(name: string): Promise<{ processes: string[] } | { error: number | string }> {
+  try {
+    const result = (await raw.getContainer(name).top({ ps_args: "-eo pid,args" })) as { Processes?: string[][] };
+    return { processes: (result.Processes ?? []).map((p) => p.join(" ")) };
+  } catch (error) {
+    return { error: (error as { statusCode?: number }).statusCode ?? String(error) };
+  }
+}
+
+async function until(predicate: () => boolean, timeoutMs: number): Promise<boolean> {
+  const end = Date.now() + timeoutMs;
+  while (Date.now() < end) {
+    if (predicate()) return true;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  return predicate();
+}
 if (!available) {
   console.info(`[integration] skipped: docker=${dockerUp} image=${imagePresent}`);
 }
@@ -157,5 +180,112 @@ describe("real docker (runc, dev-unsafe)", () => {
       }
     },
     240_000,
+  );
+
+  test.skipIf(!available)(
+    "G3: a detached background child dies with its sandbox on expiry, revoke and destroy; none of those attempt ids can restart",
+    async () => {
+      const dir = tempDir();
+      // D2 on real Docker: the pinned image ID is enforced on every inspection of this run.
+      const config = { ...testConfig(dir), profilesDir: join(REPO, "profiles"), namespace: `airlockg3${Date.now().toString(36)}`, runtimeImageId: imageId };
+      const profiles = loadProfiles(config.profilesDir);
+      const host = await checkHost(api, config);
+      const journal = new Journal(config.journalPath);
+      const core = new Supervisor({ api, journal, config, profiles, host, log: (m) => console.info(`[integration] ${m}`) });
+      await core.start();
+      const suffix = Date.now().toString(36);
+      const expiring: AttemptRef = { taskId: "g3x", attemptId: `x${suffix}`, generation: 1 };
+      const revoked: AttemptRef = { taskId: "g3r", attemptId: `r${suffix}`, generation: 1 };
+      const destroyed: AttemptRef = { taskId: "g3d", attemptId: `d${suffix}`, generation: 1 };
+      const container = (ref: AttemptRef) => `${config.namespace}-author-${ref.taskId}-${ref.attemptId}`;
+      const all = [expiring, revoked, destroyed];
+      try {
+        for (const ref of all) {
+          // The expiring attempt gets a short renewable authorization that is never renewed (M1).
+          const base = { ref, profileId: "tabulate-365", role: "author" as const, absoluteDeadline: future(120_000), ...(ref === expiring ? { authorizedUntil: future(15_000) } : {}) };
+          const created = (await core.createAttempt({ ...base, operation: await operationFor(`g3-create-${ref.attemptId}`, base) })).body as AttemptState;
+          expect(created.status).toBe("running");
+          expect(created.inspection?.allPassed).toBe(true);
+          const spawn = await core.authorTool(ref, await operationFor(`g3-spawn-${ref.attemptId}`, {}), { kind: "exec", command: "sh -c 'nohup sleep 1000 >/dev/null 2>&1 &'; echo spawned" });
+          expect((spawn.body as { result: { status: string; stdout: string } }).result).toMatchObject({ status: "succeeded", stdout: "spawned\n" });
+          // The detached child outlived the exec that started it.
+          const before = await top(container(ref));
+          expect("processes" in before && before.processes.some((p) => p.includes("sleep 1000"))).toBe(true);
+        }
+
+        // 1. expiry: the authorization lapses without renewal; the supervisor revokes and stops the whole container.
+        // (the journal records the revocation before the stop; Docker's state is the evidence of the stop)
+        expect(await until(() => journal.getAttempt(expiring.attemptId)?.revoked === true, 30_000)).toBe(true);
+        let stopped = false;
+        for (let i = 0; i < 50 && !stopped; i++) {
+          stopped = (await api.inspectContainer(container(expiring)))?.state.running === false;
+          if (!stopped) await new Promise((r) => setTimeout(r, 200));
+        }
+        expect(stopped).toBe(true);
+        expect(journal.getAttempt(expiring.attemptId)?.status).toBe("revoked");
+        expect(await top(container(expiring))).toEqual({ error: 409 });
+
+        // 2. revoke
+        await core.revoke(revoked, await operationFor("g3-revoke", { ref: revoked }));
+        expect((await api.inspectContainer(container(revoked)))?.state.running).toBe(false);
+        expect(await top(container(revoked))).toEqual({ error: 409 });
+
+        // 3. destroy: the container is gone, and the host-wide listing no longer shows it.
+        const teardown = ((await core.destroy(destroyed, await operationFor("g3-destroy", { ref: destroyed }))).body as DestroyResult).teardown;
+        expect(teardown.clean).toBe(true);
+        expect(await api.inspectContainer(container(destroyed))).toBeNull();
+        expect(await top(container(destroyed))).toEqual({ error: 404 });
+        expect(teardown.host?.containers.some((c) => c.name === container(destroyed))).toBe(false);
+        expect(teardown.host?.containers.some((c) => c.name === container(expiring))).toBe(true);
+
+        // None of them can restart: no tool call, no re-create under the same id.
+        for (const ref of all) {
+          const tool = await core.authorTool(ref, await operationFor(`g3-late-${ref.attemptId}`, {}), { kind: "exec", command: "echo alive" }).catch((e) => e as SupervisorError);
+          expect(tool).toBeInstanceOf(SupervisorError);
+          expect((tool as SupervisorError).code).toBe("revoked");
+          const base = { ref, profileId: "tabulate-365", role: "author" as const, absoluteDeadline: future(120_000) };
+          const again = await core.createAttempt({ ...base, operation: await operationFor(`g3-recreate-${ref.attemptId}`, base) }).catch((e) => e as SupervisorError);
+          expect((again as SupervisorError).status).toBe(409);
+        }
+        expect(await top(container(expiring))).toEqual({ error: 409 });
+        expect(await top(container(revoked))).toEqual({ error: 409 });
+      } finally {
+        for (const ref of all) await core.destroy(ref, await operationFor(`g3-final-${ref.attemptId}`, { ref })).catch(() => undefined);
+        core.stop();
+        journal.close();
+      }
+      const listing = await core.hostListing();
+      expect(listing.containers.some((c) => c.name.startsWith(config.namespace))).toBe(false);
+      expect(listing.volumes.some((v) => v.startsWith(config.namespace))).toBe(false);
+    },
+    180_000,
+  );
+
+  test.skipIf(!available)(
+    "D2: a runtime image whose ID is not the pinned one (a retag) fails inspection and leaves nothing behind",
+    async () => {
+      const dir = tempDir();
+      const config = { ...testConfig(dir), profilesDir: join(REPO, "profiles"), namespace: `airlockd2${Date.now().toString(36)}`, runtimeImageId: `sha256:${"f".repeat(64)}` };
+      const profiles = loadProfiles(config.profilesDir);
+      const host = await checkHost(api, config);
+      const journal = new Journal(config.journalPath);
+      const core = new Supervisor({ api, journal, config, profiles, host, log: () => {} });
+      await core.start();
+      const ref: AttemptRef = { taskId: "d2", attemptId: `a${Date.now().toString(36)}`, generation: 1 };
+      try {
+        const base = { ref, profileId: "tabulate-365", role: "author" as const, absoluteDeadline: future(60_000) };
+        const error = await core.createAttempt({ ...base, operation: await operationFor("d2-create", base) }).catch((e) => e as SupervisorError);
+        expect((error as SupervisorError).code).toBe("inspection_failed");
+        expect((error as SupervisorError).message).toMatch(/imageId/);
+        expect(core.capacity.used().sandboxes).toBe(0);
+        const listing = await core.hostListing();
+        expect(listing.containers.some((c) => c.name.startsWith(config.namespace))).toBe(false);
+        expect(listing.volumes.some((v) => v.startsWith(config.namespace))).toBe(false);
+      } finally {
+        core.stop();
+        journal.close();
+      }
+    },
+    60_000,
   );
 });

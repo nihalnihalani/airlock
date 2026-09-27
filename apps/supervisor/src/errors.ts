@@ -19,6 +19,8 @@ export type SupervisorErrorCode =
   | "name_held"
   | "docker_unavailable"
   | "unsupported_profile"
+  /** Host admission refused: the sandbox would not fit the host budget. Nothing was created. */
+  | "capacity"
   | "internal";
 
 const STATUS: Record<SupervisorErrorCode, number> = {
@@ -36,6 +38,7 @@ const STATUS: Record<SupervisorErrorCode, number> = {
   name_held: 409,
   docker_unavailable: 503,
   unsupported_profile: 400,
+  capacity: 429,
   internal: 500,
 };
 

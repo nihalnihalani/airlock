@@ -21,7 +21,9 @@ import type { RunEvent, TaskView } from "@airlock/contracts";
 import { formatDurationMs, formatTime, PHASE_LABEL } from "../../lib/format";
 import type { ThreadItem } from "../../lib/thread";
 import { cn } from "../../lib/utils";
-import { Badge, Chip, Digest, InfoTip, TONE_TEXT, type Tone } from "../common";
+import { Badge, Chip, Digest, InfoTip, Mono, TONE_TEXT, type Tone } from "../common";
+import { CandidatesList, CleanupBadge, DiagnosticBadge } from "../Evidence";
+import { candidateRows, isDiagnostic, type CleanupStatus } from "../../lib/evidence";
 import { RowMark } from "../layout/row-mark";
 import { Bubble, BubbleContent } from "../ui/bubble";
 import { Button } from "../ui/button";
@@ -50,7 +52,9 @@ export function UserMessage({ item }: { item: Extract<ThreadItem, { type: "user"
           {item.scriptedDriver ? (
             <>
               <span className="text-muted-foreground/50">·</span>
-              <span title="Diagnostic run: a scripted model replays a fixed script. Never a live repair.">scripted: {item.scriptedDriver}</span>
+              <span className="font-medium text-warning" title="A scripted model replays a fixed script. No model is called; never a live repair.">
+                Diagnostic (scripted, not a model): {item.scriptedDriver}
+              </span>
             </>
           ) : null}
           {long ? (
@@ -64,8 +68,9 @@ export function UserMessage({ item }: { item: Extract<ThreadItem, { type: "user"
   );
 }
 
-export function AssistantMessage({ item }: { item: Extract<ThreadItem, { type: "assistant" }> }) {
+export function AssistantMessage({ item, onOpenDetails }: { item: Extract<ThreadItem, { type: "assistant" }>; onOpenDetails?: () => void }) {
   const t = item.turn;
+  const dispatched = item.tools.filter((c) => c.operation !== null).length;
   return (
     <Message align="start">
       <MessageContent className="gap-2">
@@ -101,10 +106,16 @@ export function AssistantMessage({ item }: { item: Extract<ThreadItem, { type: "
             <p className="mt-2 border-l pl-3 text-xs whitespace-pre-wrap text-muted-foreground">{item.reasoning}</p>
           </details>
         ) : null}
+        {item.planned.length > 0 || item.tools.length > 0 ? (
+          <p className="text-[11px] text-muted-foreground" title="Plan: the tools this turn requested. Dispatch: the supervisor operations the controller made for them.">
+            plan {item.planned.length > 0 ? item.planned.join(", ") : "(no tool calls recorded)"} → {dispatched} of {item.tools.length} recorded call
+            {item.tools.length === 1 ? "" : "s"} dispatched to the sandbox
+          </p>
+        ) : null}
         {item.tools.length > 0 ? (
           <div className="flex flex-col gap-1.5">
             {item.tools.map((call) => (
-              <ToolCard key={call.seq} call={call} />
+              <ToolCard key={call.seq} call={call} onOpenDetails={onOpenDetails} />
             ))}
           </div>
         ) : null}
@@ -129,7 +140,7 @@ export function MarkRow({ item }: { item: Extract<ThreadItem, { type: "mark" }> 
   const Icon = MARK_ICON[item.kind];
   const detail = item.detail.trim();
   const titleClass = cn(
-    "shrink-0 text-[13px] font-medium",
+    "min-w-0 truncate text-[13px] font-medium",
     item.tone === "neutral" ? (item.phase ? "text-foreground" : "text-foreground/80") : TONE_TEXT[item.tone],
   );
   const line = (
@@ -167,18 +178,56 @@ const RESULT_ICON: Record<Tone, ComponentType<{ className?: string }>> = {
   info: IconInfoCircle,
 };
 
+/** The comparator's verdict per frozen case, straight from the verification record. */
+function ComparatorVerdicts({ view, emphasize }: { view: TaskView; emphasize: boolean }) {
+  const record = view.verification ?? view.baseline;
+  if (!record) return null;
+  const titles = new Map((view.cases ?? []).map((c) => [c.id, c.title]));
+  return (
+    <div className={cn("mt-3 rounded-lg border p-2.5", emphasize ? "border-destructive/30 bg-destructive/5" : "border-border")}>
+      <div className="mb-1.5 flex flex-wrap items-center gap-1.5 text-xs">
+        <span className="font-medium">External comparator, per case</span>
+        <span className="text-muted-foreground">
+          {record.role} record <Mono>{record.id}</Mono> · {record.comparatorVersion}
+        </span>
+      </div>
+      <ul className="flex flex-col gap-1">
+        {record.cases.map((c) => (
+          <li key={c.caseId} className="flex flex-wrap items-baseline gap-1.5 text-xs">
+            <Badge tone={c.passed ? "ok" : "bad"}>{c.passed ? "pass" : "fail"}</Badge>
+            <span className="font-medium">{titles.get(c.caseId) ?? c.caseId}</span>
+            {c.reason ? <span className="min-w-0 break-words text-muted-foreground">{c.reason}</span> : null}
+          </li>
+        ))}
+        {record.cases.length === 0 ? <li className="text-xs text-muted-foreground">No case verdicts recorded.</li> : null}
+      </ul>
+      {emphasize ? (
+        <p className="mt-2 text-xs font-medium text-foreground">
+          Log claims are not evidence; the external comparator decided. Any "passed" count printed inside the sandbox had no
+          authority over this result.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 export function ResultCard({
   item,
   view,
+  cleanup,
   onOpenDetails,
 }: {
   item: Extract<ThreadItem, { type: "result" }>;
   view: TaskView | null;
+  cleanup?: CleanupStatus;
   onOpenDetails: () => void;
 }) {
   const Icon = RESULT_ICON[item.tone];
   const verification = view?.verification;
   const task = view?.task;
+  const diagnostic = task ? isDiagnostic(task) : false;
+  const emphasize = item.outcome === "CHECKS_FAILED" || (diagnostic && item.outcome !== null && item.outcome !== "CANDIDATE_PASSED_CHECKS");
+  const candidates = task ? candidateRows(task) : [];
   return (
     <div
       className={cn(
@@ -203,10 +252,26 @@ export function ResultCard({
             {item.outcome ? <span className="ml-auto hidden font-mono text-[11px] text-muted-foreground sm:inline">{item.outcome}</span> : null}
           </div>
           {item.hint ? <p className="mt-1 text-sm text-pretty text-muted-foreground">{item.hint}</p> : null}
+          {diagnostic ? <DiagnosticBadge className="mt-2" /> : null}
           {item.reason ? (
             <p className="mt-2 text-sm whitespace-pre-wrap break-words">
               <span className="text-muted-foreground">Recorded reason: </span>
               {item.reason}
+            </p>
+          ) : null}
+          {view && (view.verification || view.baseline) ? <ComparatorVerdicts view={view} emphasize={emphasize} /> : null}
+          {candidates.length > 1 && task ? (
+            <div className="mt-3">
+              <p className="mb-1 text-xs font-medium">Candidates, one per repair attempt</p>
+              <CandidatesList task={task} onOpenRecord={onOpenDetails} />
+            </div>
+          ) : null}
+          {cleanup && cleanup.state !== "none" ? (
+            <p className="mt-3 flex flex-wrap items-center gap-1.5 text-xs">
+              <span className="text-muted-foreground">Sandbox cleanup (separate from the result):</span>
+              <CleanupBadge cleanup={cleanup} />
+              {cleanup.listing ? <Badge tone={cleanup.listing.tone}>{cleanup.listing.label}</Badge> : null}
+              {cleanup.state === "incomplete" && cleanup.detail ? <span className="w-full break-words text-destructive">{cleanup.detail}</span> : null}
             </p>
           ) : null}
           <div className="mt-3 flex flex-wrap items-center gap-1.5">

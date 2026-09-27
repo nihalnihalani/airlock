@@ -15,7 +15,8 @@
 #   - ufw (active by default on Vultr's Ubuntu image, 22/tcp only): adds 4300/tcp from the control plane's
 #     VPC address only (the Vultr firewall group filters the public interface only, so a VPC neighbour
 #     would otherwise reach the supervisor; the bearer token remains the second line)
-#   - systemd unit airlock-supervisor.service (not started here; deploy.sh writes the env and starts it)
+#   - systemd unit airlock-supervisor.service with AIRLOCK_PRODUCTION=1 (not started here; deploy.sh
+#     writes the env and starts it)
 #
 # Trade-off, documented in deploy/README.md: a member of the docker group is root-equivalent on this
 # host. The supervisor is the one process that must hold the Docker socket (CLAUDE.md §2); running it
@@ -153,12 +154,42 @@ rm -f /etc/systemd/system/airlock-nft.service /etc/airlock/nft.conf
 nft delete table inet airlock >/dev/null 2>&1 || true
 log "ufw: $(ufw status | grep -E '4300/tcp' | tr -s ' ' | tr '\n' ';')"
 
+# --- browser plane: host-level egress enforcement (C8) ----------------------------------------------------------
+# The supervisor names each browser attempt's bridges ali<hex> (internal) and ale<hex> (egress). The
+# guard drops metadata/RFC 1918/host-bound traffic from them and all IPv6 on them (see the script
+# header). A oneshot unit re-applies it after Docker on every boot; deploy re-runs it here.
+# UNVERIFIED on VX1 until `iptables -S AIRLOCK-FWD` and the browser integration test are recorded there.
+install -m 0755 -o root -g root "$(dirname "$0")/airlock-egress-guard.sh" /usr/local/sbin/airlock-egress-guard 2>/dev/null \
+  || install -m 0755 -o root -g root /opt/airlock/app/deploy/host/airlock-egress-guard.sh /usr/local/sbin/airlock-egress-guard 2>/dev/null \
+  || log "WARNING: airlock-egress-guard.sh not found next to this script or in /opt/airlock/app yet; deploy.sh installs it after the tree sync"
+cat > /etc/systemd/system/airlock-egress-guard.service <<'EOF'
+[Unit]
+Description=Airlock browser plane: host firewall for per-attempt bridges (ali+/ale+)
+After=docker.service ufw.service
+Requires=docker.service
+Before=airlock-supervisor.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/airlock-egress-guard
+ExecReload=/usr/local/sbin/airlock-egress-guard
+ExecStop=/usr/local/sbin/airlock-egress-guard --remove
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+if [[ -x /usr/local/sbin/airlock-egress-guard ]]; then
+  systemctl enable airlock-egress-guard.service >/dev/null 2>&1 || true
+  systemctl restart airlock-egress-guard.service && log "egress guard: $(iptables -S AIRLOCK-FWD 2>/dev/null | wc -l) forward rules, $(iptables -S AIRLOCK-IN 2>/dev/null | wc -l) input rules"
+fi
+
 # --- systemd unit (env written by deploy.sh) ------------------------------------------------------------------------
 cat > /etc/systemd/system/airlock-supervisor.service <<'EOF'
 [Unit]
 Description=Airlock supervisor (VM B execution plane; the only process holding the Docker socket)
-After=network-online.target docker.service ufw.service
+After=network-online.target docker.service ufw.service airlock-egress-guard.service
 Requires=docker.service
+Wants=airlock-egress-guard.service
 Wants=network-online.target
 [Service]
 User=airlock-supervisor
@@ -166,7 +197,10 @@ Group=airlock-supervisor
 SupplementaryGroups=docker
 WorkingDirectory=/opt/airlock/app/apps/supervisor
 EnvironmentFile=/etc/airlock/supervisor.env
-ExecStart=/usr/local/bin/bun src/index.ts
+# D4: this host is a deployment. The supervisor refuses to start with dev-unsafe, runc or without a
+# pinned AIRLOCK_RUNTIME_IMAGE_ID. Set on the command line (after the EnvironmentFile is applied) so
+# an env file entry cannot override it.
+ExecStart=/usr/bin/env AIRLOCK_PRODUCTION=1 /usr/local/bin/bun src/index.ts
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=yes

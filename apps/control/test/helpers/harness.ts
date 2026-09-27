@@ -1,6 +1,6 @@
 import type { Task } from "@airlock/contracts";
 import { TaskEventBus } from "../../src/events.ts";
-import { createRepairHandler, type ModelDriver } from "../../src/repair-handler.ts";
+import { createRepairHandler, type DriverSource, type RepairDeps } from "../../src/repair-handler.ts";
 import { createStore, type Store } from "../../src/store/index.ts";
 import { TaskWorker } from "../../src/worker/index.ts";
 import { buildManifestDouble, compareDouble, MemoryArtifactStore, validateEnvelopeDouble, type Fixture } from "./doubles.ts";
@@ -23,9 +23,9 @@ export const OWNER = "operator";
 export async function makeHarness(
   fixture: Fixture,
   supervisor: FakeSupervisor,
-  driver: ModelDriver,
+  driver: DriverSource,
   options: { leaseMs?: number; cancelRetries?: number; cancelRetryDelayMs?: number } = {},
-  handlerOptions: { maxTokens?: number; reasoningEffort?: string } = {},
+  handlerOptions: Partial<Omit<RepairDeps, "profiles" | "supervisor" | "driver" | "artifacts" | "store" | "runtimeDir">> = {},
 ): Promise<Harness> {
   const store = await createStore();
   const bus = new TaskEventBus();

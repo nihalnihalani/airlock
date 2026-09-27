@@ -19,6 +19,8 @@ import { log } from "./log";
 export const SANDBOX_USER = "1000:1000";
 /** Grace added on top of the in-container timeout before the supervisor abandons the exec. */
 export const SUPERVISOR_GRACE_MS = 7_000;
+/** Upper bound on bytes the supervisor writes to an exec's stdin (the browser runner protocol cap). */
+export const MAX_STDIN_BYTES = 256 * 1024;
 /** How long to wait for Docker to report an exit code after the stream ends. */
 const EXIT_CODE_WAIT_MS = 5_000;
 
@@ -150,6 +152,20 @@ export async function runExec(
         exitCode: null,
         stdout: "",
         stderr: "Interrupted before execution: dispatch was revoked.",
+        truncated: false,
+        timedOut: false,
+        durationMs: 0,
+      },
+    };
+  }
+  if (spec.stdin !== undefined && spec.stdin.byteLength > MAX_STDIN_BYTES) {
+    return {
+      controlLost: false,
+      result: {
+        status: "refused",
+        exitCode: null,
+        stdout: "",
+        stderr: `Refused before execution: stdin is ${spec.stdin.byteLength} bytes; the limit is ${MAX_STDIN_BYTES}.`,
         truncated: false,
         timedOut: false,
         durationMs: 0,

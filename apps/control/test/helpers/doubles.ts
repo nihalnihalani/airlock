@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   canonicalJson,
+  compareCodePoints,
   type CandidateBundle,
   type CaseContract,
   type CollectedFile,
@@ -24,6 +25,7 @@ import {
 import { baselineTreeDigest, loadProfile, type LoadedProfile } from "../../src/profiles.ts";
 import type { ArtifactStoreLike, BuildManifestFn, ChatMessage, CompareFn, ModelDriver, ValidateEnvelopeFn } from "../../src/repair-handler.ts";
 import type { ExportBundleFn, ZipFilesFn } from "../../src/api.ts";
+import { deriveOutcome } from "../../src/verifier/index.ts";
 
 const sha = (bytes: Uint8Array | string) => createHash("sha256").update(bytes).digest("hex");
 
@@ -42,16 +44,28 @@ function matches(expected: Expectation, observed: Observation | undefined): { pa
 }
 
 export const compareDouble: CompareFn = (input) => {
-  const seen = new Map<string, number>();
-  for (const o of input.invoke.observations) seen.set(o.caseId, (seen.get(o.caseId) ?? 0) + 1);
+  // Per-case mode: each case is judged only on its own invocation; a failed one leaves it incomplete.
+  const perCase = input.invocations ? new Map(input.invocations.map((i) => [i.caseId, i])) : null;
+  const measured: boolean[] = [];
+  let infrastructureFault = false;
   const cases = input.contract.cases.map((c) => {
     const expected = input.role === "baseline" ? c.baseline : c.candidate;
-    const observed = seen.get(c.id) === 1 ? input.invoke.observations.find((o) => o.caseId === c.id) : undefined;
+    const own = perCase ? perCase.get(c.id) : undefined;
+    if (perCase && (!own || !own.invoke)) {
+      infrastructureFault = true;
+      measured.push(false);
+      return { caseId: c.id, kind: c.kind, expected, passed: false, reason: `invocation failed: ${own?.error ?? "not invoked"}` };
+    }
+    const run = own?.invoke ?? input.invoke;
+    const runOk = run.exec.status === "succeeded" && run.protocolErrors.length === 0;
+    const seen = run.observations.filter((o) => o.caseId === c.id).length;
+    const observed = seen === 1 ? run.observations.find((o) => o.caseId === c.id) : undefined;
     const verdict = matches(expected, observed);
-    return { caseId: c.id, kind: c.kind, expected, ...(observed ? { observed } : {}), passed: verdict.passed, reason: seen.get(c.id) === undefined ? "missing" : (seen.get(c.id) ?? 0) > 1 ? "duplicate" : verdict.reason };
+    measured.push(observed !== undefined && runOk);
+    return { caseId: c.id, kind: c.kind, expected, ...(observed ? { observed } : {}), passed: verdict.passed && runOk, reason: seen === 0 ? "missing" : seen > 1 ? "duplicate" : !runOk ? `run invalid: exec ${run.exec.status}` : verdict.reason };
   });
   const completed = cases.filter((c) => c.observed !== undefined).length;
-  const passed = input.invoke.exec.status === "succeeded" && input.invoke.protocolErrors.length === 0 && completed === cases.length && cases.every((c) => c.passed);
+  const passed = (perCase !== null || (input.invoke.exec.status === "succeeded" && input.invoke.protocolErrors.length === 0)) && completed === cases.length && cases.every((c) => c.passed);
   return {
     schemaVersion: 1,
     id: input.id,
@@ -66,8 +80,9 @@ export const compareDouble: CompareFn = (input) => {
     requiredCases: cases.length,
     completedCases: completed,
     exec: input.invoke.exec,
-    runtimeProfile: { host: input.host, inspection: input.invoke.inspection, teardown: input.invoke.teardown },
+    runtimeProfile: { host: input.host, inspection: input.invoke.inspection, ...(input.probe ? { probe: input.probe } : {}), teardown: input.invoke.teardown },
     passed,
+    outcome: deriveOutcome(input.role, cases, measured, passed, infrastructureFault),
     createdAt: input.now,
   };
 };
@@ -94,7 +109,7 @@ export const buildManifestDouble: BuildManifestFn = (profile: ProfileManifest, f
   profileId: profile.id,
   baselineCommit: profile.baselineCommit,
   baselineTreeDigest: profile.baselineTreeDigest,
-  replacements: [...files].sort((a, b) => a.path.localeCompare(b.path)).map((f) => ({ path: f.path, byteLength: f.byteLength, sha256: f.sha256 })),
+  replacements: [...files].sort((a, b) => compareCodePoints(a.path, b.path)).map((f) => ({ path: f.path, byteLength: f.byteLength, sha256: f.sha256 })),
 });
 
 export class MemoryArtifactStore implements ArtifactStoreLike {

@@ -1,0 +1,144 @@
+{
+  "id": "X2-supervisor-unreachable-inconclusive",
+  "requirement": "(incidental) supervisor unreachable during an author attempt: the task ends honestly and cleanup failure is visible; host cleanup afterwards",
+  "environment": "real local runc (dev-unsafe, Colima); stack = git archive of 42a41d4f5bf9",
+  "timestamp": "2026-09-27T09:19:42.362721Z",
+  "revision": "42a41d4f5bf9a112810c47a522c54e11d477af25",
+  "result": "PASS (honest outcome) / observation (leftover until janitor retention)",
+  "note": "Caused by a driver bug: the supervisor was restarted on the wrong port/token (inherited .env), so the control plane could not reach it. Observed: run failures fed back as tool errors, teardown unconfirmed -> outcome INCONCLUSIVE, cleanup.status=failed with the reason. The supervisor on restart logged 'attempt was live at restart; revoked, stopped and marked unknown'. After the supervisor was reachable again the stopped container + workspace volume stayed: the control plane does not retry a failed cleanup of a terminal task; the supervisor janitor destroys only after deadline + AIRLOCK_RETENTION_MS (30 min).",
+  "evidence": {
+    "task": {
+      "id": "task-e8d897a4ed5acac6",
+      "status": "done",
+      "outcome": "INCONCLUSIVE",
+      "cleanup": {
+        "at": "2026-09-27T09:17:48.657Z",
+        "detail": "attempt att-b4cc939932211cd3ae3e: revoke failed: Supervisor call failed after retries: Unable to connect. Is the computer able to access the url?; destroy failed: Supervisor call failed after retries: Unable to connect. Is the computer able to access the url?",
+        "status": "failed"
+      }
+    },
+    "events": [
+      {
+        "seq": 13,
+        "at": "2026-09-27T09:17:38.248Z",
+        "kind": "exec",
+        "title": "baseline invocation reg-scalar-maxheader-int succeeded",
+        "detail": "exit=0 53ms observations=1 protocolErrors=0"
+      },
+      {
+        "seq": 14,
+        "at": "2026-09-27T09:17:38.250Z",
+        "kind": "check",
+        "title": "Baseline reproduces the reported failure",
+        "detail": "6/6 cases completed; 6 passed, 0 failed; exec succeeded"
+      },
+      {
+        "seq": 15,
+        "at": "2026-09-27T09:17:38.250Z",
+        "kind": "phase",
+        "title": "reproduce",
+        "detail": "model reproduction in author sandbox (attempt att-b4cc939932211cd3ae3e, generation 1, deadline 2026-09-27T09:22:36.446Z)"
+      },
+      {
+        "seq": 16,
+        "at": "2026-09-27T09:17:38.252Z",
+        "kind": "model",
+        "title": "Model turn 1",
+        "detail": "Starting a long-running command in the sandbox."
+      },
+      {
+        "seq": 17,
+        "at": "2026-09-27T09:17:42.605Z",
+        "kind": "error",
+        "title": "run failed",
+        "detail": "Supervisor call failed after retries: Unable to connect. Is the computer able to access the url?"
+      },
+      {
+        "seq": 18,
+        "at": "2026-09-27T09:17:42.609Z",
+        "kind": "model",
+        "title": "Model turn 2",
+        "detail": "Still working."
+      },
+      {
+        "seq": 19,
+        "at": "2026-09-27T09:17:44.119Z",
+        "kind": "error",
+        "title": "run failed",
+        "detail": "Supervisor call failed after retries: Unable to connect. Is the computer able to access the url?"
+      },
+      {
+        "seq": 20,
+        "at": "2026-09-27T09:17:44.121Z",
+        "kind": "model",
+        "title": "Model turn 3",
+        "detail": "Still working."
+      },
+      {
+        "seq": 21,
+        "at": "2026-09-27T09:17:45.629Z",
+        "kind": "error",
+        "title": "run failed",
+        "detail": "Supervisor call failed after retries: Unable to connect. Is the computer able to access the url?"
+      },
+      {
+        "seq": 22,
+        "at": "2026-09-27T09:17:45.633Z",
+        "kind": "model",
+        "title": "Model turn 4",
+        "detail": "(no text)"
+      },
+      {
+        "seq": 23,
+        "at": "2026-09-27T09:17:45.636Z",
+        "kind": "model",
+        "title": "Model turn 5",
+        "detail": "(no text)"
+      },
+      {
+        "seq": 24,
+        "at": "2026-09-27T09:17:45.638Z",
+        "kind": "model",
+        "title": "Model turn 6",
+        "detail": "(no text)"
+      },
+      {
+        "seq": 25,
+        "at": "2026-09-27T09:17:45.640Z",
+        "kind": "model",
+        "title": "Model turn 7",
+        "detail": "(no text)"
+      },
+      {
+        "seq": 26,
+        "at": "2026-09-27T09:17:48.656Z",
+        "kind": "lifecycle",
+        "title": "Teardown incomplete (unresolved)",
+        "detail": "revoke failed: Supervisor call failed after retries: Unable to connect. Is the computer able to access the url?; destroy failed: Supervisor call failed after retries: Unable to connect. Is the computer able to access the url?"
+      },
+      {
+        "seq": 27,
+        "at": "2026-09-27T09:17:48.659Z",
+        "kind": "error",
+        "title": "Teardown incomplete",
+        "detail": "teardown of attempt att-b4cc939932211cd3ae3e could not be confirmed (unresolved): revoke failed: Supervisor call failed after retries: Unable to connect. Is the computer able to access the url?; destroy failed: Supervisor call failed after retries: Unable to connect. Is the computer able to access the url?"
+      },
+      {
+        "seq": 28,
+        "at": "2026-09-27T09:17:48.661Z",
+        "kind": "phase",
+        "title": "Outcome INCONCLUSIVE",
+        "detail": "teardown of attempt att-b4cc939932211cd3ae3e could not be confirmed (unresolved): revoke failed: Supervisor call failed after retries: Unable to connect. Is the computer able to access the url?; destroy failed: Supervisor call failed after retries: Unable to connect. Is the computer able to access the url?"
+      }
+    ],
+    "dockerAfterSupervisorBack": {
+      "containers": [
+        "airlock-author-task-e8d897a4ed5acac6-att-b4cc939932211cd3ae3e Exited (137) About a minute ago"
+      ],
+      "volumes": [
+        "airlock-ws-task-e8d897a4ed5acac6-att-b4cc939932211cd3ae3e"
+      ]
+    },
+    "janitorRemovedLeftoverBy": "2026-09-27T09:53:59Z (polled docker ps by namespace label every 10 s; attempt deadline 09:22:36Z + AIRLOCK_RETENTION_MS 30 min)"
+  }
+}

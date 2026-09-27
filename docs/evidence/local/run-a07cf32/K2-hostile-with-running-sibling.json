@@ -1,0 +1,102 @@
+{
+  "id": "K2-hostile-with-running-sibling",
+  "requirement": "Containment: a fork bomb in a hostile sandbox while another task's command runs — sibling keeps running (card siblings before/after), its command completes, control plane healthy",
+  "command": "bun scripts/acceptance/local.ts K2-hostile-with-running-sibling",
+  "environment": "real local runc (dev-unsafe, Colima); stack = git archive of a07cf3228ef7",
+  "timestamp": "2026-09-27T15:21:02.318Z",
+  "revision": "a07cf3228ef791f5bb1f44aae751df80077edc00",
+  "result": "PASS",
+  "evidence": {
+    "card": {
+      "exec": {
+        "status": "succeeded",
+        "exitCode": 0,
+        "stdout": "alive\n"
+      },
+      "died": {
+        "container": "airlock-hostile-hostile-op-op-5488eedefc4eef98a77f85ed",
+        "runtime": "runc",
+        "guestUname": "Linux sandbox 6.8.0-64-generic #67-Ubuntu SMP PREEMPT_DYNAMIC Sun Jun 15 20:23:40 UTC 2025 aarch64 GNU/Linux",
+        "reason": "the command exited 0; then the container and its volume were destroyed"
+      },
+      "survived": {
+        "supervisorHealthy": true,
+        "hostSentinelUnchanged": true,
+        "otherAttemptsRunning": 1,
+        "hostUptimeSeconds": 402834,
+        "siblings": [
+          {
+            "attemptId": "att-2d141a1228ad57b18973",
+            "taskId": "task-8242e93fd6152fe9",
+            "runningBefore": true,
+            "runningAfter": true
+          }
+        ],
+        "controlPlane": {
+          "healthyBefore": true,
+          "healthyAfter": true,
+          "checkedAt": "2026-09-27T15:20:41.153Z"
+        }
+      },
+      "teardown": {
+        "destroyedAt": "2026-09-27T15:20:41.150Z",
+        "containersRemaining": [],
+        "volumesRemaining": [],
+        "networksRemaining": [],
+        "clean": true,
+        "host": {
+          "listedAt": "2026-09-27T15:20:41.150Z",
+          "scope": "host",
+          "containers": [
+            {
+              "name": "airlock-author-task-8242e93fd6152fe9-att-2d141a1228ad57b18973",
+              "taskId": "task-8242e93fd6152fe9",
+              "role": "author",
+              "state": "running"
+            }
+          ],
+          "volumes": [
+            "airlock-ws-task-8242e93fd6152fe9-att-2d141a1228ad57b18973"
+          ],
+          "networks": []
+        }
+      }
+    },
+    "siblingTask": {
+      "id": "task-8242e93fd6152fe9",
+      "firstExec": {
+        "status": "succeeded",
+        "exitCode": 0,
+        "stdout": "done\n"
+      },
+      "final": "cancelled"
+    }
+  },
+  "checks": [
+    {
+      "ok": true,
+      "what": "sibling task's sleep 25 command dispatched"
+    },
+    {
+      "ok": true,
+      "what": "hostile fork bomb → 200"
+    },
+    {
+      "ok": true,
+      "what": "siblings: [{\"attemptId\":\"att-2d141a1228ad57b18973\",\"taskId\":\"task-8242e93fd6152fe9\",\"runningBefore\":true,\"runningAfter\":true}]"
+    },
+    {
+      "ok": true,
+      "what": "otherAttemptsRunning=1, control plane healthy after"
+    },
+    {
+      "ok": true,
+      "what": "sibling's command completed unaffected (succeeded exit=0)"
+    },
+    {
+      "ok": true,
+      "what": "sibling cancelled afterwards (200 → cancelled)"
+    }
+  ],
+  "dirtyTree": null
+}

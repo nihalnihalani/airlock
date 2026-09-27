@@ -1,0 +1,10 @@
+{ "_comment": "ACCEPTANCE diagnostic (verifier_tester, C41): a slow download (httpbin.org/drip, 300000 bytes over 40 s) so a control-plane kill lands while the browser transfer itself is in progress.",
+  "turns": [
+    { "text": "Starting a slow download.", "toolCalls": [{ "name": "browser_navigate", "args": { "url": "https://httpbin.org/drip?numbytes=300000&duration=40&delay=0&code=200" } }] },
+    { "text": "Listing downloads.", "toolCalls": [{ "name": "browser_download_list", "args": {} }] },
+    { "text": "Waiting on a slow page.", "toolCalls": [{ "name": "browser_navigate", "args": { "url": "https://httpbin.org/delay/8" } }] },
+    { "text": "Listing downloads.", "toolCalls": [{ "name": "browser_download_list", "args": {} }] },
+    { "text": "Saving it.", "toolCalls": [{ "name": "browser_download_save", "args": { "downloadId": "dl-1", "name": "drip.txt" } }] },
+    { "text": "Screenshot.", "toolCalls": [{ "name": "browser_screenshot", "args": {} }] },
+    { "text": "Submitting.", "toolCalls": [{ "name": "submit_result", "args": { "summary": "Acceptance diagnostic (C41): slow download.", "sources": ["https://httpbin.org/delay/8"] } }] }
+  ] }

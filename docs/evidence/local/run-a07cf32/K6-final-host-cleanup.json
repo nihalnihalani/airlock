@@ -1,0 +1,47 @@
+{
+  "id": "K6-final-host-cleanup",
+  "requirement": "Containment: after everything, docker ps -a / networks / volumes with label airlock.supervisor=true (dev namespace) are empty; supervisor host listing empty",
+  "command": "bun scripts/acceptance/local.ts K6-final-host-cleanup",
+  "environment": "real local runc (dev-unsafe, Colima); stack = git archive of a07cf3228ef7",
+  "timestamp": "2026-09-27T15:35:42.263Z",
+  "revision": "a07cf3228ef791f5bb1f44aae751df80077edc00",
+  "result": "PASS",
+  "evidence": {
+    "docker": {
+      "containers": [],
+      "networks": [],
+      "volumes": [],
+      "allNamespaces": []
+    },
+    "supervisorListing": {
+      "listedAt": "2026-09-27T15:35:42.254Z",
+      "scope": "host",
+      "containers": [],
+      "volumes": [],
+      "networks": []
+    }
+  },
+  "checks": [
+    {
+      "ok": true,
+      "what": "docker ps -a --filter label=airlock.supervisor=true: (no sandboxes)"
+    },
+    {
+      "ok": true,
+      "what": "docker network ls (label): (none)"
+    },
+    {
+      "ok": true,
+      "what": "docker volume ls (label): (none)"
+    },
+    {
+      "ok": true,
+      "what": "supervisor GET /listing empty (200)"
+    },
+    {
+      "ok": true,
+      "what": "no airlock-* named containers at all (none)"
+    }
+  ],
+  "dirtyTree": null
+}

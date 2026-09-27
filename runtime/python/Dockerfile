@@ -6,13 +6,17 @@
 #       --build-arg ADAPTER_MODULE=airlock_adapter_tabulate -t airlock-runtime-python:tabulate-365 .
 # runtime/python/build.sh <profileId> does this after prepare-profile.sh has verified the base tree.
 #
-# Base image pin. Tag in FROM; the digest observed via `docker image inspect python:3.12-slim`
-# on the build host (2026-09-26, linux/arm64 dev machine, Docker 29.5.2):
-#   python:3.12-slim = sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f
+# Base image pin (D2): the multi-arch INDEX digest of python:3.12-slim, so linux/amd64 (VM B) and
+# linux/arm64 (dev) both resolve to a fixed manifest. Verified 2026-09-27 against Docker Hub
+# (registry-1.docker.io/v2/library/python/manifests/3.12-slim, docker-content-digest):
+#   index  sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f
+#   amd64  sha256:44ff437bba879d4941b710a369a8f19266aea34b29002807f0c487fabc9eec9b
+#   arm64  sha256:950206c37262dd86c55659797f6ee418fee30535072f65a82ed470d985f5cda5
 #   (Python 3.12.14, Debian 13.7 "trixie" slim)
-# build.sh records the base digest it actually built from and the image id/digest it produced;
-# the supervisor records the image digest it actually ran (RuntimeInspection.imageDigest).
-FROM python:3.12-slim
+# To move the pin: resolve the new index digest, update this line, rebuild, and redeploy (deploy
+# captures the built image ID into AIRLOCK_RUNTIME_IMAGE_ID; the supervisor enforces it on every
+# inspection, so a retagged airlock-runtime-python:<id> fails closed).
+FROM python:3.12-slim@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f
 
 ARG PROFILE
 ARG ADAPTER_MODULE

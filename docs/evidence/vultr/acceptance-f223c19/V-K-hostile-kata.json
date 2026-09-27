@@ -1,0 +1,265 @@
+{
+  "id": "V-K-hostile-kata",
+  "requirement": "Containment on Kata: hostile panel as judge (fork bomb, rm -rf / --no-preserve-root, curl 169.254.169.254) → card shows kata, died/survived, controlPlane healthy, teardown '(no sandboxes)'",
+  "command": "bun scripts/acceptance/vultr.ts V-K-hostile-kata",
+  "category": "real Vultr compute + live model",
+  "environment": "real Vultr compute (control vc2-2c-4gb @ 155.138.198.12, sandbox vx1-g-4c-16g-240s @ 144.202.28.80, region atl, Kata) + live model (glm-5.3 via Vultr Serverless Inference); public HTTPS API https://155-138-198-12.sslip.io",
+  "startedAt": "2026-09-27T17:01:53.784Z",
+  "timestamp": "2026-09-27T17:03:25.926Z",
+  "revision": "f223c19aa19d0429c0d51dd033fca61e9ac8baea",
+  "result": "PASS",
+  "checks": [
+    {
+      "ok": true,
+      "what": "fork-bomb: POST /api/hostile → 200 "
+    },
+    {
+      "ok": true,
+      "what": "fork-bomb: sandbox runtime kata (devUnsafe false; guest Linux sandbox 6.18.35 #1 SMP Mon Jun 15 12:55:58 UTC 2026 x8)"
+    },
+    {
+      "ok": true,
+      "what": "fork-bomb: died: airlock-hostile-hostile-op-op-5937bb532e79564ed555c04c — the command was killed at the per-command timeout; the whole container was stopped because the super"
+    },
+    {
+      "ok": true,
+      "what": "fork-bomb: survived: supervisor true, host sentinel true, control plane true/true"
+    },
+    {
+      "ok": true,
+      "what": "fork-bomb: teardown host listing \"(no sandboxes)\" (containers 0, networks 0, volumes 0)"
+    },
+    {
+      "ok": true,
+      "what": "fork-bomb: /api/health answered 62× during the run, 0 failures, max 4223 ms"
+    },
+    {
+      "ok": true,
+      "what": "rm-rf: POST /api/hostile → 200 "
+    },
+    {
+      "ok": true,
+      "what": "rm-rf: sandbox runtime kata (devUnsafe false; guest Linux sandbox 6.18.35 #1 SMP Mon Jun 15 12:55:58 UTC 2026 x8)"
+    },
+    {
+      "ok": true,
+      "what": "rm-rf: died: airlock-hostile-hostile-op-op-accb60696cf0996aa79f24a6 — the command exited 0; then the container and its volume were destroyed"
+    },
+    {
+      "ok": true,
+      "what": "rm-rf: survived: supervisor true, host sentinel true, control plane true/true"
+    },
+    {
+      "ok": true,
+      "what": "rm-rf: teardown host listing \"(no sandboxes)\" (containers 0, networks 0, volumes 0)"
+    },
+    {
+      "ok": true,
+      "what": "rm-rf: /api/health answered 5× during the run, 0 failures, max 886 ms"
+    },
+    {
+      "ok": true,
+      "what": "metadata: POST /api/hostile → 200 "
+    },
+    {
+      "ok": true,
+      "what": "metadata: sandbox runtime kata (devUnsafe false; guest Linux sandbox 6.18.35 #1 SMP Mon Jun 15 12:55:58 UTC 2026 x8)"
+    },
+    {
+      "ok": true,
+      "what": "metadata: died: airlock-hostile-hostile-op-op-251028c1f17cc36238a8402f — the command exited 0; then the container and its volume were destroyed"
+    },
+    {
+      "ok": true,
+      "what": "metadata: survived: supervisor true, host sentinel true, control plane true/true"
+    },
+    {
+      "ok": true,
+      "what": "metadata: teardown host listing \"(no sandboxes)\" (containers 0, networks 0, volumes 0)"
+    },
+    {
+      "ok": true,
+      "what": "metadata: /api/health answered 10× during the run, 0 failures, max 1221 ms"
+    },
+    {
+      "ok": true,
+      "what": "metadata unreachable from the sandbox by python urllib and bash /dev/tcp (curl_rc=127 py_err URLError <urlopen error [Errno 101] Network is unreachable> tcp_rc=1 /bin/bash: line 1: curl: command not found bash: connect: Network is unreachable bash: line 1: /dev/tcp/169.254.169.254/80: Network is unreachable )"
+    },
+    {
+      "ok": true,
+      "what": "operator cannot run the hostile panel (403)"
+    }
+  ],
+  "evidence": {
+    "cards": {
+      "fork-bomb": {
+        "exec": {
+          "status": "timed_out",
+          "exitCode": null,
+          "durationMs": 37003,
+          "stdoutTail": "",
+          "stderrTail": "The supervisor deadline passed before the command ended; the sandbox is being stopped."
+        },
+        "died": {
+          "container": "airlock-hostile-hostile-op-op-5937bb532e79564ed555c04c",
+          "runtime": "kata",
+          "guestUname": "Linux sandbox 6.18.35 #1 SMP Mon Jun 15 12:55:58 UTC 2026 x86_64 GNU/Linux",
+          "reason": "the command was killed at the per-command timeout; the whole container was stopped because the supervisor lost control of the command; then the container and its volume were destroyed"
+        },
+        "survived": {
+          "supervisorHealthy": true,
+          "hostSentinelUnchanged": true,
+          "otherAttemptsRunning": 0,
+          "hostUptimeSeconds": 3106,
+          "siblings": [],
+          "controlPlane": {
+            "healthyBefore": true,
+            "healthyAfter": true,
+            "checkedAt": "2026-09-27T17:03:08.916Z"
+          }
+        },
+        "workspace": {
+          "filesBefore": 16,
+          "filesAfter": null
+        },
+        "teardown": {
+          "destroyedAt": "2026-09-27T17:03:08.905Z",
+          "containersRemaining": [],
+          "volumesRemaining": [],
+          "networksRemaining": [],
+          "clean": true,
+          "host": {
+            "listedAt": "2026-09-27T17:03:08.905Z",
+            "scope": "host",
+            "containers": [],
+            "volumes": [],
+            "networks": []
+          }
+        },
+        "inspection": {
+          "runtime": "kata",
+          "devUnsafe": false,
+          "guestUname": "Linux sandbox 6.18.35 #1 SMP Mon Jun 15 12:55:58 UTC 2026 x86_64 GNU/Linux",
+          "imageId": "sha256:9952f7eb8b4830391bddfcd2ec81207bfcd02dc8280bab0b8b8f25e9a19ec238"
+        },
+        "health": {
+          "samples": 62,
+          "failures": 0,
+          "maxMs": 4223
+        }
+      },
+      "rm-rf": {
+        "exec": {
+          "status": "succeeded",
+          "exitCode": 0,
+          "durationMs": 830,
+          "stdoutTail": "",
+          "stderrTail": "/sys/net/ipv6/conf/default/autoconf': Read-only file system\nrm: cannot remove '/proc/sys/net/ipv6/conf/default/dad_transmits': Read-only file system\nrm: cannot remove '/proc/sys/net/ipv6/conf/default/disable_ipv6': Read-only file system\nrm: cannot remove '/proc/sys/net/ipv6/conf/default/disable_poli"
+        },
+        "died": {
+          "container": "airlock-hostile-hostile-op-op-accb60696cf0996aa79f24a6",
+          "runtime": "kata",
+          "guestUname": "Linux sandbox 6.18.35 #1 SMP Mon Jun 15 12:55:58 UTC 2026 x86_64 GNU/Linux",
+          "reason": "the command exited 0; then the container and its volume were destroyed"
+        },
+        "survived": {
+          "supervisorHealthy": true,
+          "hostSentinelUnchanged": true,
+          "otherAttemptsRunning": 0,
+          "hostUptimeSeconds": 3111,
+          "siblings": [],
+          "controlPlane": {
+            "healthyBefore": true,
+            "healthyAfter": true,
+            "checkedAt": "2026-09-27T17:03:14.043Z"
+          }
+        },
+        "workspace": {
+          "filesBefore": 16,
+          "filesAfter": 0
+        },
+        "teardown": {
+          "destroyedAt": "2026-09-27T17:03:14.031Z",
+          "containersRemaining": [],
+          "volumesRemaining": [],
+          "networksRemaining": [],
+          "clean": true,
+          "host": {
+            "listedAt": "2026-09-27T17:03:14.031Z",
+            "scope": "host",
+            "containers": [],
+            "volumes": [],
+            "networks": []
+          }
+        },
+        "inspection": {
+          "runtime": "kata",
+          "devUnsafe": false,
+          "guestUname": "Linux sandbox 6.18.35 #1 SMP Mon Jun 15 12:55:58 UTC 2026 x86_64 GNU/Linux",
+          "imageId": "sha256:9952f7eb8b4830391bddfcd2ec81207bfcd02dc8280bab0b8b8f25e9a19ec238"
+        },
+        "health": {
+          "samples": 5,
+          "failures": 0,
+          "maxMs": 886
+        }
+      },
+      "metadata": {
+        "exec": {
+          "status": "succeeded",
+          "exitCode": 0,
+          "durationMs": 189,
+          "stdoutTail": "curl_rc=127\npy_err URLError <urlopen error [Errno 101] Network is unreachable>\ntcp_rc=1\n",
+          "stderrTail": "/bin/bash: line 1: curl: command not found\nbash: connect: Network is unreachable\nbash: line 1: /dev/tcp/169.254.169.254/80: Network is unreachable\n"
+        },
+        "died": {
+          "container": "airlock-hostile-hostile-op-op-251028c1f17cc36238a8402f",
+          "runtime": "kata",
+          "guestUname": "Linux sandbox 6.18.35 #1 SMP Mon Jun 15 12:55:58 UTC 2026 x86_64 GNU/Linux",
+          "reason": "the command exited 0; then the container and its volume were destroyed"
+        },
+        "survived": {
+          "supervisorHealthy": true,
+          "hostSentinelUnchanged": true,
+          "otherAttemptsRunning": 0,
+          "hostUptimeSeconds": 3122,
+          "siblings": [],
+          "controlPlane": {
+            "healthyBefore": true,
+            "healthyAfter": true,
+            "checkedAt": "2026-09-27T17:03:24.870Z"
+          }
+        },
+        "workspace": {
+          "filesBefore": 16,
+          "filesAfter": 16
+        },
+        "teardown": {
+          "destroyedAt": "2026-09-27T17:03:24.860Z",
+          "containersRemaining": [],
+          "volumesRemaining": [],
+          "networksRemaining": [],
+          "clean": true,
+          "host": {
+            "listedAt": "2026-09-27T17:03:24.860Z",
+            "scope": "host",
+            "containers": [],
+            "volumes": [],
+            "networks": []
+          }
+        },
+        "inspection": {
+          "runtime": "kata",
+          "devUnsafe": false,
+          "guestUname": "Linux sandbox 6.18.35 #1 SMP Mon Jun 15 12:55:58 UTC 2026 x86_64 GNU/Linux",
+          "imageId": "sha256:9952f7eb8b4830391bddfcd2ec81207bfcd02dc8280bab0b8b8f25e9a19ec238"
+        },
+        "health": {
+          "samples": 10,
+          "failures": 0,
+          "maxMs": 1221
+        }
+      }
+    }
+  }
+}

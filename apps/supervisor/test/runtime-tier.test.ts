@@ -7,7 +7,8 @@ import { describe, expect, test } from "bun:test";
 import { loadConfig } from "../src/config";
 import { runtimeNameOf } from "../src/runtime";
 
-const BASE_ENV = { SUPERVISOR_TOKEN: "test-token-0123456789abcdef" };
+// A pinned image ID is required outside dev-unsafe (D2); these tests are about the runtime tier.
+const BASE_ENV = { SUPERVISOR_TOKEN: "test-token-0123456789abcdef", AIRLOCK_RUNTIME_IMAGE_ID: `sha256:${"a".repeat(64)}` };
 
 describe("runtimeNameOf", () => {
   test("an effective runc is never relabelled as the configured tier", () => {

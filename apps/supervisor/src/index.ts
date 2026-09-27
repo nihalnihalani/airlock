@@ -12,7 +12,8 @@
  * without the token, the principle that the vocabulary (not the token) is the boundary. Airlock
  * modifications: per-attempt disposable roles instead of per-Bot computers; execution, freeze,
  * invoke and hostile endpoints; operation journal and generation fencing; body digests; runtime tier
- * selection with dev-unsafe labelling; janitor and absolute deadlines.
+ * selection with dev-unsafe labelling; janitor and absolute deadlines; renewable execution
+ * authorization; host admission (429); a host-wide listing; `/health` reveals nothing but liveness.
  *
  * The shared secret is not the boundary; the vocabulary is. A caller with the token can create an
  * attempt for a supported profile, run a command inside it, freeze, revoke and destroy it. It cannot
@@ -25,14 +26,23 @@ import { Hono } from "hono";
 import type { z } from "zod";
 import {
   AuthorToolRequest,
+  BrowserEvidence,
+  BrowserOpResult,
+  CollectOutputsRequest,
+  CollectOutputsResult,
+  DestroyResult,
+  EgressLog,
+  HostListing,
   CreateAttemptRequest,
   DestroyRequest,
   FreezeRequest,
   HostileRunRequest,
   InvokeRequest,
+  RenewRequest,
   RevokeRequest,
   requestDigestOf,
 } from "@airlock/contracts";
+import { SupervisorBrowserOpRequest } from "./browser-files";
 import { loadConfig } from "./config";
 import { SupervisorError, describe } from "./errors";
 import { checkHost } from "./host";
@@ -126,18 +136,51 @@ export function createApp(deps: AppDeps): Hono {
     return parsed.data;
   }
 
+  /**
+   * Route outputs that have a contracts schema are validated before they leave: a shape drift is a
+   * supervisor bug (500), never a silently different receipt. Extra fields are kept.
+   */
+  function typed<S extends z.ZodTypeAny>(schema: S, value: unknown, what: string): object {
+    const parsed = schema.safeParse(value);
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0];
+      log.error("route output does not match its contract", { what, issue: issue ? `${issue.path.join(".")}: ${issue.message}` : "unknown" });
+      throw new SupervisorError("internal", `Supervisor output for ${what} does not match its contract.`);
+    }
+    return value as object;
+  }
+
   function attemptParam(c: { req: { param(name: string): string | undefined } }): string {
     const checked = validateId(c.req.param("attemptId"), "attemptId");
     if (!checked.ok) throw new SupervisorError("invalid_body", checked.reason);
     return checked.value;
   }
 
-  app.get("/health", async (c) => {
-    const docker = await core.api.ping();
-    return c.json({ status: docker ? "ok" : "degraded", docker, host: core.host.check });
-  });
+  // Unauthenticated liveness only (D15): no host inventory, runtimes or versions. The host check is
+  // on the authenticated GET /host.
+  app.get("/health", (c) => c.json({ ok: true }));
 
   app.get("/host", (c) => c.json(core.host.check));
+
+  /** Host admission budget and current reservations (M2). */
+  app.get("/capacity", (c) => c.json(core.capacity.usage()));
+
+  /** Every Airlock-owned container and volume on this Docker host (contracts HostListing, M7). */
+  app.get("/listing", async (c) => c.json(typed(HostListing, await core.hostListing(), "HostListing")));
+
+  /**
+   * M8: the journal's record of one operation, so the controller can reconcile an invoke, hostile,
+   * browser or lifecycle call by id after a lost response: kind, pending/completed, the recorded HTTP
+   * status, whether a receipt exists, whether a restart cut it off, and the task/attempt/generation
+   * it was bound to. Never the result body itself (replay the same request to get it).
+   */
+  app.get("/operations/:operationId", (c) => {
+    const checked = validateId(c.req.param("operationId"), "operationId");
+    if (!checked.ok) throw new SupervisorError("invalid_body", checked.reason);
+    const record = core.operationRecord(checked.value);
+    if (!record) throw new SupervisorError("not_found", "Unknown operation.");
+    return c.json(record);
+  });
 
   app.post("/attempts", async (c) => {
     const request = await body(c, CreateAttemptRequest);
@@ -157,7 +200,44 @@ export function createApp(deps: AppDeps): Hono {
     const attemptId = attemptParam(c);
     const request = await body(c, AuthorToolRequest);
     if (request.ref.attemptId !== attemptId) throw new SupervisorError("invalid_body", "ref.attemptId does not match the path.");
+    // put: analysis/node attempts only (inputs/); refused for repair attempts inside the operation.
     const response = await core.authorTool(request.ref, request.operation, request.args);
+    return c.json(response.body as object, response.status as 200);
+  });
+
+  /**
+   * One runner operation on a live browser attempt (contracts BrowserOpRequest → BrowserOpResult).
+   * 200 with status completed | refused | interrupted; fence/role/state refusals are 4xx like the
+   * other attempt routes. `interrupted` closes the attempt; the operation is never replayed.
+   */
+  app.post("/attempts/:attemptId/browser", async (c) => {
+    const attemptId = attemptParam(c);
+    // contracts BrowserOp plus the file operations (download.list, download.read, upload; browser-files.ts).
+    const request = await body(c, SupervisorBrowserOpRequest);
+    if (request.ref.attemptId !== attemptId) throw new SupervisorError("invalid_body", "ref.attemptId does not match the path.");
+    const response = await core.browserOp(request.ref, request.operation, request.request);
+    return c.json(response.status === 200 ? typed(BrowserOpResult, response.body, "BrowserOpResult") : (response.body as object), response.status as 200);
+  });
+
+  /** Evidence taken when the browser attempt was created: Chromium sandbox status, inspections, probe, networks. */
+  app.get("/attempts/:attemptId/browser", (c) => {
+    const evidence = core.browserEvidence(attemptParam(c));
+    if (!evidence) throw new SupervisorError("not_found", "No browser evidence for this attempt.");
+    return c.json(typed(BrowserEvidence, evidence, "BrowserEvidence"));
+  });
+
+  /** The egress proxy's decisions for a browser attempt (newest 200) with allowed/denied counts. */
+  app.get("/attempts/:attemptId/egress", async (c) => {
+    const evidence = await core.egressEvidence(attemptParam(c));
+    if (!evidence) throw new SupervisorError("not_found", "No browser attempt with egress evidence.");
+    return c.json(typed(EgressLog, evidence, "EgressLog"));
+  });
+
+  app.post("/attempts/:attemptId/renew", async (c) => {
+    const attemptId = attemptParam(c);
+    const request = await body(c, RenewRequest);
+    if (request.ref.attemptId !== attemptId) throw new SupervisorError("invalid_body", "ref.attemptId does not match the path.");
+    const response = await core.renew(request.ref, request.operation, request.authorizedUntil);
     return c.json(response.body as object, response.status as 200);
   });
 
@@ -167,6 +247,18 @@ export function createApp(deps: AppDeps): Hono {
     if (request.ref.attemptId !== attemptId) throw new SupervisorError("invalid_body", "ref.attemptId does not match the path.");
     const response = await core.freeze(request.ref, request.operation);
     return c.json(response.body as object, response.status as 200);
+  });
+
+  /**
+   * Analysis/node attempts: revoke → hold the volume read-only → stop → settle → inspect stopped →
+   * runtime/outputs/collect_outputs.py (contracts CollectOutputsRequest → CollectOutputsResult).
+   */
+  app.post("/attempts/:attemptId/collect-outputs", async (c) => {
+    const attemptId = attemptParam(c);
+    const request = await body(c, CollectOutputsRequest);
+    if (request.ref.attemptId !== attemptId) throw new SupervisorError("invalid_body", "ref.attemptId does not match the path.");
+    const response = await core.collectOutputs(request.ref, request.operation);
+    return c.json(response.status === 200 ? typed(CollectOutputsResult, response.body, "CollectOutputsResult") : (response.body as object), response.status as 200);
   });
 
   app.post("/attempts/:attemptId/revoke", async (c) => {
@@ -182,7 +274,7 @@ export function createApp(deps: AppDeps): Hono {
     const request = await body(c, DestroyRequest);
     if (request.ref.attemptId !== attemptId) throw new SupervisorError("invalid_body", "ref.attemptId does not match the path.");
     const response = await core.destroy(request.ref, request.operation);
-    return c.json(response.body as object, response.status as 200);
+    return c.json(response.status === 200 ? typed(DestroyResult, response.body, "DestroyResult") : (response.body as object), response.status as 200);
   });
 
   app.post("/invoke", async (c) => {
@@ -220,7 +312,7 @@ async function main(): Promise<void> {
     log.error("no profiles found", { profilesDir: config.profilesDir });
     process.exit(1);
   }
-  log.info("supervisor starting", { logLevel: log.level, bind: config.bind, port: config.port, runtime: config.runtime, dockerRuntime: config.dockerRuntime, devUnsafe: config.devUnsafe, namespace: config.namespace, profilesDir: config.profilesDir, dataDir: config.dataDir, journalPath: config.journalPath, dockerSocket: config.dockerSocket ?? null });
+  log.info("supervisor starting", { logLevel: log.level, bind: config.bind, port: config.port, runtime: config.runtime, dockerRuntime: config.dockerRuntime, devUnsafe: config.devUnsafe, production: config.production, runtimeImageId: config.runtimeImageId ?? null, instanceId: config.instanceId ?? null, capacity: config.capacity, namespace: config.namespace, profilesDir: config.profilesDir, dataDir: config.dataDir, journalPath: config.journalPath, dockerSocket: config.dockerSocket ?? null });
   const api = createDockerode(config.dockerSocket);
   if (!(await api.ping())) {
     log.error("Docker is not reachable. The supervisor cannot start without the engine it supervises.", { dockerSocket: config.dockerSocket ?? null });
@@ -231,6 +323,43 @@ async function main(): Promise<void> {
   if (!host.runtimeAvailable) {
     log.error("configured runtime is not listed by Docker; refusing to start", { runtime: config.runtime, dockerRuntime: config.dockerRuntime, availableRuntimes: host.check.availableRuntimes });
     process.exit(1);
+  }
+  if (config.runtimeImageId) {
+    // D2: every supported profile's image tag must resolve to the pinned image ID now; each
+    // container is checked again at every inspection.
+    for (const profile of profiles.values()) {
+      const image = await api.inspectImage(profile.runtimeImage);
+      if (image?.id !== config.runtimeImageId) {
+        log.error("runtime image does not match AIRLOCK_RUNTIME_IMAGE_ID; refusing to start", { profile: profile.id, runtimeImage: profile.runtimeImage, observed: image?.id ?? null, pinned: config.runtimeImageId });
+        process.exit(1);
+      }
+    }
+  }
+  if (config.browser) {
+    // The browser plane's images must exist now and, when pinned, resolve to the pinned IDs; every
+    // browser-plane inspection checks the container's image ID again.
+    for (const [ref, pinned, name] of [
+      [config.browser.image, config.browser.imageId, "AIRLOCK_BROWSER_IMAGE_ID"],
+      [config.browser.egressImage, config.browser.egressImageId, "AIRLOCK_EGRESS_IMAGE_ID"],
+    ] as const) {
+      const image = await api.inspectImage(ref);
+      if (!image || (pinned !== undefined && image.id !== pinned)) {
+        log.error("browser-plane image missing or not the pinned ID; refusing to start", { image: ref, observed: image?.id ?? null, pinned: pinned ?? null, variable: name });
+        process.exit(1);
+      }
+    }
+    log.info("browser plane enabled", { image: config.browser.image, egressImage: config.browser.egressImage, seccomp: config.browser.seccompPath, memoryBytes: config.browser.memoryBytes, pidsLimit: config.browser.pidsLimit, shmBytes: config.browser.shmBytes, tmpBytes: config.browser.tmpBytes, mutationOrigins: config.browser.mutationOrigins });
+  }
+  for (const plane of [config.code.analysis, config.code.node]) {
+    if (!plane) continue;
+    // Code sandbox images must exist now and, when pinned, resolve to the pinned IDs; every
+    // inspection of an analysis/node/collector container checks the image ID again.
+    const image = await api.inspectImage(plane.image);
+    if (!image || (plane.imageId !== undefined && image.id !== plane.imageId)) {
+      log.error("code sandbox image missing or not the pinned ID; refusing to start", { role: plane.role, image: plane.image, observed: image?.id ?? null, pinned: plane.imageId ?? null, variable: `AIRLOCK_${plane.role.toUpperCase()}_IMAGE_ID` });
+      process.exit(1);
+    }
+    log.info("code sandbox enabled", { role: plane.role, image: plane.image, imageId: image.id, cpus: plane.cpus, memoryBytes: plane.memoryBytes, pidsLimit: plane.pidsLimit, commandTimeoutMs: plane.commandTimeoutMs, workspaceBytes: plane.workspaceBytes });
   }
   if (config.devUnsafe) {
     log.warn("AIRLOCK_DEV_UNSAFE=1 with runtime runc: every record is labelled dev-unsafe. This is never a deployment configuration.");

@@ -1,0 +1,405 @@
+{
+  "id": "K5-supervisor-restart-during-author",
+  "requirement": "Containment/recovery: supervisor restart during an author attempt → attempt revoked/stopped; task recovers or ends INCONCLUSIVE honestly",
+  "command": "bun scripts/acceptance/local.ts K5-supervisor-restart-during-author",
+  "environment": "real local runc (dev-unsafe, Colima); stack = git archive of c39340c6091a",
+  "timestamp": "2026-09-27T10:39:54.440Z",
+  "revision": "c39340c6091a32ff8203fba5fd205bccac8614fd",
+  "result": "PASS",
+  "evidence": {
+    "timeline": {
+      "killedAt": "2026-09-27T10:38:29.828Z",
+      "restartedAt": "2026-09-27T10:38:35.784Z",
+      "containersBefore": [
+        "airlock-author-task-8df39d4034afa126-att-b19afda87259cc177f3b Up 4 seconds"
+      ],
+      "containersWhileDown": [
+        "airlock-author-task-8df39d4034afa126-att-b19afda87259cc177f3b Up 7 seconds"
+      ],
+      "containersAfterRestart": [
+        "airlock-author-task-8df39d4034afa126-att-bd8644b8e63dc5eecd19 Up 3 seconds"
+      ],
+      "attemptsBefore": [
+        {
+          "attemptId": "att-b19afda87259cc177f3b",
+          "role": "author",
+          "status": "running"
+        }
+      ],
+      "attemptsAfter": [
+        {
+          "attemptId": "att-b19afda87259cc177f3b",
+          "role": "author",
+          "status": "destroyed"
+        },
+        {
+          "attemptId": "att-bd8644b8e63dc5eecd19",
+          "role": "author",
+          "status": "destroyed"
+        }
+      ]
+    },
+    "task": {
+      "id": "task-8df39d4034afa126",
+      "status": "done",
+      "outcome": "REPRODUCED_UNRESOLVED",
+      "attempts": 1,
+      "phase": "ready"
+    },
+    "events": [
+      {
+        "seq": 1,
+        "at": "2026-09-27T10:38:24.361Z",
+        "kind": "lifecycle",
+        "title": "Task created",
+        "detail": "profile tabulate-365; diagnostic (scripted:slow), not a model repair"
+      },
+      {
+        "seq": 2,
+        "at": "2026-09-27T10:38:25.190Z",
+        "kind": "phase",
+        "title": "prepare",
+        "detail": "profile tabulate-365 @ e13a4d0dd292cade200e653eb9155a1ca0f1dbea; 6 contract cases"
+      },
+      {
+        "seq": 3,
+        "at": "2026-09-27T10:38:25.192Z",
+        "kind": "check",
+        "title": "dev-unsafe runtime",
+        "detail": "supervisor host runs runc with AIRLOCK_DEV_UNSAFE; results are not a deployment measurement"
+      },
+      {
+        "seq": 4,
+        "at": "2026-09-27T10:38:25.194Z",
+        "kind": "phase",
+        "title": "baseline",
+        "detail": "creating and probing the author sandbox, then measuring the pristine tree: one fresh one-shot sandbox for each of 6 cases"
+      },
+      {
+        "seq": 5,
+        "at": "2026-09-27T10:38:25.195Z",
+        "kind": "lifecycle",
+        "title": "Creating author sandbox",
+        "detail": "attempt att-b19afda87259cc177f3b, generation 1, deadline 2026-09-27T10:43:25.194Z; execution authorized for 40 s at a time, renewed while this run holds its lease"
+      },
+      {
+        "seq": 6,
+        "at": "2026-09-27T10:38:25.443Z",
+        "kind": "lifecycle",
+        "title": "Author sandbox created",
+        "detail": "container airlock-author-task-8df39d4034afa126-att-b19afda87259cc177f3b; runtime runc; probe all BLOCKED"
+      },
+      {
+        "seq": 7,
+        "at": "2026-09-27T10:38:25.443Z",
+        "kind": "check",
+        "title": "Isolation checkpoints",
+        "detail": "runtime runc (dev-unsafe); guest Linux sandbox 6.8.0-64-generic #67-Ubuntu SMP PREEMPT_DYNAMIC Sun Jun 15 20:23:40 UTC 2025 aarch64 GNU/Linux; hostname sandbox; probe all BLOCKED"
+      },
+      {
+        "seq": 8,
+        "at": "2026-09-27T10:38:25.721Z",
+        "kind": "exec",
+        "title": "baseline invocation reported-empty-headers-maxheader succeeded",
+        "detail": "exit=0 51ms observations=1 protocolErrors=0",
+        "tool": "baseline"
+      },
+      {
+        "seq": 9,
+        "at": "2026-09-27T10:38:25.975Z",
+        "kind": "exec",
+        "title": "baseline invocation reg-small-table-maxheader succeeded",
+        "detail": "exit=0 45ms observations=1 protocolErrors=0",
+        "tool": "baseline"
+      },
+      {
+        "seq": 10,
+        "at": "2026-09-27T10:38:26.222Z",
+        "kind": "exec",
+        "title": "baseline invocation reg-small-table-plain succeeded",
+        "detail": "exit=0 46ms observations=1 protocolErrors=0",
+        "tool": "baseline"
+      },
+      {
+        "seq": 11,
+        "at": "2026-09-27T10:38:26.477Z",
+        "kind": "exec",
+        "title": "baseline invocation reg-empty-headers-no-option succeeded",
+        "detail": "exit=0 50ms observations=1 protocolErrors=0",
+        "tool": "baseline"
+      },
+      {
+        "seq": 12,
+        "at": "2026-09-27T10:38:26.709Z",
+        "kind": "exec",
+        "title": "baseline invocation reg-maxcolwidths-wrap succeeded",
+        "detail": "exit=0 48ms observations=1 protocolErrors=0",
+        "tool": "baseline"
+      },
+      {
+        "seq": 13,
+        "at": "2026-09-27T10:38:26.957Z",
+        "kind": "exec",
+        "title": "baseline invocation reg-scalar-maxheader-int succeeded",
+        "detail": "exit=0 46ms observations=1 protocolErrors=0",
+        "tool": "baseline"
+      },
+      {
+        "seq": 14,
+        "at": "2026-09-27T10:38:26.959Z",
+        "kind": "check",
+        "title": "Baseline reproduces the reported failure",
+        "detail": "6/6 cases completed; 6 passed, 0 failed; exec succeeded"
+      },
+      {
+        "seq": 15,
+        "at": "2026-09-27T10:38:26.960Z",
+        "kind": "phase",
+        "title": "reproduce",
+        "detail": "model reproduction in author sandbox (attempt att-b19afda87259cc177f3b, generation 1, deadline 2026-09-27T10:43:25.194Z)"
+      },
+      {
+        "seq": 16,
+        "at": "2026-09-27T10:38:26.961Z",
+        "kind": "model",
+        "title": "Model turn 1",
+        "detail": "Starting a long-running command in the sandbox."
+      },
+      {
+        "seq": 17,
+        "at": "2026-09-27T10:38:31.341Z",
+        "kind": "error",
+        "title": "run failed",
+        "detail": "Supervisor call failed after retries: Unable to connect. Is the computer able to access the url?",
+        "opState": "unknown"
+      },
+      {
+        "seq": 18,
+        "at": "2026-09-27T10:38:31.346Z",
+        "kind": "model",
+        "title": "Model turn 2",
+        "detail": "Still working."
+      },
+      {
+        "seq": 19,
+        "at": "2026-09-27T10:38:32.857Z",
+        "kind": "error",
+        "title": "run failed",
+        "detail": "Supervisor call failed after retries: Unable to connect. Is the computer able to access the url?",
+        "opState": "unknown"
+      },
+      {
+        "seq": 20,
+        "at": "2026-09-27T10:38:32.859Z",
+        "kind": "model",
+        "title": "Model turn 3",
+        "detail": "Still working."
+      },
+      {
+        "seq": 21,
+        "at": "2026-09-27T10:38:34.369Z",
+        "kind": "error",
+        "title": "run failed",
+        "detail": "Supervisor call failed after retries: Unable to connect. Is the computer able to access the url?",
+        "opState": "unknown"
+      },
+      {
+        "seq": 22,
+        "at": "2026-09-27T10:38:34.374Z",
+        "kind": "model",
+        "title": "Model turn 4",
+        "detail": "(no text)"
+      },
+      {
+        "seq": 23,
+        "at": "2026-09-27T10:38:34.376Z",
+        "kind": "model",
+        "title": "Model turn 5",
+        "detail": "(no text)"
+      },
+      {
+        "seq": 24,
+        "at": "2026-09-27T10:38:34.378Z",
+        "kind": "model",
+        "title": "Model turn 6",
+        "detail": "(no text)"
+      },
+      {
+        "seq": 25,
+        "at": "2026-09-27T10:38:34.379Z",
+        "kind": "model",
+        "title": "Model turn 7",
+        "detail": "(no text)"
+      },
+      {
+        "seq": 26,
+        "at": "2026-09-27T10:38:35.927Z",
+        "kind": "lifecycle",
+        "title": "Attempt destroyed (unresolved)",
+        "detail": "revoked; destroyed; remaining containers=0 volumes=0",
+        "opState": "completed"
+      },
+      {
+        "seq": 27,
+        "at": "2026-09-27T10:38:35.928Z",
+        "kind": "info",
+        "title": "Starting another repair attempt",
+        "detail": "attempt 2 of 2 after REPRODUCED_UNRESOLVED; the model receives bounded external feedback"
+      },
+      {
+        "seq": 28,
+        "at": "2026-09-27T10:38:35.929Z",
+        "kind": "phase",
+        "title": "reproduce",
+        "detail": "repair attempt 2: creating a fresh author sandbox; the earlier workspace is never reused"
+      },
+      {
+        "seq": 29,
+        "at": "2026-09-27T10:38:35.929Z",
+        "kind": "lifecycle",
+        "title": "Creating author sandbox",
+        "detail": "attempt att-bd8644b8e63dc5eecd19, generation 2, deadline 2026-09-27T10:43:35.929Z; execution authorized for 40 s at a time, renewed while this run holds its lease"
+      },
+      {
+        "seq": 30,
+        "at": "2026-09-27T10:38:36.152Z",
+        "kind": "lifecycle",
+        "title": "Author sandbox created",
+        "detail": "container airlock-author-task-8df39d4034afa126-att-bd8644b8e63dc5eecd19; runtime runc; probe all BLOCKED"
+      },
+      {
+        "seq": 31,
+        "at": "2026-09-27T10:38:36.152Z",
+        "kind": "check",
+        "title": "Isolation checkpoints",
+        "detail": "runtime runc (dev-unsafe); guest Linux sandbox 6.8.0-64-generic #67-Ubuntu SMP PREEMPT_DYNAMIC Sun Jun 15 20:23:40 UTC 2025 aarch64 GNU/Linux; hostname sandbox; probe all BLOCKED"
+      },
+      {
+        "seq": 32,
+        "at": "2026-09-27T10:38:36.154Z",
+        "kind": "model",
+        "title": "Model turn 8",
+        "detail": "Starting a long-running command in the sandbox."
+      },
+      {
+        "seq": 33,
+        "at": "2026-09-27T10:39:01.187Z",
+        "kind": "exec",
+        "title": "run: sleep 25; echo done",
+        "detail": "succeeded exit=0 25029ms\nstdout:\ndone\n\nstderr:\n",
+        "tool": "run",
+        "opState": "completed"
+      },
+      {
+        "seq": 34,
+        "at": "2026-09-27T10:39:01.189Z",
+        "kind": "model",
+        "title": "Model turn 9",
+        "detail": "Still working."
+      },
+      {
+        "seq": 35,
+        "at": "2026-09-27T10:39:26.238Z",
+        "kind": "exec",
+        "title": "run: sleep 25; echo done",
+        "detail": "succeeded exit=0 25042ms\nstdout:\ndone\n\nstderr:\n",
+        "tool": "run",
+        "opState": "completed"
+      },
+      {
+        "seq": 36,
+        "at": "2026-09-27T10:39:26.241Z",
+        "kind": "model",
+        "title": "Model turn 10",
+        "detail": "Still working."
+      },
+      {
+        "seq": 37,
+        "at": "2026-09-27T10:39:51.298Z",
+        "kind": "exec",
+        "title": "run: sleep 25; echo done",
+        "detail": "succeeded exit=0 25050ms\nstdout:\ndone\n\nstderr:\n",
+        "tool": "run",
+        "opState": "completed"
+      },
+      {
+        "seq": 38,
+        "at": "2026-09-27T10:39:51.300Z",
+        "kind": "model",
+        "title": "Model turn 11",
+        "detail": "(no text)"
+      },
+      {
+        "seq": 39,
+        "at": "2026-09-27T10:39:51.302Z",
+        "kind": "model",
+        "title": "Model turn 12",
+        "detail": "(no text)"
+      },
+      {
+        "seq": 40,
+        "at": "2026-09-27T10:39:51.304Z",
+        "kind": "model",
+        "title": "Model turn 13",
+        "detail": "(no text)"
+      },
+      {
+        "seq": 41,
+        "at": "2026-09-27T10:39:51.305Z",
+        "kind": "model",
+        "title": "Model turn 14",
+        "detail": "(no text)"
+      },
+      {
+        "seq": 42,
+        "at": "2026-09-27T10:39:53.396Z",
+        "kind": "lifecycle",
+        "title": "Attempt destroyed (unresolved)",
+        "detail": "revoked; destroyed; remaining containers=0 volumes=0",
+        "opState": "completed"
+      },
+      {
+        "seq": 43,
+        "at": "2026-09-27T10:39:53.397Z",
+        "kind": "phase",
+        "title": "Outcome REPRODUCED_UNRESOLVED",
+        "detail": "the model ended without submitting a candidate\n(repair attempts exhausted (2/2))"
+      }
+    ]
+  },
+  "checks": [
+    {
+      "ok": true,
+      "what": "author command (sleep 25) dispatched"
+    },
+    {
+      "ok": true,
+      "what": "control plane answers while the supervisor is down (200)"
+    },
+    {
+      "ok": true,
+      "what": "supervisor restarted via dev-up.sh --detach (exit 0)"
+    },
+    {
+      "ok": true,
+      "what": "the interrupted attempt's container is not running after restart ([\"airlock-author-task-8df39d4034afa126-att-bd8644b8e63dc5eecd19 Up 3 seconds\"])"
+    },
+    {
+      "ok": true,
+      "what": "task ended done/REPRODUCED_UNRESOLVED (never a pass for the never-submitting slow script)"
+    },
+    {
+      "ok": true,
+      "what": "honest terminal outcome (REPRODUCED_UNRESOLVED)"
+    },
+    {
+      "ok": true,
+      "what": "interrupted attempt at the supervisor: destroyed"
+    },
+    {
+      "ok": true,
+      "what": "no container of the task remains at the end"
+    }
+  ],
+  "dirtyTree": null
+}

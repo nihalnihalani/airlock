@@ -18,6 +18,8 @@
  * runtime; guest uname/hostname read from inside; image digest recorded; caps come from the profile.
  */
 import Docker from "dockerode";
+import { connect as netConnect } from "node:net";
+import { PassThrough } from "node:stream";
 import type { Caps, RuntimeInspection, RuntimeName } from "@airlock/contracts";
 import type {
   ContainerCreateSpec,
@@ -25,12 +27,13 @@ import type {
   DockerApi,
   ExecSession,
   ExecSpec,
+  NetworkDetail,
   VolumeDetail,
 } from "./docker-api";
 import { runtimeTierOfName } from "./config";
 import { SupervisorError, describe, dockerUnavailable, statusOf } from "./errors";
 import { log } from "./log";
-import { SANDBOX_USER, runExec, timedCommand } from "./exec";
+import { Demuxer, SANDBOX_USER, runExec, timedCommand } from "./exec";
 import { ours } from "./names";
 
 export const TMPFS_TMP = "rw,nosuid,nodev,noexec,size=67108864,mode=1777";
@@ -72,6 +75,16 @@ export interface SandboxSpec {
   dockerRuntime: string;
   mount: { volume: string; target: "/workspace" | "/candidate"; readOnly: boolean };
   workingDir: "/workspace" | "/";
+  /**
+   * Code runtimes (analysis/node) bring their own image and therefore their own pin: when present,
+   * `imagePin.imageId` replaces the repository runtime pin (AIRLOCK_RUNTIME_IMAGE_ID) at inspection.
+   * `imageId` undefined = no pin (dev-unsafe only; config refuses it otherwise).
+   */
+  imagePin?: { imageId: string | undefined };
+  /** The fixed readiness exec for this image (default READINESS_ARGV: python3 -I -S). */
+  readinessArgv?: string[];
+  /** Env prefixes the image itself is known to set, on top of ENV_ALLOWED_PREFIXES. */
+  extraEnvPrefixes?: string[];
 }
 
 export function sandboxCreateSpec(spec: SandboxSpec): ContainerCreateSpec {
@@ -201,7 +214,7 @@ export function checkEffective(detail: ContainerDetail, expected: ExpectedSandbo
     check("tmpfs", Object.keys(tmpfs).length === 1 && tmpfs["/tmp"] === TMPFS_TMP) &&
     check(
       "env",
-      c.env.every((entry) => ENV_ALLOWED_PREFIXES.some((prefix) => entry.startsWith(prefix))),
+      c.env.every((entry) => [...ENV_ALLOWED_PREFIXES, ...(expected.extraEnvPrefixes ?? [])].some((prefix) => entry.startsWith(prefix))),
     );
 
   const allPassed = Object.values(checks).every(Boolean) && runtimeMatches && identityMatches;
@@ -228,6 +241,23 @@ export interface InspectContext {
   configuredRuntime: RuntimeName;
   devUnsafe: boolean;
   defaultRuntime: string;
+  /** The pinned `sha256:` image ID (AIRLOCK_RUNTIME_IMAGE_ID). Absent only in dev-unsafe. */
+  runtimeImageId?: string | undefined;
+}
+
+/**
+ * The fixed readiness exec (M12): the runner's interpreter starts, isolated (-I -S), as the sandbox
+ * user, and prints `ready`. Bounded to 4 s inside the container and 5 s at the supervisor. Anything
+ * else (timeout, other output, a non-zero exit) fails the inspection closed before any dispatch.
+ */
+export const READINESS_ARGV = ["/usr/local/bin/python3", "-I", "-S", "-c", "import sys; sys.stdout.write('ready\\n')"];
+
+/** The node image's readiness exec: the interpreter starts with an empty environment and prints `ready`. */
+export const NODE_READINESS_ARGV = ["/usr/bin/env", "-i", "/usr/local/bin/node", "-e", "process.stdout.write('ready\\n')"];
+
+export async function runnerReady(api: DockerApi, container: string, workingDir: string, argv: string[] = READINESS_ARGV): Promise<boolean> {
+  const outcome = await runExec(api, container, { cmd: timedCommand(argv, 4), user: SANDBOX_USER, workingDir }, { timeoutMs: 5_000, outputBytes: 64 });
+  return outcome.result.status === "succeeded" && outcome.result.exitCode === 0 && outcome.result.stdout === "ready\n" && !outcome.controlLost;
 }
 
 /**
@@ -247,6 +277,14 @@ export async function inspectSandbox(
     throw new SupervisorError("inspection_failed", `Container ${expected.name} is not owned by this supervisor; refusing to dispatch.`);
   }
   const effective = checkEffective(detail, expected, context.namespace);
+  // D2: the container's effective image ID must be the pinned runtime image. A retagged tag (same
+  // name, other bytes) produces a different ID and fails closed here, on every inspection.
+  const pinned = expected.imagePin ? expected.imagePin.imageId : context.runtimeImageId;
+  if (pinned !== undefined && detail.image !== pinned) {
+    effective.failures.push("imageId");
+    effective.identityMatches = false;
+    effective.allPassed = false;
+  }
   const image = await api.inspectImage(detail.image);
   const imageDigest = image ? (image.repoDigests[0] ?? image.id) : detail.image;
   const effectiveRuntime = typeof detail.hostConfig.Runtime === "string" ? detail.hostConfig.Runtime : "";
@@ -254,6 +292,10 @@ export async function inspectSandbox(
 
   let guestUname = options.previousGuest?.uname ?? "";
   let guestHostname = options.previousGuest?.hostname ?? "";
+  if (detail.state.running && effective.allPassed && !(await runnerReady(api, expected.name, expected.workingDir, expected.readinessArgv))) {
+    effective.failures.push("readiness");
+    effective.allPassed = false;
+  }
   if (detail.state.running && effective.allPassed) {
     const uname = await runExec(api, expected.name, { cmd: timedCommand(["/bin/uname", "-a"], 5), user: SANDBOX_USER, workingDir: expected.workingDir }, { timeoutMs: 10_000, outputBytes: 512 });
     const host = await runExec(api, expected.name, { cmd: timedCommand(["/bin/hostname"], 5), user: SANDBOX_USER, workingDir: expected.workingDir }, { timeoutMs: 10_000, outputBytes: 128 });
@@ -275,6 +317,9 @@ export async function inspectSandbox(
     runtime,
     devUnsafe: context.devUnsafe || runtime === "runc",
     imageDigest,
+    // The effective local image ID, always recorded (the control plane compares it with
+    // HostCheck.runtimeImageId for preview/export drift).
+    ...(/^sha256:[a-f0-9]{64}$/.test(detail.image) ? { imageId: detail.image } : {}),
     guestUname,
     guestHostname,
     checks: effective.checks,
@@ -318,7 +363,13 @@ export function traceDockerApi(api: DockerApi): DockerApi {
     inspectContainer: ([name]) => ({ container: name }),
     listContainers: ([filters]) => ({ filters }),
     putArchive: ([name, tar, path]) => ({ container: name, bytes: tar.byteLength, path }),
-    exec: ([name, spec]) => ({ container: name, user: spec.user, workingDir: spec.workingDir, argv: spec.cmd.map((a) => a.slice(0, 200)).slice(0, 12) }),
+    exec: ([name, spec]) => ({ container: name, user: spec.user, workingDir: spec.workingDir, argv: spec.cmd.map((a) => a.slice(0, 200)).slice(0, 12), stdinBytes: spec.stdin?.byteLength ?? 0 }),
+    createNetwork: ([spec]) => ({ network: spec.name, internal: spec.internal, options: spec.options }),
+    inspectNetwork: ([name]) => ({ network: name }),
+    removeNetwork: ([name]) => ({ network: name }),
+    listNetworks: ([filters]) => ({ filters }),
+    connectNetwork: ([network, container]) => ({ network, container }),
+    containerLogs: ([name, options]) => ({ container: name, ...options }),
   };
   const summary: Partial<{ [K in keyof DockerApi]: (result: Awaited<ReturnType<DockerApi[K]>>) => Record<string, unknown> }> = {
     ping: (ok) => ({ ok }),
@@ -329,6 +380,9 @@ export function traceDockerApi(api: DockerApi): DockerApi {
     listVolumes: (v) => ({ count: v.length, names: v.map((x) => x.name).slice(0, 20) }),
     inspectContainer: (c) => ({ found: c !== null, ...(c ? { running: c.state.running, status: c.state.status, exitCode: c.state.exitCode } : {}) }),
     listContainers: (c) => ({ count: c.length, names: c.map((x) => x.name).slice(0, 20) }),
+    inspectNetwork: (n) => ({ found: n !== null, ...(n ? { internal: n.internal, containers: n.containers } : {}) }),
+    listNetworks: (n) => ({ count: n.length, names: n.map((x) => x.name).slice(0, 20) }),
+    containerLogs: (text) => ({ chars: text?.length ?? null }),
   };
   const traced = {} as DockerApi;
   for (const key of Object.keys(fields) as (keyof DockerApi)[]) {
@@ -352,6 +406,7 @@ export function traceDockerApi(api: DockerApi): DockerApi {
 
 function createRawDockerode(socketPath: string | undefined): DockerApi {
   const docker = new Docker(socketPath ? { socketPath } : undefined);
+  const enginePath = socketPath ?? "/var/run/docker.sock";
 
   const wrap = async <T>(fn: () => Promise<T>): Promise<T> => {
     try {
@@ -450,6 +505,7 @@ function createRawDockerode(socketPath: string | undefined): DockerApi {
           RestartPolicy: spec.hostConfig.restartPolicy,
           Tmpfs: spec.hostConfig.tmpfs,
           Mounts: spec.hostConfig.mounts.map((m) => ({ Type: "volume", Source: m.source, Target: m.target, ReadOnly: m.readOnly })),
+          ...(spec.hostConfig.shmSize !== undefined ? { ShmSize: spec.hostConfig.shmSize } : {}),
         },
       };
       try {
@@ -504,6 +560,7 @@ function createRawDockerode(socketPath: string | undefined): DockerApi {
           oomKilled: info.State.OOMKilled,
           startedAt: info.State.StartedAt,
           finishedAt: info.State.FinishedAt,
+          health: (info.State as { Health?: { Status?: string } }).Health?.Status,
         },
         config: {
           user: info.Config.User,
@@ -525,11 +582,14 @@ function createRawDockerode(socketPath: string | undefined): DockerApi {
         const containers = await docker.listContainers({ all: true, filters: { label: labelFilters } });
         return containers.map((c) => ({ name: (c.Names?.[0] ?? "").replace(/^\//, ""), labels: c.Labels ?? {}, state: c.State }));
       }),
-    async putArchive(name, tar, path) {
+    async putArchive(name, tar, path, signal) {
       try {
-        await docker.getContainer(name).putArchive(Buffer.from(tar), { path, noOverwriteDirNonDir: true });
+        await docker.getContainer(name).putArchive(Buffer.from(tar), { path, noOverwriteDirNonDir: true, ...(signal ? { abortSignal: signal } : {}) });
       } catch (error) {
-        if (statusOf(error) === 404) throw new SupervisorError("not_found", `Container ${name} is gone; cannot deliver files.`);
+        const status = statusOf(error);
+        if (status === 404) throw new SupervisorError("not_found", `Container ${name} is gone; cannot deliver files.`);
+        // Any other 4xx is Docker refusing the upload outright: nothing was written.
+        if (status !== undefined && status >= 400 && status < 500) throw new SupervisorError("invalid_body", `Docker refused the upload to ${name} (${status}); nothing was written.`);
         throw dockerUnavailable(error);
       }
     },
@@ -542,10 +602,11 @@ function createRawDockerode(socketPath: string | undefined): DockerApi {
         ...(spec.env ? { Env: spec.env } : {}),
         AttachStdout: true,
         AttachStderr: true,
-        AttachStdin: false,
+        AttachStdin: spec.stdin !== undefined,
         Tty: false,
         abortSignal: signal,
       });
+      if (spec.stdin !== undefined) return startWithStdin(enginePath, exec, spec.stdin, name);
       const stream = await exec.start({ Detach: false, Tty: false, abortSignal: signal });
       return {
         stream: stream as unknown as ExecSession["stream"],
@@ -567,5 +628,175 @@ function createRawDockerode(socketPath: string | undefined): DockerApi {
         },
       };
     },
+
+    async createNetwork(spec) {
+      try {
+        await docker.createNetwork({
+          Name: spec.name,
+          Driver: "bridge",
+          Internal: spec.internal,
+          EnableIPv6: false,
+          Attachable: false,
+          Labels: spec.labels,
+          Options: spec.options,
+          CheckDuplicate: true,
+        } as Docker.NetworkCreateOptions);
+      } catch (error) {
+        if (statusOf(error) === 409) throw new SupervisorError("name_held", `A network named ${spec.name} already exists; it will not be adopted.`);
+        throw dockerUnavailable(error);
+      }
+    },
+    async inspectNetwork(name): Promise<NetworkDetail | null> {
+      try {
+        const n = (await docker.getNetwork(name).inspect()) as {
+          Id: string; Name: string; Driver: string; Internal?: boolean; EnableIPv6?: boolean;
+          Labels?: Record<string, string> | null; Options?: Record<string, string> | null; Containers?: Record<string, { Name?: string }> | null;
+        };
+        return {
+          id: n.Id,
+          name: n.Name,
+          driver: n.Driver,
+          internal: n.Internal === true,
+          enableIPv6: n.EnableIPv6 === true,
+          labels: n.Labels ?? {},
+          options: n.Options ?? {},
+          containers: Object.values(n.Containers ?? {}).map((c) => c.Name ?? "").filter(Boolean).sort(),
+        };
+      } catch (error) {
+        if (statusOf(error) === 404) return null;
+        throw dockerUnavailable(error);
+      }
+    },
+    async removeNetwork(name) {
+      try {
+        await docker.getNetwork(name).remove();
+      } catch (error) {
+        if (statusOf(error) === 404) return;
+        throw dockerUnavailable(error);
+      }
+    },
+    listNetworks: (labelFilters) =>
+      wrap(async () => {
+        const networks = (await docker.listNetworks({ filters: { label: labelFilters } })) as { Name: string; Labels?: Record<string, string> | null }[];
+        return networks.map((n) => ({ name: n.Name, labels: n.Labels ?? {} }));
+      }),
+    async connectNetwork(network, container) {
+      try {
+        await docker.getNetwork(network).connect({ Container: container });
+      } catch (error) {
+        throw dockerUnavailable(error);
+      }
+    },
+    async containerLogs(name, options) {
+      let raw: unknown;
+      try {
+        raw = await docker.getContainer(name).logs({ stdout: true, stderr: false, follow: false, tail: options.tail, timestamps: false });
+      } catch (error) {
+        if (statusOf(error) === 404) return null;
+        throw dockerUnavailable(error);
+      }
+      const bytes = typeof raw === "string" ? new TextEncoder().encode(raw) : new Uint8Array(raw as Buffer);
+      const demuxer = new Demuxer();
+      const parts: Uint8Array[] = [];
+      let total = 0;
+      for (const frame of demuxer.push(bytes)) {
+        if (frame.type === 2) continue;
+        parts.push(frame.data);
+        total += frame.data.length;
+      }
+      const joined = new Uint8Array(total);
+      let offset = 0;
+      for (const p of parts) {
+        joined.set(p, offset);
+        offset += p.length;
+      }
+      // Keep the newest bytes: the tail is what matters, and the cap bounds memory.
+      const kept = joined.length > options.maxBytes ? joined.subarray(joined.length - options.maxBytes) : joined;
+      return new TextDecoder("utf-8", { fatal: false }).decode(kept);
+    },
   };
+}
+
+/**
+ * Start an exec whose stdin carries `stdin`, over a raw HTTP/1.1 upgrade on the engine's unix
+ * socket (dockerode's hijacked start does not complete under Bun). Stdin is written once and never
+ * half-closed; the command reads exactly `stdin.byteLength` bytes (see ExecSpec.stdin). The
+ * returned stream carries Docker's multiplexed frames like the non-stdin path.
+ */
+function startWithStdin(enginePath: string, exec: Docker.Exec, stdin: Uint8Array, container: string): Promise<ExecSession> {
+  return new Promise<ExecSession>((resolve, reject) => {
+    const body = JSON.stringify({ Detach: false, Tty: false });
+    const socket = netConnect({ path: enginePath });
+    const stream = new PassThrough();
+    let head = Buffer.alloc(0);
+    let upgraded = false;
+    let settled = false;
+    const fail = (error: Error) => {
+      if (!settled) {
+        settled = true;
+        socket.destroy();
+        reject(dockerUnavailable(error));
+      } else {
+        stream.destroy(error);
+      }
+    };
+    socket.setTimeout(15_000, () => {
+      if (!upgraded) fail(new Error("exec start did not upgrade within 15 s"));
+    });
+    socket.once("error", (error) => fail(error));
+    socket.once("connect", () => {
+      socket.write(
+        `POST /exec/${exec.id}/start HTTP/1.1\r\nHost: docker\r\nContent-Type: application/json\r\nConnection: Upgrade\r\nUpgrade: tcp\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`,
+      );
+    });
+    socket.on("data", (chunk: Buffer) => {
+      if (upgraded) {
+        stream.write(chunk);
+        return;
+      }
+      head = Buffer.concat([head, chunk]);
+      const end = head.indexOf("\r\n\r\n");
+      if (end === -1) {
+        if (head.length > 16_384) fail(new Error("exec start response head too large"));
+        return;
+      }
+      const statusLine = head.subarray(0, head.indexOf("\r\n")).toString("latin1");
+      if (!/^HTTP\/1\.[01] 101 /.test(statusLine)) {
+        const status = Number(/^HTTP\/1\.[01] (\d{3})/.exec(statusLine)?.[1] ?? "0");
+        fail(Object.assign(new Error(`exec start refused: ${statusLine.slice(0, 120)}`), { statusCode: status }));
+        return;
+      }
+      upgraded = true;
+      socket.setTimeout(0);
+      const rest = head.subarray(end + 4);
+      if (rest.length > 0) stream.write(rest);
+      socket.write(Buffer.from(stdin));
+      settled = true;
+      resolve({
+        stream,
+        async exitCode() {
+          const deadline = Date.now() + 5_000;
+          while (Date.now() < deadline) {
+            const info = await exec.inspect();
+            if (!info.Running) return typeof info.ExitCode === "number" ? info.ExitCode : null;
+            await new Promise((r) => setTimeout(r, 50));
+          }
+          return null;
+        },
+        abort() {
+          try {
+            socket.destroy();
+            stream.destroy();
+          } catch (error) {
+            log.warn("exec stream destroy failed", { container, error });
+          }
+        },
+      });
+    });
+    socket.once("end", () => stream.end());
+    socket.once("close", () => {
+      if (!settled) fail(new Error("engine closed the exec start connection"));
+      else if (!stream.writableEnded) stream.end();
+    });
+  });
 }

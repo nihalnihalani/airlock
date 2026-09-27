@@ -1,0 +1,437 @@
+{
+  "id": "K1-hostile-panel",
+  "requirement": "Containment: hostile panel (judge) fork bomb, rm -rf /, curl 169.254.169.254, detached nohup sleep; card died/survived/siblings/controlPlane/workspace; host listing (no sandboxes); app responsive; no secrets in sandbox env",
+  "command": "bun scripts/acceptance/local.ts K1-hostile-panel",
+  "environment": "real local runc (dev-unsafe, Colima)",
+  "timestamp": "2026-09-27T09:02:56.028Z",
+  "revision": "42a41d4f5bf9a112810c47a522c54e11d477af25 (+uncommitted apps/ changes)",
+  "result": "PASS",
+  "evidence": {
+    "cards": {
+      "fork-bomb": {
+        "status": 200,
+        "exec": {
+          "status": "succeeded",
+          "exitCode": 0,
+          "durationMs": 5048,
+          "stdoutTail": "alive\n",
+          "stderrTail": "fork: retry: Resource temporarily unavailable\nenvironment: fork: retry: Resource temporarily unavailable\nenvironment: fork: retry: Resource temporarily unavailable\nenvironment: fork: retry: Resource temporarily unavailable\nenvironment: fork: retry: Resource temporarily unavailable\nenvironment: fork: retry: Resource temporarily unavailable\nenvironment: fork: retry: Resource temporarily unavailable\n"
+        },
+        "died": {
+          "container": "airlock-hostile-hostile-op-op-a6d2403877d7a1312170934f",
+          "runtime": "runc",
+          "guestUname": "Linux sandbox 6.8.0-64-generic #67-Ubuntu SMP PREEMPT_DYNAMIC Sun Jun 15 20:23:40 UTC 2025 aarch64 GNU/Linux",
+          "reason": "the command exited 0; then the container and its volume were destroyed"
+        },
+        "survived": {
+          "supervisorHealthy": true,
+          "hostSentinelUnchanged": true,
+          "otherAttemptsRunning": 0,
+          "hostUptimeSeconds": 380124,
+          "siblings": [],
+          "controlPlane": {
+            "healthyBefore": true,
+            "healthyAfter": true,
+            "checkedAt": "2026-09-27T09:02:11.844Z"
+          }
+        },
+        "workspace": {
+          "filesBefore": 16,
+          "filesAfter": null
+        },
+        "teardown": {
+          "destroyedAt": "2026-09-27T09:02:11.842Z",
+          "containersRemaining": [],
+          "volumesRemaining": [],
+          "networksRemaining": [],
+          "clean": true,
+          "host": {
+            "listedAt": "2026-09-27T09:02:11.842Z",
+            "scope": "host",
+            "containers": [],
+            "volumes": [],
+            "networks": []
+          }
+        },
+        "inspection": {
+          "runtime": "runc",
+          "devUnsafe": true
+        },
+        "health": {
+          "samples": 27,
+          "p50": 1,
+          "max": 2,
+          "failures": 0
+        }
+      },
+      "rm-rf": {
+        "status": 200,
+        "exec": {
+          "status": "succeeded",
+          "exitCode": 0,
+          "durationMs": 298,
+          "stdoutTail": "",
+          "stderrTail": "12-2k/order': Read-only file system\nrm: cannot remove '/sys/kernel/slab/kmalloc-rnd-12-2k/object_size': Read-only file system\nrm: cannot remove '/sys/kernel/slab/kmalloc-rnd-12-2k/shrink': Read-only file system\nrm: cannot remove '/sys/kernel/slab/kmalloc-rnd-12-2k/hwcache_align': Read-only file system\nrm: cannot remove '/sys/kernel/slab/kmalloc-rnd-12-2k/objs_per_slab': Read-only file system\nrm: c"
+        },
+        "died": {
+          "container": "airlock-hostile-hostile-op-op-1ba791b4d3acb250f08e64d2",
+          "runtime": "runc",
+          "guestUname": "Linux sandbox 6.8.0-64-generic #67-Ubuntu SMP PREEMPT_DYNAMIC Sun Jun 15 20:23:40 UTC 2025 aarch64 GNU/Linux",
+          "reason": "the command exited 0; then the container and its volume were destroyed"
+        },
+        "survived": {
+          "supervisorHealthy": true,
+          "hostSentinelUnchanged": true,
+          "otherAttemptsRunning": 0,
+          "hostUptimeSeconds": 380136,
+          "siblings": [],
+          "controlPlane": {
+            "healthyBefore": true,
+            "healthyAfter": true,
+            "checkedAt": "2026-09-27T09:02:23.097Z"
+          }
+        },
+        "workspace": {
+          "filesBefore": 16,
+          "filesAfter": 0
+        },
+        "teardown": {
+          "destroyedAt": "2026-09-27T09:02:23.095Z",
+          "containersRemaining": [],
+          "volumesRemaining": [],
+          "networksRemaining": [],
+          "clean": true,
+          "host": {
+            "listedAt": "2026-09-27T09:02:23.095Z",
+            "scope": "host",
+            "containers": [],
+            "volumes": [],
+            "networks": []
+          }
+        },
+        "inspection": {
+          "runtime": "runc",
+          "devUnsafe": true
+        },
+        "health": {
+          "samples": 4,
+          "p50": 0,
+          "max": 1,
+          "failures": 0
+        }
+      },
+      "metadata": {
+        "status": 200,
+        "exec": {
+          "status": "succeeded",
+          "exitCode": 0,
+          "durationMs": 55,
+          "stdoutTail": "curl_rc=127\nurllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>\n",
+          "stderrTail": "/bin/bash: line 1: curl: command not found\n"
+        },
+        "died": {
+          "container": "airlock-hostile-hostile-op-op-918005a3298dc5b7d3c2e3cd",
+          "runtime": "runc",
+          "guestUname": "Linux sandbox 6.8.0-64-generic #67-Ubuntu SMP PREEMPT_DYNAMIC Sun Jun 15 20:23:40 UTC 2025 aarch64 GNU/Linux",
+          "reason": "the command exited 0; then the container and its volume were destroyed"
+        },
+        "survived": {
+          "supervisorHealthy": true,
+          "hostSentinelUnchanged": true,
+          "otherAttemptsRunning": 0,
+          "hostUptimeSeconds": 380147,
+          "siblings": [],
+          "controlPlane": {
+            "healthyBefore": true,
+            "healthyAfter": true,
+            "checkedAt": "2026-09-27T09:02:34.089Z"
+          }
+        },
+        "workspace": {
+          "filesBefore": 16,
+          "filesAfter": 16
+        },
+        "teardown": {
+          "destroyedAt": "2026-09-27T09:02:34.087Z",
+          "containersRemaining": [],
+          "volumesRemaining": [],
+          "networksRemaining": [],
+          "clean": true,
+          "host": {
+            "listedAt": "2026-09-27T09:02:34.087Z",
+            "scope": "host",
+            "containers": [],
+            "volumes": [],
+            "networks": []
+          }
+        },
+        "inspection": {
+          "runtime": "runc",
+          "devUnsafe": true
+        },
+        "health": {
+          "samples": 2,
+          "p50": 1,
+          "max": 1,
+          "failures": 0
+        }
+      },
+      "nohup-sleep:vm-ps": "NONE",
+      "nohup-sleep": {
+        "status": 200,
+        "exec": {
+          "status": "succeeded",
+          "exitCode": 0,
+          "durationMs": 15,
+          "stdoutTail": "detached_pid=55\n",
+          "stderrTail": ""
+        },
+        "died": {
+          "container": "airlock-hostile-hostile-op-op-9b20f4f90ba6c8e86ea129fc",
+          "runtime": "runc",
+          "guestUname": "Linux sandbox 6.8.0-64-generic #67-Ubuntu SMP PREEMPT_DYNAMIC Sun Jun 15 20:23:40 UTC 2025 aarch64 GNU/Linux",
+          "reason": "the command exited 0; then the container and its volume were destroyed"
+        },
+        "survived": {
+          "supervisorHealthy": true,
+          "hostSentinelUnchanged": true,
+          "otherAttemptsRunning": 0,
+          "hostUptimeSeconds": 380157,
+          "siblings": [],
+          "controlPlane": {
+            "healthyBefore": true,
+            "healthyAfter": true,
+            "checkedAt": "2026-09-27T09:02:45.020Z"
+          }
+        },
+        "workspace": {
+          "filesBefore": 16,
+          "filesAfter": 16
+        },
+        "teardown": {
+          "destroyedAt": "2026-09-27T09:02:45.018Z",
+          "containersRemaining": [],
+          "volumesRemaining": [],
+          "networksRemaining": [],
+          "clean": true,
+          "host": {
+            "listedAt": "2026-09-27T09:02:45.018Z",
+            "scope": "host",
+            "containers": [],
+            "volumes": [],
+            "networks": []
+          }
+        },
+        "inspection": {
+          "runtime": "runc",
+          "devUnsafe": true
+        },
+        "health": {
+          "samples": 2,
+          "p50": 1,
+          "max": 1,
+          "failures": 0
+        }
+      },
+      "env-secrets": {
+        "status": 200,
+        "exec": {
+          "status": "succeeded",
+          "exitCode": 0,
+          "durationMs": 22,
+          "stdoutTail": "SION=3.12.14\nPYTHON_SHA256=5c8462af5790baf43a321a1559dbe0db06d1be4300fb85fb53c40060668e548a\nPYTHONDONTWRITEBYTECODE=1\nPYTHONUNBUFFERED=1\nPIP_NO_INDEX=1\nPIP_DISABLE_PIP_VERSION_CHECK=1\n---\nPYTHON_SHA256=5c8462af5790baf43a321a1559dbe0db06d1be4300fb85fb53c40060668e548a\nPYTHONUNBUFFERED=1\nHOSTNAME=sandbox\nPYTHON_VERSION=3.12.14\nPWD=/workspace/src\nPIP_NO_INDEX=1\nHOME=/workspace\nLANG=C.UTF-8\nGPG_KEY=7169605F62C751356D054A26A821E680E5FA6305\nPIP_DISABLE_PIP_VERSION_CHECK=1\nSHLVL=1\nPYTHONDONTWRITEBYTECODE=1\nPATH=/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n_=/usr/bin/cat\n",
+          "stderrTail": ""
+        },
+        "died": {
+          "container": "airlock-hostile-hostile-op-op-0b76a36b82ad06f0bc2d8d29",
+          "runtime": "runc",
+          "guestUname": "Linux sandbox 6.8.0-64-generic #67-Ubuntu SMP PREEMPT_DYNAMIC Sun Jun 15 20:23:40 UTC 2025 aarch64 GNU/Linux",
+          "reason": "the command exited 0; then the container and its volume were destroyed"
+        },
+        "survived": {
+          "supervisorHealthy": true,
+          "hostSentinelUnchanged": true,
+          "otherAttemptsRunning": 0,
+          "hostUptimeSeconds": 380168,
+          "siblings": [],
+          "controlPlane": {
+            "healthyBefore": true,
+            "healthyAfter": true,
+            "checkedAt": "2026-09-27T09:02:55.963Z"
+          }
+        },
+        "workspace": {
+          "filesBefore": 16,
+          "filesAfter": 16
+        },
+        "teardown": {
+          "destroyedAt": "2026-09-27T09:02:55.959Z",
+          "containersRemaining": [],
+          "volumesRemaining": [],
+          "networksRemaining": [],
+          "clean": true,
+          "host": {
+            "listedAt": "2026-09-27T09:02:55.959Z",
+            "scope": "host",
+            "containers": [],
+            "volumes": [],
+            "networks": []
+          }
+        },
+        "inspection": {
+          "runtime": "runc",
+          "devUnsafe": true
+        },
+        "health": {
+          "samples": 2,
+          "p50": 1,
+          "max": 1,
+          "failures": 0
+        }
+      }
+    }
+  },
+  "checks": [
+    {
+      "ok": true,
+      "what": "fork-bomb: POST /api/hostile → 200 "
+    },
+    {
+      "ok": true,
+      "what": "fork-bomb: died: airlock-hostile-hostile-op-op-a6d2403877d7a1312170934f — the command exited 0; then the container and its volume were destroyed"
+    },
+    {
+      "ok": true,
+      "what": "fork-bomb: survived: supervisor, host sentinel, control plane before/after"
+    },
+    {
+      "ok": true,
+      "what": "fork-bomb: card carries siblings[] (0) and workspace (16→null)"
+    },
+    {
+      "ok": true,
+      "what": "fork-bomb: teardown host listing is \"(no sandboxes)\""
+    },
+    {
+      "ok": true,
+      "what": "fork-bomb: /api/health answered 27× during the run, max 2 ms, 0 failures"
+    },
+    {
+      "ok": true,
+      "what": "fork-bomb: exec succeeded exit 0 (pids limit contained it)"
+    },
+    {
+      "ok": true,
+      "what": "rm-rf: POST /api/hostile → 200 "
+    },
+    {
+      "ok": true,
+      "what": "rm-rf: died: airlock-hostile-hostile-op-op-1ba791b4d3acb250f08e64d2 — the command exited 0; then the container and its volume were destroyed"
+    },
+    {
+      "ok": true,
+      "what": "rm-rf: survived: supervisor, host sentinel, control plane before/after"
+    },
+    {
+      "ok": true,
+      "what": "rm-rf: card carries siblings[] (0) and workspace (16→0)"
+    },
+    {
+      "ok": true,
+      "what": "rm-rf: teardown host listing is \"(no sandboxes)\""
+    },
+    {
+      "ok": true,
+      "what": "rm-rf: /api/health answered 4× during the run, max 1 ms, 0 failures"
+    },
+    {
+      "ok": true,
+      "what": "metadata: POST /api/hostile → 200 "
+    },
+    {
+      "ok": true,
+      "what": "metadata: died: airlock-hostile-hostile-op-op-918005a3298dc5b7d3c2e3cd — the command exited 0; then the container and its volume were destroyed"
+    },
+    {
+      "ok": true,
+      "what": "metadata: survived: supervisor, host sentinel, control plane before/after"
+    },
+    {
+      "ok": true,
+      "what": "metadata: card carries siblings[] (0) and workspace (16→16)"
+    },
+    {
+      "ok": true,
+      "what": "metadata: teardown host listing is \"(no sandboxes)\""
+    },
+    {
+      "ok": true,
+      "what": "metadata: /api/health answered 2× during the run, max 1 ms, 0 failures"
+    },
+    {
+      "ok": true,
+      "what": "metadata: unreachable from the sandbox (curl_rc=127 urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable> /bin/bash: line 1: curl: command not found )"
+    },
+    {
+      "ok": true,
+      "what": "nohup-sleep: POST /api/hostile → 200 "
+    },
+    {
+      "ok": true,
+      "what": "nohup-sleep: died: airlock-hostile-hostile-op-op-9b20f4f90ba6c8e86ea129fc — the command exited 0; then the container and its volume were destroyed"
+    },
+    {
+      "ok": true,
+      "what": "nohup-sleep: survived: supervisor, host sentinel, control plane before/after"
+    },
+    {
+      "ok": true,
+      "what": "nohup-sleep: card carries siblings[] (0) and workspace (16→16)"
+    },
+    {
+      "ok": true,
+      "what": "nohup-sleep: teardown host listing is \"(no sandboxes)\""
+    },
+    {
+      "ok": true,
+      "what": "nohup-sleep: /api/health answered 2× during the run, max 1 ms, 0 failures"
+    },
+    {
+      "ok": true,
+      "what": "nohup-sleep: no 'sleep 3137' process left in the Docker VM after teardown (NONE)"
+    },
+    {
+      "ok": true,
+      "what": "env-secrets: POST /api/hostile → 200 "
+    },
+    {
+      "ok": true,
+      "what": "env-secrets: died: airlock-hostile-hostile-op-op-0b76a36b82ad06f0bc2d8d29 — the command exited 0; then the container and its volume were destroyed"
+    },
+    {
+      "ok": true,
+      "what": "env-secrets: survived: supervisor, host sentinel, control plane before/after"
+    },
+    {
+      "ok": true,
+      "what": "env-secrets: card carries siblings[] (0) and workspace (16→16)"
+    },
+    {
+      "ok": true,
+      "what": "env-secrets: teardown host listing is \"(no sandboxes)\""
+    },
+    {
+      "ok": true,
+      "what": "env-secrets: /api/health answered 2× during the run, max 1 ms, 0 failures"
+    },
+    {
+      "ok": true,
+      "what": "env-secrets: env and /proc/1/environ carry no secret names or values (none; env names: PYTHONUNBUFFERED,HOSTNAME,PYTHON_VERSION,PWD,PIP_NO_INDEX,HOME,LANG,GPG_KEY,PIP_DISABLE_PIP_VERSION_CHECK,SHLVL,PYTHONDONTWRITEBYTECODE,PATH,_,PATH,HOSTNAME,HOME,LANG,GPG_KEY,PYTHON_VERSION,PYTHONDONTWRITEBYTECODE,PYTHONUNBUFFERED,PIP_NO_INDEX,PIP_DISABLE_PIP_VERSION_CHECK,PYTHONUNBUFFERED,HOSTNAME,PYTHON_VERSION,PWD,PIP_NO_INDEX,HOME,LANG,GPG_KEY,PIP_DISABLE_PIP_VERSION_CHECK,SHLVL,PYTHONDONTWRITEBYTECODE,PATH,_)"
+    },
+    {
+      "ok": true,
+      "what": "operator cannot run the hostile panel (403)"
+    }
+  ],
+  "dirtyTree": "M runtime/browser/PROTOCOL.md\n M runtime/browser/src/aria.mjs\n M runtime/browser/src/runner.mjs\n M runtime/browser/src/state.mjs\n?? runtime/browser/src/mutation.mjs\n?? runtime/browser/test/mutation.test.mjs"
+}

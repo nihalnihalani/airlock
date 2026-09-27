@@ -1,0 +1,7 @@
+{ "_comment": "ACCEPTANCE diagnostic (verifier_tester): an arbitrary-site final action (refused) and a submit that declares an unsupported capability.",
+  "turns": [
+    { "text": "Opening example.com.", "toolCalls": [{ "name": "browser_navigate", "args": { "url": "https://example.com/" } }] },
+    { "text": "Try to submit on an arbitrary site.", "toolCalls": [{ "name": "browser_propose_submit", "args": { "formUrl": "https://example.com/f/contact-request", "formId": "contact-request", "fields": { "name": "x", "email": "x@example.com", "message": "x" }, "summary": "arbitrary site submit" } }] },
+    { "text": "Screenshot.", "toolCalls": [{ "name": "browser_screenshot", "args": {} }] },
+    { "text": "This needs a desktop app.", "toolCalls": [{ "name": "submit_result", "args": { "summary": "The request needs desktop application automation, which Airlock does not provide.", "sources": ["https://example.com/"], "unsupported_capability": "desktop application automation" } }] }
+  ] }

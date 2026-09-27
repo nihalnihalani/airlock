@@ -10,12 +10,24 @@
  * The API key never appears in any error message, log line or thrown value.
  */
 
+/**
+ * An image attached to a user message, sent as an OpenAI-compatible `image_url` content part with a
+ * `data:` URL. Only attached when the configured model is marked vision-capable
+ * (AIRLOCK_MODEL_VISION=1, verified by `scripts/probe-model.ts --vision`).
+ */
+export type ChatImage = { mediaType: "image/png" | "image/jpeg"; base64: string };
+
 export type ChatMessage = {
   role: "user" | "assistant" | "tool";
   content: string;
   toolCallId?: string;
   toolCalls?: { id: string; name: string; args: unknown }[];
+  /** User messages only: images sent with the text (content parts). */
+  images?: ChatImage[];
 };
+
+/** Upper bound on one attached image's base64 text (a 2 MiB PNG is ~2.8 MB of base64). */
+export const MAX_IMAGE_BASE64_CHARS = 3 * 1024 * 1024;
 
 export type ToolSpec = { name: string; description: string; parameters: object };
 
@@ -52,6 +64,11 @@ export interface ModelDriver {
   chat(input: ChatInput): Promise<ChatOutput>;
   /** Identity recorded on every model event: the model name and the host it is served from. */
   describe?(): { model: string; host: string };
+  /**
+   * True for a replayed script (diagnostics/tests): its reported usage (zero) is charged as-is,
+   * since no tokens were spent. Absent on the live driver, whose missing usage is estimated.
+   */
+  scripted?: boolean;
 }
 
 export type VultrErrorKind = "auth" | "http" | "network" | "aborted" | "protocol" | "config";
@@ -142,7 +159,7 @@ function isRetryable(status: number): boolean {
   return status === 429 || (status >= 500 && status <= 599);
 }
 
-function toWireMessages(system: string, messages: ChatMessage[]): unknown[] {
+export function toWireMessages(system: string, messages: ChatMessage[]): unknown[] {
   const out: unknown[] = [];
   if (system.length > 0) out.push({ role: "system", content: system });
   for (const m of messages) {
@@ -159,6 +176,15 @@ function toWireMessages(system: string, messages: ChatMessage[]): unknown[] {
         }));
       }
       out.push(wire);
+    } else if (m.images && m.images.length > 0) {
+      const parts: unknown[] = [{ type: "text", text: m.content }];
+      for (const image of m.images) {
+        if (image.mediaType !== "image/png" && image.mediaType !== "image/jpeg") throw new VultrError("config", "only image/png and image/jpeg may be attached");
+        if (image.base64.length === 0 || image.base64.length > MAX_IMAGE_BASE64_CHARS || !/^[A-Za-z0-9+/]+={0,2}$/.test(image.base64))
+          throw new VultrError("config", "attached image is empty, too large or not base64");
+        parts.push({ type: "image_url", image_url: { url: `data:${image.mediaType};base64,${image.base64}` } });
+      }
+      out.push({ role: "user", content: parts });
     } else {
       out.push({ role: "user", content: m.content });
     }
@@ -409,6 +435,7 @@ export function createScriptedDriver(script: ScriptedTurn[], options: { name?: s
   return {
     // Labelled so no UI or export can mistake a replayed script for a live Vultr repair.
     describe: () => ({ model: `scripted:${options.name ?? "script"}`, host: "scripted" }),
+    scripted: true,
     async chat(input: ChatInput): Promise<ChatOutput> {
       if (input.signal?.aborted) throw new VultrError("aborted", "request aborted");
       const turn = turns[cursor];

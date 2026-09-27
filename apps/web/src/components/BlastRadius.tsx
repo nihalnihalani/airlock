@@ -1,13 +1,17 @@
 import { IconHeartbeat, IconSkull } from "@tabler/icons-react";
 import type { BlastRadiusCard } from "@airlock/contracts";
+import { attemptTeardownClean, blastContained, hostListingSummary, siblingRows, workspaceSummary } from "../lib/evidence";
 import { formatDateTime, formatDurationMs, formatSeconds, tail } from "../lib/format";
 import { Badge, BoolChip, Chip, KeyValue, Mono, Pre } from "./common";
+import { HostListingView } from "./Evidence";
 
 export function BlastRadiusView({ card }: { card: BlastRadiusCard }) {
   const s = card.survived;
-  const allSurvived = s.supervisorHealthy && s.hostSentinelUnchanged;
-  const teardownClean =
-    card.teardown.clean && card.teardown.containersRemaining.length === 0 && card.teardown.volumesRemaining.length === 0;
+  const allSurvived = blastContained(card);
+  const teardownClean = attemptTeardownClean(card.teardown);
+  const workspace = workspaceSummary(card.workspace);
+  const siblings = siblingRows(s);
+  const listing = hostListingSummary(card.teardown);
   return (
     <div className="flex flex-col gap-3">
       <div className="grid gap-2 sm:grid-cols-2">
@@ -21,8 +25,9 @@ export function BlastRadiusView({ card }: { card: BlastRadiusCard }) {
             rows={[
               { key: "container", value: <Mono wrap>{card.died.container}</Mono> },
               { key: "runtime", value: <Badge tone={card.died.runtime === "runc" ? "bad" : "ok"}>{card.died.runtime}</Badge> },
-              { key: "guest uname", value: <Mono wrap>{card.died.guestUname || "(empty)"}</Mono> },
+              { key: "guest kernel", value: <Mono wrap>{card.died.guestUname || "(empty)"}</Mono> },
               { key: "reason", value: card.died.reason },
+              { key: "workspace files", value: <Badge tone={workspace.tone} className="h-auto whitespace-normal">{workspace.text}</Badge> },
             ]}
           />
         </div>
@@ -32,16 +37,49 @@ export function BlastRadiusView({ card }: { card: BlastRadiusCard }) {
             Survived
           </div>
           <KeyValue
-            className="grid-cols-[minmax(0,10rem)_minmax(0,1fr)] text-xs"
+            className="grid-cols-[minmax(0,7.5rem)_minmax(0,1fr)] text-xs"
             rows={[
+              {
+                key: "control plane",
+                value: s.controlPlane ? (
+                  <span className="flex flex-wrap items-center gap-1">
+                    <BoolChip value={s.controlPlane.healthyBefore} yes="healthy before" no="unhealthy before" />
+                    <BoolChip value={s.controlPlane.healthyAfter} yes="healthy after" no="unhealthy after" />
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground">not recorded</span>
+                ),
+              },
               { key: "supervisor healthy", value: <BoolChip value={s.supervisorHealthy} /> },
-              { key: "host sentinel unchanged", value: <BoolChip value={s.hostSentinelUnchanged} /> },
-              { key: "other attempts running", value: String(s.otherAttemptsRunning) },
+              { key: "host sentinel", value: <BoolChip value={s.hostSentinelUnchanged} yes="unchanged" no="changed" /> },
               { key: "host uptime", value: formatSeconds(s.hostUptimeSeconds) },
+              {
+                key: "sibling attempts",
+                value:
+                  siblings === null ? (
+                    <span>
+                      {s.otherAttemptsRunning} running <span className="text-muted-foreground">(per-attempt check not recorded)</span>
+                    </span>
+                  ) : siblings.length === 0 ? (
+                    <span className="text-muted-foreground">none were running</span>
+                  ) : (
+                    <ul className="flex flex-col gap-0.5">
+                      {siblings.map((r) => (
+                        <li key={r.attemptId} className="flex flex-wrap items-center gap-1">
+                          <Mono className="break-all">{r.attemptId}</Mono>
+                          <span className="text-muted-foreground">task {r.taskId}</span>
+                          <Badge tone={r.survived ? "ok" : "bad"} className="h-auto whitespace-normal">
+                            {r.runningBefore ? "running" : "stopped"} → {r.runningAfter ? "running" : "stopped"}
+                          </Badge>
+                        </li>
+                      ))}
+                    </ul>
+                  ),
+              },
             ]}
           />
           <div className="mt-2">
-            <Badge tone={allSurvived ? "ok" : "bad"}>{allSurvived ? "host and supervisor unaffected" : "blast radius escaped the sandbox"}</Badge>
+            <Badge tone={allSurvived ? "ok" : "bad"} className="h-auto py-0.5 whitespace-normal">{allSurvived ? "everything checked outside the sandbox survived" : "something outside the sandbox did not survive"}</Badge>
           </div>
         </div>
       </div>
@@ -70,10 +108,13 @@ export function BlastRadiusView({ card }: { card: BlastRadiusCard }) {
         </div>
       ) : null}
 
-      <div className="flex flex-wrap items-center gap-1.5">
-        <span className="mr-1 text-xs font-medium">Teardown</span>
-        <Badge tone={teardownClean ? "ok" : "bad"}>{teardownClean ? "(no sandboxes)" : "teardown incomplete"}</Badge>
-        <span className="text-[11px] text-muted-foreground">{formatDateTime(card.teardown.destroyedAt)}</span>
+      <div className="flex flex-col gap-1.5 rounded-lg border border-border p-2.5">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="mr-1 text-xs font-medium">Destroy</span>
+          <Badge tone={teardownClean ? "ok" : "bad"}>{teardownClean ? "sandbox and workspace destroyed" : "teardown incomplete"}</Badge>
+          <span className="text-[11px] text-muted-foreground">{formatDateTime(card.teardown.destroyedAt)}</span>
+        </div>
+        <HostListingView summary={listing} />
       </div>
       {!teardownClean ? (
         <ul className="flex flex-col gap-0.5 text-xs">

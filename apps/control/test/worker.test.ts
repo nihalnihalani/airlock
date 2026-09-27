@@ -148,6 +148,38 @@ describe("task worker", () => {
     await store.close();
   });
 
+  test("a cancel pass that fails with anything other than a confirmed teardown never records `cancelled`", async () => {
+    const store = await createStore();
+    let passes = 0;
+    // The pass throws a plain error (a store or supervisor failure before teardown was confirmed).
+    const handler: TaskHandler = async (_owner, _t, ctx) => {
+      expect(ctx.mode).toBe("cancel");
+      passes++;
+      throw new Error("database unavailable while recording teardown");
+    };
+    const worker = new TaskWorker(store, handler, { pollMs: 10, leaseMs: 500, cancelRetries: 1, cancelRetryDelayMs: 20 });
+    await store.put(OWNER, "tasks", task("t-cancel-err", { status: "cancelling", attemptId: "att-9", generation: 1 }));
+    worker.start();
+    try {
+      const seen = new Set<string>();
+      let final: Task | null = null;
+      for (let i = 0; i < 300 && final?.status !== "failed"; i++) {
+        await sleep(10);
+        final = await store.get<Task>(OWNER, "tasks", "t-cancel-err");
+        if (final) seen.add(final.status);
+      }
+      expect(seen.has("cancelled")).toBe(false);
+      expect(final?.status).toBe("failed");
+      expect(final?.attemptId).toBe("att-9");
+      expect(passes).toBe(2);
+      const titles = (await store.listEvents("t-cancel-err")).map((e) => e.title);
+      expect(titles).toContain("Teardown will be retried");
+    } finally {
+      await worker.stop();
+      await store.close();
+    }
+  });
+
   test("splitPatch separates undefined keys for removal", () => {
     expect(splitPatch({ a: 1, b: undefined, c: null })).toEqual({ set: { a: 1, c: null }, unset: ["b"] });
   });

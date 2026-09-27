@@ -1,9 +1,13 @@
+import { isIP } from "node:net";
 /**
  * Supervisor configuration, read once from the environment.
  *
  * Nothing here is caller-selectable at runtime: the image, runtime, caps and profiles come from
  * this configuration plus the profile directory. Requests only name attempts and operations.
  */
+import { readFileSync } from "node:fs";
+import { isIPv4, isIPv6 } from "node:net";
+import { totalmem } from "node:os";
 import { resolve } from "node:path";
 import { RuntimeName } from "@airlock/contracts";
 import { resolveNamespace } from "./names";
@@ -24,6 +28,104 @@ export interface SupervisorConfig {
   /** How long a stopped attempt's volume is retained past its deadline before the janitor destroys it. */
   retentionMs: number;
   janitorIntervalMs: number;
+  /** AIRLOCK_PRODUCTION=1 (set by deploy/host/sandbox-host.sh): refuse every dev-only configuration. */
+  production: boolean;
+  /**
+   * The `sha256:` image ID the runtime image must have (AIRLOCK_RUNTIME_IMAGE_ID, captured by deploy
+   * after the build). Every inspection compares the container's effective image ID to it; a retag
+   * fails closed. Required unless dev-unsafe.
+   */
+  runtimeImageId: string | undefined;
+  /** The Vultr instance id of this execution host (AIRLOCK_INSTANCE_ID), echoed in HostCheck. */
+  instanceId: string | undefined;
+  /** Host admission budget (see capacity.ts). */
+  capacity: CapacityBudget;
+  /**
+   * The browser plane (Chromium sandbox + per-attempt egress proxy). Undefined when
+   * AIRLOCK_BROWSER_IMAGE is not set: `role: "browser"` is then refused as unsupported.
+   */
+  browser: BrowserPlaneConfig | undefined;
+  /**
+   * The general code sandboxes (milestone 4): `analysis` (offline Python data image) and `node`
+   * (offline Node image). Each is undefined when its image variable is not set, and the role is then
+   * refused as unsupported. A node plane requires the analysis plane: its outputs are collected with
+   * the analysis image (runtime/outputs/collect_outputs.py).
+   */
+  code: { analysis: CodeRuntimeConfig | undefined; node: CodeRuntimeConfig | undefined };
+}
+
+export type CodeRole = "analysis" | "node";
+
+/**
+ * One code runtime profile. Like the browser profile it is configuration, not a repository profile:
+ * a request selects it with `profileId` equal to the role. Caps are the supervisor's, never the caller's.
+ */
+export interface CodeRuntimeConfig {
+  role: CodeRole;
+  image: string;
+  /** Pinned `sha256:` image ID (AIRLOCK_<ROLE>_IMAGE_ID); required outside dev-unsafe. */
+  imageId: string | undefined;
+  cpus: number;
+  memoryBytes: number;
+  pidsLimit: number;
+  commandTimeoutMs: number;
+  attemptTimeoutMs: number;
+  /** Size of the per-attempt /workspace tmpfs volume. */
+  workspaceBytes: number;
+  /** Captured stdout+stderr per exec. */
+  outputBytes: number;
+  /** One `write` under code/ and one bounded `read` of code/ or outputs/. */
+  maxFileBytes: number;
+  /** One `put` under inputs/ (decoded bytes) and the per-attempt total of every put. */
+  maxInputFileBytes: number;
+  maxInputTotalBytes: number;
+}
+
+/**
+ * The browser runtime profile. It is not a repository profile: there is exactly one, it is fixed by
+ * this configuration, and a request selects it with `profileId: "browser"` and `role: "browser"`.
+ */
+export interface BrowserPlaneConfig {
+  image: string;
+  /** Pinned `sha256:` image ID (AIRLOCK_BROWSER_IMAGE_ID); required outside dev-unsafe. */
+  imageId: string | undefined;
+  egressImage: string;
+  /** Pinned `sha256:` image ID (AIRLOCK_EGRESS_IMAGE_ID); required outside dev-unsafe. */
+  egressImageId: string | undefined;
+  /** Path of the Chromium seccomp profile (AIRLOCK_BROWSER_SECCOMP) and its compact JSON. */
+  seccompPath: string;
+  seccompJson: string;
+  memoryBytes: number;
+  pidsLimit: number;
+  shmBytes: number;
+  tmpBytes: number;
+  cpus: number;
+  egressMemoryBytes: number;
+  egressPidsLimit: number;
+  egressCpus: number;
+  /** Upper bound on a browser attempt's absolute deadline. */
+  attemptTimeoutMs: number;
+  /**
+   * Exact https origins that may receive non-GET/HEAD/OPTIONS requests from the browser
+   * (AIRLOCK_BROWSER_MUTATION_ORIGINS, JSON list; default empty = none): the controlled form
+   * destination. Passed to the runner, which refuses every other mutation (research/40 Stage 5).
+   */
+  mutationOrigins: string[];
+  /**
+   * Upstream DNS servers for the egress proxy (AIRLOCK_EGRESS_RESOLVERS, comma-separated IPs).
+   * Required under Kata: its guests cannot reach Docker's embedded DNS on a user-defined network.
+   * Empty: the proxy uses its resolv.conf (runc/runsc).
+   */
+  egressResolvers: string[];
+}
+
+export interface CapacityBudget {
+  memoryBytes: number;
+  pids: number;
+  scratchBytes: number;
+  maxSandboxes: number;
+  /** Charged per sandbox on top of caps.memoryBytes: the guest VM's own footprint under Kata. */
+  vmOverheadBytes: number;
 }
 
 export type ConfigResult = { ok: true; config: SupervisorConfig } | { ok: false; reason: string };
@@ -61,11 +163,28 @@ export function loadConfig(env: Record<string, string | undefined>, repoRoot: st
   if (port === undefined) return { ok: false, reason: "PORT must be an integer between 1 and 65535." };
   const bind = env.SUPERVISOR_BIND?.trim() || "127.0.0.1";
   if (!/^[A-Za-z0-9.:\-\[\]]{1,128}$/.test(bind)) return { ok: false, reason: "SUPERVISOR_BIND is not a bind address." };
+  const bindClass = classifyBind(bind);
+  if (bindClass === "invalid" || bindClass === "public") {
+    return {
+      ok: false,
+      reason: `SUPERVISOR_BIND=${bind} is ${bindClass === "invalid" ? "not an IP address (or localhost)" : "a wildcard or public address"}. The supervisor holds the Docker socket and listens only on loopback or a private address (RFC 1918, 100.64.0.0/10, fc00::/7, fe80::/10).`,
+    };
+  }
+  const production = env.AIRLOCK_PRODUCTION?.trim() === "1";
 
   const runtimeRaw = env.AIRLOCK_RUNTIME?.trim() || "kata";
   const runtime = RuntimeName.safeParse(runtimeRaw);
   if (!runtime.success) return { ok: false, reason: "AIRLOCK_RUNTIME must be one of kata, runsc, runc." };
   const devUnsafe = env.AIRLOCK_DEV_UNSAFE?.trim() === "1";
+  if (production && (devUnsafe || runtime.data === "runc")) {
+    return {
+      ok: false,
+      reason: `AIRLOCK_PRODUCTION=1 refuses ${devUnsafe ? "AIRLOCK_DEV_UNSAFE=1" : "AIRLOCK_RUNTIME=runc"}: a deployment runs kata (target) or runsc (floor), never the dev-unsafe runc path.`,
+    };
+  }
+  if (devUnsafe && bindClass !== "loopback") {
+    return { ok: false, reason: `AIRLOCK_DEV_UNSAFE=1 is allowed only with a loopback SUPERVISOR_BIND (got ${bind}); dev-unsafe is a local-development mode.` };
+  }
   if (runtime.data === "runc" && !devUnsafe) {
     return {
       ok: false,
@@ -102,6 +221,48 @@ export function loadConfig(env: Record<string, string | undefined>, repoRoot: st
   const janitor = parseMs(env.AIRLOCK_JANITOR_INTERVAL_MS, 30_000);
   if (janitor === undefined) return { ok: false, reason: "AIRLOCK_JANITOR_INTERVAL_MS must be a positive integer." };
 
+  const runtimeImageId = env.AIRLOCK_RUNTIME_IMAGE_ID?.trim() || undefined;
+  if (runtimeImageId !== undefined && !/^sha256:[a-f0-9]{64}$/.test(runtimeImageId)) {
+    return { ok: false, reason: "AIRLOCK_RUNTIME_IMAGE_ID must be a `sha256:<64 hex>` image ID (docker image inspect --format '{{.Id}}')." };
+  }
+  const effectiveDevUnsafe = runtime.data === "runc" && devUnsafe;
+  if (runtimeImageId === undefined && (production || !effectiveDevUnsafe)) {
+    return {
+      ok: false,
+      reason: "AIRLOCK_RUNTIME_IMAGE_ID is not set. Outside dev-unsafe the supervisor enforces the built runtime image's ID on every inspection; deploy captures it after runtime/python/build.sh.",
+    };
+  }
+  const instanceId = env.AIRLOCK_INSTANCE_ID?.trim() || undefined;
+  if (instanceId !== undefined && !/^[A-Za-z0-9][A-Za-z0-9-]{0,127}$/.test(instanceId)) {
+    return { ok: false, reason: "AIRLOCK_INSTANCE_ID must be letters, digits and hyphens (a Vultr instance id)." };
+  }
+
+  const headroom = parseBytes(env.AIRLOCK_HOST_HEADROOM_BYTES, 1024 * 1024 * 1024);
+  if (headroom === undefined) return { ok: false, reason: "AIRLOCK_HOST_HEADROOM_BYTES must be a positive integer." };
+  const memoryBudget = parseBytes(env.AIRLOCK_HOST_MEMORY_BYTES, totalmem() - headroom);
+  if (memoryBudget === undefined || memoryBudget <= 0) {
+    return { ok: false, reason: "AIRLOCK_HOST_MEMORY_BYTES must be a positive integer (the default, total memory minus AIRLOCK_HOST_HEADROOM_BYTES, is not positive on this host)." };
+  }
+  const pidsBudget = parseBytes(env.AIRLOCK_HOST_PIDS, 4096);
+  if (pidsBudget === undefined) return { ok: false, reason: "AIRLOCK_HOST_PIDS must be a positive integer." };
+  const scratchBudget = parseBytes(env.AIRLOCK_HOST_SCRATCH_BYTES, 4 * 1024 * 1024 * 1024);
+  if (scratchBudget === undefined) return { ok: false, reason: "AIRLOCK_HOST_SCRATCH_BYTES must be a positive integer." };
+  const maxSandboxes = parseBytes(env.AIRLOCK_MAX_SANDBOXES, 8);
+  if (maxSandboxes === undefined) return { ok: false, reason: "AIRLOCK_MAX_SANDBOXES must be a positive integer." };
+  // Kata runs each sandbox in its own guest VM, whose kernel and agent are not inside caps.memoryBytes.
+  const vmOverhead = parseBytes(env.AIRLOCK_VM_OVERHEAD_BYTES, runtime.data === "kata" ? 160 * 1024 * 1024 : 0, true);
+  if (vmOverhead === undefined) return { ok: false, reason: "AIRLOCK_VM_OVERHEAD_BYTES must be a non-negative integer." };
+
+  const browser = loadBrowserPlane(env, repoRoot, { production, devUnsafe: effectiveDevUnsafe });
+  if (!browser.ok) return browser;
+  const analysis = loadCodePlane(env, "analysis", { production, devUnsafe: effectiveDevUnsafe });
+  if (!analysis.ok) return analysis;
+  const node = loadCodePlane(env, "node", { production, devUnsafe: effectiveDevUnsafe });
+  if (!node.ok) return node;
+  if (node.value && !analysis.value) {
+    return { ok: false, reason: "AIRLOCK_NODE_IMAGE is set without AIRLOCK_ANALYSIS_IMAGE: node outputs are collected with the analysis image (runtime/outputs/collect_outputs.py)." };
+  }
+
   return {
     ok: true,
     config: {
@@ -110,7 +271,7 @@ export function loadConfig(env: Record<string, string | undefined>, repoRoot: st
       bind,
       runtime: runtime.data,
       dockerRuntime: dockerRuntimeOverride || DOCKER_RUNTIME_NAME[runtime.data],
-      devUnsafe: runtime.data === "runc" && devUnsafe,
+      devUnsafe: effectiveDevUnsafe,
       profilesDir,
       dataDir,
       journalPath,
@@ -118,8 +279,219 @@ export function loadConfig(env: Record<string, string | undefined>, repoRoot: st
       namespace,
       retentionMs: retention,
       janitorIntervalMs: janitor,
+      production,
+      runtimeImageId,
+      instanceId,
+      capacity: { memoryBytes: memoryBudget, pids: pidsBudget, scratchBytes: scratchBudget, maxSandboxes, vmOverheadBytes: vmOverhead },
+      browser: browser.value,
+      code: { analysis: analysis.value, node: node.value },
     },
   };
+}
+
+/** Defaults per code role (research/40 Stage 3/4; measure before advertising). */
+export const CODE_DEFAULTS: Record<CodeRole, { memoryBytes: number; workspaceBytes: number }> = {
+  analysis: { memoryBytes: 1024 ** 3, workspaceBytes: 256 * 1024 ** 2 },
+  node: { memoryBytes: 512 * 1024 ** 2, workspaceBytes: 256 * 1024 ** 2 },
+};
+
+/**
+ * AIRLOCK_ANALYSIS_* / AIRLOCK_NODE_*: IMAGE (unset = role off), IMAGE_ID (pin), CPUS, MEMORY_BYTES,
+ * PIDS, COMMAND_TIMEOUT_MS, ATTEMPT_TIMEOUT_MS, WORKSPACE_BYTES, OUTPUT_BYTES.
+ */
+function loadCodePlane(
+  env: Record<string, string | undefined>,
+  role: CodeRole,
+  mode: { production: boolean; devUnsafe: boolean },
+): { ok: true; value: CodeRuntimeConfig | undefined } | { ok: false; reason: string } {
+  const prefix = `AIRLOCK_${role.toUpperCase()}`;
+  const image = env[`${prefix}_IMAGE`]?.trim();
+  if (!image) return { ok: true, value: undefined };
+  if (!IMAGE_REF.test(image)) return { ok: false, reason: `${prefix}_IMAGE is not an image reference.` };
+  const imageId = env[`${prefix}_IMAGE_ID`]?.trim() || undefined;
+  if (imageId !== undefined && !IMAGE_ID.test(imageId)) return { ok: false, reason: `${prefix}_IMAGE_ID must be a \`sha256:<64 hex>\` image ID.` };
+  if (imageId === undefined && (mode.production || !mode.devUnsafe)) {
+    return { ok: false, reason: `${prefix}_IMAGE_ID is not set. Outside dev-unsafe the supervisor enforces the built ${role} image ID on every inspection; deploy captures it after the build.` };
+  }
+  const n = (name: string, fallback: number, min: number, max: number): number | string => {
+    const value = parseBytes(env[`${prefix}_${name}`], fallback);
+    return value === undefined || value < min || value > max ? `${prefix}_${name} must be an integer between ${min} and ${max}.` : value;
+  };
+  const cpusRaw = env[`${prefix}_CPUS`]?.trim();
+  const cpus = !cpusRaw ? 1 : /^\d+(\.\d+)?$/.test(cpusRaw) && Number(cpusRaw) >= 0.1 && Number(cpusRaw) <= 64 ? Number(cpusRaw) : `${prefix}_CPUS must be a CPU count between 0.1 and 64.`;
+  const values = {
+    cpus,
+    memoryBytes: n("MEMORY_BYTES", CODE_DEFAULTS[role].memoryBytes, 128 * 1024 ** 2, 64 * 1024 ** 3),
+    pidsLimit: n("PIDS", 128, 16, 4096),
+    commandTimeoutMs: n("COMMAND_TIMEOUT_MS", 30_000, 1_000, 600_000),
+    attemptTimeoutMs: n("ATTEMPT_TIMEOUT_MS", 15 * 60_000, 60_000, 6 * 3600_000),
+    workspaceBytes: n("WORKSPACE_BYTES", CODE_DEFAULTS[role].workspaceBytes, 64 * 1024 ** 2, 8 * 1024 ** 3),
+    outputBytes: n("OUTPUT_BYTES", 64 * 1024, 1024, 4 * 1024 ** 2),
+  };
+  for (const value of Object.values(values)) if (typeof value === "string") return { ok: false, reason: value };
+  const v = values as { [K in keyof typeof values]: number };
+  if (v.workspaceBytes < 48 * 1024 ** 2) return { ok: false, reason: `${prefix}_WORKSPACE_BYTES must hold the 32 MiB input quota plus room for outputs.` };
+  return {
+    ok: true,
+    value: {
+      role,
+      image,
+      imageId,
+      ...v,
+      maxFileBytes: 1024 * 1024,
+      maxInputFileBytes: 8 * 1024 * 1024,
+      maxInputTotalBytes: 32 * 1024 * 1024,
+    },
+  };
+}
+
+const IMAGE_REF = /^[a-z0-9][a-z0-9._\/-]{0,200}(:[A-Za-z0-9._-]{1,128})?(@sha256:[a-f0-9]{64})?$/;
+const IMAGE_ID = /^sha256:[a-f0-9]{64}$/;
+
+function loadBrowserPlane(
+  env: Record<string, string | undefined>,
+  repoRoot: string,
+  mode: { production: boolean; devUnsafe: boolean },
+): { ok: true; value: BrowserPlaneConfig | undefined } | { ok: false; reason: string } {
+  const image = env.AIRLOCK_BROWSER_IMAGE?.trim();
+  if (!image) return { ok: true, value: undefined };
+  const egressImage = env.AIRLOCK_EGRESS_IMAGE?.trim() || "airlock-egress:dev";
+  for (const [name, value] of [["AIRLOCK_BROWSER_IMAGE", image], ["AIRLOCK_EGRESS_IMAGE", egressImage]] as const) {
+    if (!IMAGE_REF.test(value)) return { ok: false, reason: `${name} is not an image reference.` };
+  }
+  const imageId = env.AIRLOCK_BROWSER_IMAGE_ID?.trim() || undefined;
+  const egressImageId = env.AIRLOCK_EGRESS_IMAGE_ID?.trim() || undefined;
+  for (const [name, value] of [["AIRLOCK_BROWSER_IMAGE_ID", imageId], ["AIRLOCK_EGRESS_IMAGE_ID", egressImageId]] as const) {
+    if (value !== undefined && !IMAGE_ID.test(value)) return { ok: false, reason: `${name} must be a \`sha256:<64 hex>\` image ID.` };
+    if (value === undefined && (mode.production || !mode.devUnsafe)) {
+      return { ok: false, reason: `${name} is not set. Outside dev-unsafe the supervisor enforces the built browser/egress image IDs on every inspection; deploy captures them after the build.` };
+    }
+  }
+  const seccompPath = resolve(repoRoot, env.AIRLOCK_BROWSER_SECCOMP?.trim() || "runtime/browser/seccomp/chromium.json");
+  let seccompJson: string;
+  try {
+    const parsed = JSON.parse(readFileSync(seccompPath, "utf8")) as { defaultAction?: unknown; syscalls?: unknown };
+    if (typeof parsed.defaultAction !== "string" || !Array.isArray(parsed.syscalls)) throw new Error("not a seccomp profile (defaultAction/syscalls)");
+    if (parsed.defaultAction === "SCMP_ACT_ALLOW") throw new Error("defaultAction SCMP_ACT_ALLOW is not a restricting profile");
+    seccompJson = JSON.stringify(parsed);
+  } catch (error) {
+    return { ok: false, reason: `AIRLOCK_BROWSER_SECCOMP ${seccompPath} is not a usable seccomp profile (${(error as Error).message}).` };
+  }
+  const n = (name: string, fallback: number, min: number): number | string => {
+    const value = parseBytes(env[name], fallback);
+    return value === undefined || value < min ? `${name} must be an integer >= ${min}.` : value;
+  };
+  const f = (name: string, fallback: number): number | string => {
+    const raw = env[name]?.trim();
+    if (!raw) return fallback;
+    const value = Number(raw);
+    return /^\d+(\.\d+)?$/.test(raw) && value >= 0.1 && value <= 64 ? value : `${name} must be a CPU count between 0.1 and 64.`;
+  };
+  const values = {
+    memoryBytes: n("AIRLOCK_BROWSER_MEMORY_BYTES", 2 * 1024 ** 3, 256 * 1024 ** 2),
+    pidsLimit: n("AIRLOCK_BROWSER_PIDS", 256, 64),
+    shmBytes: n("AIRLOCK_BROWSER_SHM_BYTES", 256 * 1024 ** 2, 64 * 1024 ** 2),
+    tmpBytes: n("AIRLOCK_BROWSER_TMP_BYTES", 512 * 1024 ** 2, 64 * 1024 ** 2),
+    cpus: f("AIRLOCK_BROWSER_CPUS", 1),
+    egressMemoryBytes: n("AIRLOCK_EGRESS_MEMORY_BYTES", 128 * 1024 ** 2, 64 * 1024 ** 2),
+    egressPidsLimit: n("AIRLOCK_EGRESS_PIDS", 64, 16),
+    egressCpus: f("AIRLOCK_EGRESS_CPUS", 0.5),
+    attemptTimeoutMs: n("AIRLOCK_BROWSER_ATTEMPT_TIMEOUT_MS", 30 * 60_000, 60_000),
+  };
+  for (const value of Object.values(values)) if (typeof value === "string") return { ok: false, reason: value };
+  const mutationOrigins = parseMutationOrigins(env.AIRLOCK_BROWSER_MUTATION_ORIGINS);
+  if (typeof mutationOrigins === "string") return { ok: false, reason: mutationOrigins };
+  const egressResolvers = (env.AIRLOCK_EGRESS_RESOLVERS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  if (egressResolvers.length > 4 || egressResolvers.some((ip) => isIP(ip) === 0)) return { ok: false, reason: "AIRLOCK_EGRESS_RESOLVERS must be up to 4 comma-separated IP addresses." };
+  return {
+    ok: true,
+    value: { image, imageId, egressImage, egressImageId, seccompPath, seccompJson, ...(values as { [K in keyof typeof values]: number }), mutationOrigins, egressResolvers },
+  };
+}
+
+/** At most this many mutation origins (the runner enforces the same bound). */
+export const MAX_MUTATION_ORIGINS = 16;
+
+/**
+ * AIRLOCK_BROWSER_MUTATION_ORIGINS: a JSON list of exact https origins (`https://host[:port]`, no
+ * path, no trailing slash, no userinfo, lower-case, no default port). Unset/empty = []. Returns the
+ * list or the reason it is refused. Keep in step with runtime/browser/src/mutation.mjs.
+ */
+export function parseMutationOrigins(raw: string | undefined): string[] | string {
+  const name = "AIRLOCK_BROWSER_MUTATION_ORIGINS";
+  if (raw === undefined || raw.trim() === "") return [];
+  let list: unknown;
+  try {
+    list = JSON.parse(raw);
+  } catch {
+    return `${name} must be a JSON array of https origins.`;
+  }
+  if (!Array.isArray(list)) return `${name} must be a JSON array of https origins.`;
+  if (list.length > MAX_MUTATION_ORIGINS) return `${name} allows at most ${MAX_MUTATION_ORIGINS} origins.`;
+  for (const entry of list) {
+    if (typeof entry !== "string" || entry.length === 0 || entry.length > 300) return `${name} entries must be strings of 1..300 characters.`;
+    let url: URL;
+    try {
+      url = new URL(entry);
+    } catch {
+      return `${name} entry ${JSON.stringify(entry)} is not a URL.`;
+    }
+    if (url.protocol !== "https:") return `${name} entry ${JSON.stringify(entry)} is not https.`;
+    if (url.origin !== entry) return `${name} entry ${JSON.stringify(entry)} is not an exact origin (expected ${JSON.stringify(url.origin)}).`;
+  }
+  if (new Set(list).size !== list.length) return `${name} contains duplicates.`;
+  return list as string[];
+}
+
+export type BindClass = "loopback" | "private" | "public" | "invalid";
+
+/**
+ * Where a listen address sits. Wildcards (0.0.0.0, ::) count as public: they listen on every
+ * interface, including the public one. Only literal addresses (and `localhost`) are accepted, so a
+ * hostname can never resolve somewhere unexpected.
+ */
+export function classifyBind(raw: string): BindClass {
+  const bind = raw.startsWith("[") && raw.endsWith("]") ? raw.slice(1, -1) : raw;
+  if (bind === "localhost") return "loopback";
+  if (isIPv4(bind)) return classifyIPv4(bind);
+  if (isIPv6(bind)) {
+    const lower = bind.toLowerCase();
+    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(lower);
+    if (mapped?.[1]) return classifyIPv4(mapped[1]);
+    const groups = expandIPv6(lower);
+    if (!groups) return "invalid";
+    if (groups.every((g) => g === 0)) return "public"; // ::
+    if (groups.slice(0, 7).every((g) => g === 0) && groups[7] === 1) return "loopback"; // ::1
+    const first = groups[0] ?? 0;
+    if ((first & 0xfe00) === 0xfc00) return "private"; // fc00::/7
+    if ((first & 0xffc0) === 0xfe80) return "private"; // fe80::/10
+    return "public";
+  }
+  return "invalid";
+}
+
+function classifyIPv4(ip: string): BindClass {
+  const [a = -1, b = -1] = ip.split(".").map((part) => Number.parseInt(part, 10));
+  if (a === 127) return "loopback";
+  if (a === 10) return "private";
+  if (a === 172 && b >= 16 && b <= 31) return "private";
+  if (a === 192 && b === 168) return "private";
+  if (a === 100 && b >= 64 && b <= 127) return "private"; // 100.64.0.0/10 (CGNAT, NetBird/Tailscale)
+  return "public"; // including 0.0.0.0
+}
+
+function expandIPv6(ip: string): number[] | undefined {
+  const withoutZone = ip.split("%")[0] ?? "";
+  const halves = withoutZone.split("::");
+  if (halves.length > 2) return undefined;
+  const parse = (part: string) => (part === "" ? [] : part.split(":").map((g) => Number.parseInt(g, 16)));
+  const head = parse(halves[0] ?? "");
+  const tail = halves.length === 2 ? parse(halves[1] ?? "") : [];
+  const missing = 8 - head.length - tail.length;
+  if (halves.length === 1 && missing !== 0) return undefined;
+  if (missing < 0) return undefined;
+  const groups = [...head, ...new Array<number>(halves.length === 2 ? missing : 0).fill(0), ...tail];
+  return groups.length === 8 && groups.every((g) => Number.isInteger(g) && g >= 0 && g <= 0xffff) ? groups : undefined;
 }
 
 /** DOCKER_SOCKET wins; otherwise a unix:// DOCKER_HOST (Colima, rootless Docker); otherwise dockerode's default. */
@@ -129,6 +501,13 @@ export function resolveDockerSocket(env: Record<string, string | undefined>): st
   const host = env.DOCKER_HOST?.trim();
   if (host?.startsWith("unix://")) return host.slice("unix://".length);
   return undefined;
+}
+
+function parseBytes(raw: string | undefined, fallback: number, allowZero = false): number | undefined {
+  if (raw === undefined || raw.trim() === "") return Number.isFinite(fallback) ? Math.floor(fallback) : undefined;
+  if (!/^\d{1,16}$/.test(raw.trim())) return undefined;
+  const value = Number.parseInt(raw.trim(), 10);
+  return value > 0 || (allowZero && value === 0) ? value : undefined;
 }
 
 function parseMs(raw: string | undefined, fallback: number): number | undefined {

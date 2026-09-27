@@ -44,7 +44,8 @@ function NotFound({ path }: { path: string }) {
 export function App() {
   const route = useRoute();
   const session = useSession();
-  const roster = useTaskList();
+  // Task data needs a session: nothing is fetched while signed out.
+  const roster = useTaskList(session.loading ? null : session.role !== "viewer");
 
   // The sign-in screen stands alone, like OpenBot's /sign.
   if (route.name === "login") return <LoginPage />;
@@ -77,7 +78,7 @@ export function App() {
         <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
           {session.error ? (
             <Notice tone="warn" className="m-2">
-              Session check failed: {session.error}. Continuing as viewer.
+              Session check failed: {session.error}. Sign in again to see your cases.
             </Notice>
           ) : null}
           {page}

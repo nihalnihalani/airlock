@@ -1,0 +1,9 @@
+{ "_comment": "ACCEPTANCE diagnostic (verifier_tester): two final-action proposals on the airlock-forms-v1 adapter at https://forms.example.com (configured but not reachable) to test decide semantics at the API level.",
+  "turns": [
+    { "text": "Opening example.com.", "toolCalls": [{ "name": "browser_navigate", "args": { "url": "https://example.com/" } }] },
+    { "text": "Proposal A (left to expire).", "toolCalls": [{ "name": "browser_propose_submit", "args": { "formUrl": "https://forms.example.com/f/contact-request", "formId": "contact-request", "fields": { "name": "Acceptance A", "email": "a@example.com", "message": "expire me" }, "summary": "Acceptance proposal A" } }] },
+    { "text": "Proposal B (wrong digest, approve, replay).", "toolCalls": [{ "name": "browser_propose_submit", "args": { "formUrl": "https://forms.example.com/f/contact-request", "formId": "contact-request", "fields": { "name": "Acceptance B", "email": "b@example.com", "message": "approve me" }, "summary": "Acceptance proposal B" } }] },
+    { "text": "Proposal C (reject).", "toolCalls": [{ "name": "browser_propose_submit", "args": { "formUrl": "https://forms.example.com/f/contact-request", "formId": "contact-request", "fields": { "name": "Acceptance C", "email": "c@example.com", "message": "reject me" }, "summary": "Acceptance proposal C" } }] },
+    { "text": "Screenshot.", "toolCalls": [{ "name": "browser_screenshot", "args": {} }] },
+    { "text": "Submitting.", "toolCalls": [{ "name": "submit_result", "args": { "summary": "Acceptance diagnostic: proposals exercised.", "sources": ["https://example.com/"] } }] }
+  ] }

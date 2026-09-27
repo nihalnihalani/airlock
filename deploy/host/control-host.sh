@@ -43,6 +43,12 @@ ${PUBLIC_HOST} {
 	encode gzip
 	reverse_proxy 127.0.0.1:3000
 }
+# Disclosed demo fixtures (apps/fixtures): the hero data page and the airlock-forms-v1 destination.
+# A separate public name, because the browser's egress proxy only reaches public addresses.
+forms.${PUBLIC_HOST} {
+	encode gzip
+	reverse_proxy 127.0.0.1:3100
+}
 EOF
 systemctl enable caddy >/dev/null 2>&1 || true
 systemctl restart caddy
@@ -71,7 +77,7 @@ if ! id airlock >/dev/null 2>&1; then
   useradd --system --create-home --home-dir /var/lib/airlock --shell /usr/sbin/nologin airlock
 fi
 install -d -m 0755 -o airlock -g airlock /opt/airlock /opt/airlock/app
-install -d -m 0750 -o airlock -g airlock /var/lib/airlock /var/lib/airlock/control
+install -d -m 0750 -o airlock -g airlock /var/lib/airlock /var/lib/airlock/control /var/lib/airlock/fixtures
 install -d -m 0700 -o root -g root /etc/airlock
 
 # --- systemd unit (env written by deploy.sh) ---------------------------------------------------------------------------------
@@ -95,6 +101,26 @@ ReadWritePaths=/var/lib/airlock
 [Install]
 WantedBy=multi-user.target
 EOF
+cat > /etc/systemd/system/airlock-fixtures.service <<'EOF'
+[Unit]
+Description=Airlock demo fixtures (disclosed: hero data page and the airlock-forms-v1 form destination)
+After=network-online.target
+Wants=network-online.target
+[Service]
+User=airlock
+Group=airlock
+WorkingDirectory=/opt/airlock/app/apps/fixtures
+EnvironmentFile=/etc/airlock/fixtures.env
+ExecStart=/usr/local/bin/bun src/index.ts
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ReadWritePaths=/var/lib/airlock/fixtures
+[Install]
+WantedBy=multi-user.target
+EOF
 systemctl daemon-reload
-systemctl enable airlock-control.service >/dev/null 2>&1 || true
+systemctl enable airlock-control.service airlock-fixtures.service >/dev/null 2>&1 || true
 log "done"

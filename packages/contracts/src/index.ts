@@ -46,19 +46,31 @@ export const relPath = z
 // Phases, statuses, outcomes
 // ---------------------------------------------------------------------------------------------
 
-/** Controller phases (37 §"The end-to-end run"). Separate from worker status. */
+/**
+ * Controller phases, in the order a run actually passes them (the author sandbox is created and
+ * probed during `baseline`, so the baseline record carries the probe; `reproduce` is the model's own
+ * reproduction; a second repair attempt re-enters `reproduce`). Separate from worker status.
+ */
 export const Phase = z.enum([
   "prepare",
-  "reproduce",
   "baseline",
+  "reproduce",
   "repair",
+  /** General tasks: the model loop working through browser and code tools (repair is the repair flow's). */
+  "execute",
   "freeze",
   "verify",
   "ready",
 ]);
 export type Phase = z.infer<typeof Phase>;
 
-/** Terminal outcomes (35 §3). "CANDIDATE_PASSED_CHECKS" means exactly the frozen cases passed. */
+/**
+ * Terminal outcomes. Repair (35 §3): "CANDIDATE_PASSED_CHECKS" means exactly the frozen cases passed.
+ * General tasks (40 §6): RESULT_VERIFIED = every completion check of the task profile passed;
+ * RESULT_PARTIAL = some required checks failed but outputs exist; RESULT_FAILED = no acceptable
+ * result; UNSUPPORTED = the goal needs a capability this deployment does not offer.
+ * INCONCLUSIVE and STOPPED_LIMIT apply to both.
+ */
 export const Outcome = z.enum([
   "NOT_REPRODUCED",
   "REPRODUCED_UNRESOLVED",
@@ -66,6 +78,10 @@ export const Outcome = z.enum([
   "CHECKS_FAILED",
   "INCONCLUSIVE",
   "STOPPED_LIMIT",
+  "RESULT_VERIFIED",
+  "RESULT_PARTIAL",
+  "RESULT_FAILED",
+  "UNSUPPORTED",
 ]);
 export type Outcome = z.infer<typeof Outcome>;
 
@@ -81,7 +97,11 @@ export const TaskStatus = z.enum([
 export type TaskStatus = z.infer<typeof TaskStatus>;
 
 /** Container roles the supervisor may create. Each is disposable and per attempt. */
-export const SandboxRole = z.enum(["author", "baseline", "candidate", "preview", "hostile"]);
+/**
+ * `analysis` (offline Python data image) and `node` (offline Node image) are general code sandboxes:
+ * they receive input bytes, run model-written code without network, and hand back bounded outputs.
+ */
+export const SandboxRole = z.enum(["author", "baseline", "candidate", "preview", "hostile", "browser", "analysis", "node"]);
 export type SandboxRole = z.infer<typeof SandboxRole>;
 
 // ---------------------------------------------------------------------------------------------
@@ -102,6 +122,13 @@ export const HostCheck = z.object({
   selectedRuntime: RuntimeName,
   /** True only for local development on plain runc. Never true in a deployment. */
   devUnsafe: z.boolean(),
+  /** Checkpoint 3 comparison: the host's own `uname -a` and hostname, beside each guest's. */
+  hostUname: z.string().max(512).optional(),
+  hostHostname: z.string().max(128).optional(),
+  /** "Show me the instance": the Vultr instance id of the execution host, when deployed. */
+  instanceId: z.string().max(128).optional(),
+  /** Image identity the supervisor enforces on every sandbox (`sha256:<id>`), when pinned. */
+  runtimeImageId: z.string().max(128).optional(),
 });
 export type HostCheck = z.infer<typeof HostCheck>;
 
@@ -112,6 +139,8 @@ export const RuntimeInspection = z.object({
   runtime: RuntimeName,
   devUnsafe: z.boolean(),
   imageDigest: z.string(),
+  /** The effective local image id (`sha256:…`), always comparable with HostCheck.runtimeImageId. */
+  imageId: z.string().max(128).optional(),
   /** Checkpoint 3: read from inside the sandbox. Untrusted text, bounded. */
   guestUname: z.string().max(512),
   guestHostname: z.string().max(128),
@@ -129,6 +158,8 @@ export const RuntimeInspection = z.object({
     privateIpc: z.boolean(),
     restartDisabled: z.boolean(),
     ownedLabels: z.boolean(),
+    /** Browser role: attached exactly to its per-attempt internal network (networkNone is then false by design). */
+    networkAsDesigned: z.boolean().optional(),
   }),
   allPassed: z.boolean(),
 });
@@ -148,12 +179,30 @@ export const IsolationProbe = z.object({
 });
 export type IsolationProbe = z.infer<typeof IsolationProbe>;
 
+/**
+ * Every Airlock-owned resource on the execution host at one instant. A task-scoped empty listing is
+ * not host-wide zero; "(no sandboxes)" is shown only when `containers` and `volumes` are both empty.
+ */
+export const HostListing = z.object({
+  listedAt: isoDate,
+  scope: z.literal("host"),
+  containers: z.array(z.object({ name: z.string(), taskId: z.string().optional(), role: z.string().optional(), state: z.string().optional() })),
+  volumes: z.array(z.string()),
+  /** Airlock-owned per-attempt networks (browser attempts). "(no sandboxes)" requires these empty too. */
+  networks: z.array(z.string()).optional(),
+});
+export type HostListing = z.infer<typeof HostListing>;
+
 /** Checkpoint 5: after teardown, what the supervisor still owns for this attempt. Must be empty. */
 export const TeardownRecord = z.object({
   destroyedAt: isoDate,
   containersRemaining: z.array(z.string()),
   volumesRemaining: z.array(z.string()),
+  /** Browser attempts: per-attempt networks still present (clean requires none). */
+  networksRemaining: z.array(z.string()).optional(),
   clean: z.boolean(),
+  /** The host-wide listing taken right after this teardown. */
+  host: HostListing.optional(),
 });
 export type TeardownRecord = z.infer<typeof TeardownRecord>;
 
@@ -190,6 +239,13 @@ export const Caps = z.object({
   maxFileBytes: z.number().int().positive(),
   maxTotalBytes: z.number().int().positive(),
   maxFiles: z.number().int().positive(),
+  /** Model calls per repair attempt (the task-wide ceiling is `maxModelCalls`). Default: `maxModelCalls`. */
+  maxModelCallsPerAttempt: z.number().int().positive().optional(),
+  /** Model tokens (prompt + completion) per task and per attempt; see `DEFAULT_TOKEN_BUDGET`. */
+  maxTokens: z.number().int().positive().optional(),
+  maxTokensPerAttempt: z.number().int().positive().optional(),
+  /** Controller recoveries (lost lease, restart) before a task ends INCONCLUSIVE. Default 3. */
+  maxRecoveries: z.number().int().positive().optional(),
   /**
    * Hard size of the per-attempt `/workspace` (a size-capped tmpfs volume held by the supervisor;
    * never host disk). Defaults to `DEFAULT_WORKSPACE_BYTES` when a profile omits it.
@@ -202,6 +258,9 @@ export const DEFAULT_WORKSPACE_BYTES = 134217728;
 export function workspaceBytesOf(caps: Pick<Caps, "workspaceBytes">): number {
   return caps.workspaceBytes ?? DEFAULT_WORKSPACE_BYTES;
 }
+/** 2M tokens per task, 1M per attempt: the bounds applied when a profile omits them. */
+export const DEFAULT_TOKEN_BUDGET = { task: 2_000_000, attempt: 1_000_000 } as const;
+export const DEFAULT_MAX_RECOVERIES = 3;
 
 /** `profiles/<id>/profile.json`. The reference commit is maintainer-only and never reaches the agent. */
 export const ProfileManifest = z.object({
@@ -373,7 +432,21 @@ export const CreateAttemptRequest = z.object({
   profileId: plainId,
   role: SandboxRole,
   absoluteDeadline: isoDate,
+  /**
+   * Short renewable execution authorization, capped by `absoluteDeadline`. The controller renews it
+   * while its worker lease is live; expiry revokes dispatch and stops the container like the
+   * deadline does. Absent: authorized until the deadline (older controllers).
+   */
+  authorizedUntil: isoDate.optional(),
+  /**
+   * Browser role only: the destinations the attempt's egress proxy allows (exact hostnames, or
+   * `.suffix` for subdomains only). Set by the controller from task policy, never by a page or the
+   * model. Empty or absent: every destination is refused.
+   */
+  egressAllow: z.array(z.string().min(1).max(253).regex(/^\.?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/)).max(64).optional(),
 });
+/** Extends an attempt's execution authorization. Never past the deadline; never revives revoked work. */
+export const RenewRequest = z.object({ ref: AttemptRef, operation: Operation, authorizedUntil: isoDate });
 export const AttemptState = z.object({
   ref: AttemptRef,
   role: SandboxRole,
@@ -382,10 +455,13 @@ export const AttemptState = z.object({
   inspection: RuntimeInspection.optional(),
   probe: IsolationProbe.optional(),
   deadline: isoDate,
+  authorizedUntil: isoDate.optional(),
 });
 export type AttemptState = z.infer<typeof AttemptState>;
 
 export const AuthorToolArgs = z.discriminatedUnion("kind", [
+  /** Binary placement for analysis/node inputs; the supervisor allows it only under `inputs/`. */
+  z.object({ kind: z.literal("put"), path: relPath, contentBase64: z.string().max(11_184_812) }),
   z.object({ kind: z.literal("read"), path: relPath }),
   z.object({ kind: z.literal("write"), path: relPath, content: z.string().max(1_048_576) }),
   z.object({ kind: z.literal("exec"), command: z.string().min(1).max(4096) }),
@@ -400,6 +476,7 @@ export const AuthorToolRequest = z.object({
 export const AuthorToolResult = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("read"), content: z.string(), truncated: z.boolean() }),
   z.object({ kind: z.literal("write"), byteLength: z.number().int().nonnegative() }),
+  z.object({ kind: z.literal("put"), byteLength: z.number().int().nonnegative(), sha256: sha256Hex }),
   z.object({ kind: z.literal("exec"), result: ExecResult }),
   z.object({ kind: z.literal("refused"), reason: z.string() }),
 ]);
@@ -415,6 +492,26 @@ export const FreezeResult = z.object({
 export type FreezeResult = z.infer<typeof FreezeResult>;
 
 /** Baseline: pristine tree. Candidate/preview: pristine tree plus the bundle's replacements. */
+/** One output file from a stopped analysis/node workspace (runtime/outputs/collect_outputs.py). */
+export const OutputFile = z.object({
+  path: relPath,
+  byteLength: z.number().int().nonnegative(),
+  sha256: sha256Hex,
+  mediaType: z.string().max(64),
+  contentBase64: z.string(),
+});
+export type OutputFile = z.infer<typeof OutputFile>;
+export const OutputEnvelope = z.object({
+  schemaVersion: z.literal(SCHEMA_VERSION),
+  files: z.array(OutputFile),
+  rejected: z.array(z.object({ path: z.string().max(512), reason: z.string().max(256) })),
+});
+export type OutputEnvelope = z.infer<typeof OutputEnvelope>;
+/** Stop the analysis/node sandbox (revoke → stop → settle → inspect) and collect `outputs/` read-only. */
+export const CollectOutputsRequest = z.object({ ref: AttemptRef, operation: Operation });
+export const CollectOutputsResult = z.object({ stoppedAt: isoDate, stopConfirmed: z.boolean(), envelope: OutputEnvelope });
+export type CollectOutputsResult = z.infer<typeof CollectOutputsResult>;
+
 export const InvokeRequest = z.object({
   operation: Operation,
   taskId: plainId,
@@ -439,7 +536,14 @@ export type InvokeResult = z.infer<typeof InvokeResult>;
 
 export const RevokeRequest = z.object({ ref: AttemptRef, operation: Operation });
 export const DestroyRequest = z.object({ ref: AttemptRef, operation: Operation });
-export const DestroyResult = z.object({ teardown: TeardownRecord });
+/** One egress proxy decision (a JSON line from the per-attempt proxy). Untrusted-origin text, bounded. */
+export const EgressDecision = z
+  .object({ at: z.string().optional(), host: z.string().max(253), port: z.number().int().optional(), decision: z.enum(["allow", "deny"]), reason: z.string().max(128) })
+  .passthrough();
+export type EgressDecision = z.infer<typeof EgressDecision>;
+export const EgressSummary = z.object({ allowed: z.number().int().nonnegative(), denied: z.number().int().nonnegative() });
+
+export const DestroyResult = z.object({ teardown: TeardownRecord, egressSummary: EgressSummary.optional() });
 
 /** Hostile-input panel: one-shot author-profile sandbox, no repair pipeline. Judge role only. */
 export const HostileRunRequest = z.object({
@@ -463,7 +567,13 @@ export const BlastRadiusCard = z.object({
     hostSentinelUnchanged: z.boolean(),
     otherAttemptsRunning: z.number().int().nonnegative(),
     hostUptimeSeconds: z.number().nonnegative(),
+    /** Each other live attempt, checked before and after the hostile run (not just a count). */
+    siblings: z.array(z.object({ attemptId: z.string(), taskId: z.string(), runningBefore: z.boolean(), runningAfter: z.boolean() })).optional(),
+    /** Filled by the control plane: its own health around the run. */
+    controlPlane: z.object({ healthyBefore: z.boolean(), healthyAfter: z.boolean(), checkedAt: isoDate }).optional(),
   }),
+  /** Scratch files written into the hostile sandbox's workspace before the command, and how many remained after it. */
+  workspace: z.object({ filesBefore: z.number().int().nonnegative(), filesAfter: z.number().int().nonnegative().nullable() }).optional(),
   teardown: TeardownRecord,
 });
 export type BlastRadiusCard = z.infer<typeof BlastRadiusCard>;
@@ -505,17 +615,46 @@ export const VerificationRecord = z.object({
   runtimeProfile: RuntimeProfileRecord,
   /** For baseline: did the reported failure reproduce. For candidate: did all cases pass. */
   passed: z.boolean(),
+  /** The comparator's verdict in words (records before this field carry only `passed`). */
+  outcome: z.enum(["REPRODUCED", "NOT_REPRODUCED", "INCONCLUSIVE", "PASSED_CHECKS", "CHECKS_FAILED"]).optional(),
   createdAt: isoDate,
 });
 export type VerificationRecord = z.infer<typeof VerificationRecord>;
 
-/** Authorizes a repeatable download of exactly one verified candidate. */
+/**
+ * The export zip, sealed once per (task, candidate verification) from immutable inputs and served
+ * byte for byte on every download. Grant events are outside the sealed payload.
+ */
+export const ExportSeal = z.object({
+  schemaVersion: z.literal(SCHEMA_VERSION),
+  id: plainId,
+  taskId: plainId,
+  candidateDigest: sha256Hex,
+  verificationRecordId: plainId,
+  verificationRecordDigest: sha256Hex,
+  baselineRecordId: plainId,
+  baselineRecordDigest: sha256Hex,
+  /** sha256 of the zip bytes in the artifact blob store. */
+  zipDigest: sha256Hex,
+  byteLength: z.number().int().nonnegative(),
+  /** Last event seq included in the sealed evidence. */
+  eventsThroughSeq: z.number().int().nonnegative(),
+  sealedAt: isoDate,
+});
+export type ExportSeal = z.infer<typeof ExportSeal>;
+
+/** Authorizes a repeatable download of exactly one verified candidate's sealed export. */
 export const ExportGrant = z.object({
   id: plainId,
   owner: z.string(),
   taskId: plainId,
   candidateDigest: sha256Hex,
   verificationRecordId: plainId,
+  /** sha256 of the canonical VerificationRecord the grant was issued against. */
+  verificationRecordDigest: sha256Hex,
+  /** ExportSeal id and the zip digest it names. */
+  sealId: plainId,
+  zipDigest: sha256Hex,
   createdAt: isoDate,
   expiresAt: isoDate,
 });
@@ -528,7 +667,66 @@ export type ExportGrant = z.infer<typeof ExportGrant>;
 export const Budget = z.object({
   modelCallsUsed: z.number().int().nonnegative(),
   repairAttemptsUsed: z.number().int().nonnegative(),
+  /** Prompt + completion tokens charged so far (a conservative estimate when usage is absent). */
+  tokensUsed: z.number().int().nonnegative().optional(),
+  /** Model calls and tokens charged to the current attempt. */
+  attemptModelCalls: z.number().int().nonnegative().optional(),
+  attemptTokens: z.number().int().nonnegative().optional(),
+  /** Controller recoveries (lost lease, restart, verify crash) so far. */
+  recoveries: z.number().int().nonnegative().optional(),
+  /** General tasks: browser operations, code runs and sandbox sessions charged so far. */
+  browserOps: z.number().int().nonnegative().optional(),
+  codeRuns: z.number().int().nonnegative().optional(),
+  sessions: z.number().int().nonnegative().optional(),
 });
+
+/** One sealed candidate and its external comparison; a task may produce one per repair attempt. */
+/**
+ * An immutable, content-addressed file the control plane holds for a task: an owner upload, a
+ * collected output, a screenshot or a browser download. Bytes are served only to the owner (or an
+ * operator), with a safe disposition and nosniff; never rendered as active content on the app origin.
+ */
+export const ArtifactKind = z.enum(["upload", "output", "screenshot", "download", "page_text"]);
+export const Artifact = z.object({
+  schemaVersion: z.literal(SCHEMA_VERSION),
+  id: plainId,
+  owner: z.string(),
+  taskId: plainId.optional(),
+  kind: ArtifactKind,
+  filename: z.string().min(1).max(255),
+  mediaType: z.string().max(128),
+  byteLength: z.number().int().nonnegative(),
+  sha256: sha256Hex,
+  createdAt: isoDate,
+  /** Provenance: the page it came from, the step and tool that produced it. Untrusted text, bounded. */
+  source: z.object({ url: z.string().max(2048).optional(), step: z.number().int().nonnegative().optional(), tool: z.string().max(64).optional(), attemptId: plainId.optional() }).optional(),
+});
+export type Artifact = z.infer<typeof Artifact>;
+
+/** Where cleanup stands, separately from the workflow status and the result (40 §6). */
+export const CleanupState = z.object({
+  status: z.enum(["none", "pending", "confirmed", "failed", "retrying"]),
+  detail: z.string().max(1024).optional(),
+  at: isoDate.optional(),
+});
+export type CleanupState = z.infer<typeof CleanupState>;
+
+/** A general task's result: what it produced and the controller's completion checks (never the model's claim). */
+export const TaskResult = z.object({
+  summary: z.string().max(8000),
+  outputArtifactIds: z.array(plainId).max(50),
+  sources: z.array(z.object({ url: z.string().max(2048), title: z.string().max(512).optional(), screenshotArtifactId: plainId.optional() })).max(50),
+  checks: z.array(z.object({ name: z.string().max(128), passed: z.boolean(), detail: z.string().max(1024) })),
+});
+export type TaskResult = z.infer<typeof TaskResult>;
+
+export const CandidateAttempt = z.object({
+  attemptId: plainId,
+  candidateDigest: sha256Hex,
+  verificationRecordId: plainId.optional(),
+  outcome: z.enum(["PASSED_CHECKS", "CHECKS_FAILED", "INCONCLUSIVE"]).optional(),
+});
+export type CandidateAttempt = z.infer<typeof CandidateAttempt>;
 
 export const Task = z.object({
   id: plainId,
@@ -554,6 +752,24 @@ export const Task = z.object({
   baselineRecordId: plainId.optional(),
   candidateDigest: sha256Hex.optional(),
   verificationRecordId: plainId.optional(),
+  /** Every candidate this task sealed, in order; the last is `candidateDigest`. */
+  candidates: z.array(CandidateAttempt).optional(),
+  /**
+   * Set when the task was created while live repair was not backed by current evidence: it runs
+   * reproduction and baseline only, and ends without a repair attempt. Never set on diagnostics.
+   */
+  repairDisabledReason: z.string().max(1024).optional(),
+  /** Created by the live-repair gate (operator only); see CreateTaskRequest.liveGate. */
+  liveGate: z.boolean().optional(),
+  /** Absent or "repair": the code-repair profile flow. "general": a goal run by a general task profile. */
+  kind: z.enum(["repair", "general"]).optional(),
+  /** General tasks: the owner's input artifacts and the destinations the browser may reach. */
+  inputArtifactIds: z.array(plainId).max(10).optional(),
+  egressAllow: z.array(z.string().max(253)).max(16).optional(),
+  result: TaskResult.optional(),
+  cleanup: CleanupState.optional(),
+  /** Who may drive the task's browser right now (milestone 5); absent = the agent. */
+  control: z.lazy(() => ControlState).optional(),
   createdAt: isoDate,
   updatedAt: isoDate,
 });
@@ -634,6 +850,20 @@ export const CreateTaskRequest = z.object({
    * control plane runs with `AIRLOCK_MODEL_DRIVER=scripted:<directory>` and the script exists.
    */
   scriptedDriver: plainId.optional(),
+  /** "general" runs a goal under a general task profile (profileId names it); default "repair". */
+  kind: z.enum(["repair", "general"]).optional(),
+  /** General tasks: uploaded artifact ids (owner's own) the task may read. */
+  inputArtifactIds: z.array(plainId).max(10).optional(),
+  /**
+   * General tasks: destinations the browser may reach (exact hostnames, or `.suffix` for
+   * subdomains). Set by the owner here, never by a page or the model; bounded by the profile.
+   */
+  egressAllow: z.array(z.string().min(1).max(253).regex(/^\.?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/)).max(16).optional(),
+  /**
+   * Operator only: this task is an attempt of the live-repair gate, the run that produces the
+   * evidence repair availability requires, so it is not repair-disabled for lacking that evidence.
+   */
+  liveGate: z.boolean().optional(),
 });
 
 export const PreviewRequest = z.object({
@@ -655,6 +885,58 @@ export const ContractCaseTitle = z.object({
   title: z.string(),
 });
 export type ContractCaseTitle = z.infer<typeof ContractCaseTitle>;
+
+/**
+ * Whether the live repair promise is currently backed by evidence (a committed live-gate receipt
+ * matching the running profile, model and runtime). When not, the UI offers diagnosis only.
+ */
+export const RepairAvailability = z.object({
+  available: z.boolean(),
+  reason: z.string().max(1024),
+  driver: z.string(),
+  model: z.string().optional(),
+  runtime: RuntimeName.optional(),
+  evidence: z
+    .object({ path: z.string(), passed: z.number().int().nonnegative(), attempts: z.number().int().nonnegative(), revision: z.string(), recordedAt: isoDate, model: z.string(), runtime: z.string(), profileId: z.string(), contractDigest: sha256Hex })
+    .optional(),
+  /** Vultr instance ids of the control plane and the execution host, when deployed. */
+  instances: z.object({ control: z.string().optional(), execution: z.string().optional() }).optional(),
+});
+export type RepairAvailability = z.infer<typeof RepairAvailability>;
+
+/**
+ * A committed live-gate receipt (`docs/evidence/live-gate/*.json`): fresh live Vultr repair attempts
+ * judged by the external comparator. Provenance is checked from the run's own events (driver,
+ * inference host), never from a supplied model name.
+ */
+export const LiveGateReceipt = z.object({
+  schemaVersion: z.literal(SCHEMA_VERSION),
+  recordedAt: isoDate,
+  revision: z.string().max(64),
+  profileId: plainId,
+  contractDigest: sha256Hex,
+  driver: z.literal("vultr"),
+  model: z.string().max(128),
+  inferenceHost: z.literal("api.vultrinference.com"),
+  runtime: RuntimeName,
+  devUnsafe: z.literal(false),
+  /** Bound identities: a receipt backs repair only for this exact image and adapter. */
+  runtimeImageId: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  adapterDigest: sha256Hex,
+  attempts: z.array(
+    z.object({
+      taskId: plainId,
+      outcome: z.string().max(64),
+      candidateDigest: sha256Hex.optional(),
+      modelCalls: z.number().int().nonnegative(),
+      modelHosts: z.array(z.string().max(256)),
+      durationMs: z.number().int().nonnegative(),
+    }),
+  ),
+  passed: z.number().int().nonnegative(),
+  total: z.number().int().nonnegative(),
+});
+export type LiveGateReceipt = z.infer<typeof LiveGateReceipt>;
 
 export const TaskView = z.object({
   task: Task,
@@ -702,7 +984,7 @@ export async function sha256(text: string | Uint8Array): Promise<string> {
 export async function candidateDigestOf(manifest: SourceManifest): Promise<string> {
   const sorted: SourceManifest = {
     ...manifest,
-    replacements: [...manifest.replacements].sort((a, b) => a.path.localeCompare(b.path)),
+    replacements: [...manifest.replacements].sort((a, b) => compareCodePoints(a.path, b.path)),
   };
   return sha256(canonicalJson(sorted));
 }
@@ -711,4 +993,282 @@ export async function candidateDigestOf(manifest: SourceManifest): Promise<strin
 export async function requestDigestOf(body: Record<string, unknown>): Promise<string> {
   const { operation, ...rest } = body as { operation?: { operationId: string } };
   return sha256(canonicalJson({ ...rest, operation: { operationId: operation?.operationId } }));
+}
+
+/**
+ * Locale-independent ordering by Unicode code point: the one ordering for every digest input.
+ * (`localeCompare` depends on the process locale; UTF-16 `<` misorders astral characters.)
+ */
+export function compareCodePoints(a: string, b: string): number {
+  const ia = a[Symbol.iterator]();
+  const ib = b[Symbol.iterator]();
+  for (;;) {
+    const x = ia.next();
+    const y = ib.next();
+    if (x.done || y.done) return x.done && y.done ? 0 : x.done ? -1 : 1;
+    const cx = x.value.codePointAt(0)!;
+    const cy = y.value.codePointAt(0)!;
+    if (cx !== cy) return cx < cy ? -1 : 1;
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Browser runner protocol (runtime/browser/PROTOCOL.md, schemaVersion 1). The runner is a fixed
+// program inside the browser sandbox; its responses are untrusted observations, never authority.
+// ---------------------------------------------------------------------------------------------
+
+export const BROWSER_LIMITS = {
+  requestBytes: 256 * 1024,
+  responseBytes: 4 * 1024 * 1024,
+  screenshotBytes: 2 * 1024 * 1024,
+  textBytes: 32 * 1024,
+  controls: 300,
+  tabs: 5,
+  urlChars: 2048,
+  typeTextChars: 8192,
+  scrollDelta: 10_000,
+} as const;
+export const BROWSER_KEYS = ["Enter", "Tab", "Escape", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "PageUp", "PageDown", "Home", "End", "Backspace"] as const;
+
+const browserRef = z.string().regex(/^[a-z0-9]{1,16}$/i);
+const browserTabId = z.string().regex(/^tab-[0-9]{1,6}$/);
+const browserGeneration = z.number().int().nonnegative();
+const browserUrl = z
+  .string()
+  .max(BROWSER_LIMITS.urlChars)
+  .refine((u) => {
+    try {
+      const parsed = new URL(u);
+      return (parsed.protocol === "https:" || parsed.protocol === "http:") && !parsed.username && !parsed.password;
+    } catch {
+      return false;
+    }
+  }, "http(s) URL without credentials");
+
+export const BrowserOp = z.discriminatedUnion("op", [
+  z.object({ op: z.literal("status"), args: z.object({}).strict().optional() }),
+  z.object({ op: z.literal("navigate"), args: z.object({ url: browserUrl }).strict() }),
+  z.object({ op: z.literal("observe"), args: z.object({}).strict().optional() }),
+  z.object({ op: z.literal("click"), args: z.object({ ref: browserRef, generation: browserGeneration }).strict() }),
+  z.object({
+    op: z.literal("type"),
+    args: z.object({ ref: browserRef, generation: browserGeneration, text: z.string().max(BROWSER_LIMITS.typeTextChars), submit: z.boolean().optional() }).strict(),
+  }),
+  z.object({ op: z.literal("key"), args: z.object({ key: z.enum(BROWSER_KEYS), generation: browserGeneration }).strict() }),
+  z.object({
+    op: z.literal("scroll"),
+    args: z.object({ dx: z.number().int().min(-BROWSER_LIMITS.scrollDelta).max(BROWSER_LIMITS.scrollDelta).optional(), dy: z.number().int().min(-BROWSER_LIMITS.scrollDelta).max(BROWSER_LIMITS.scrollDelta).optional() }).strict(),
+  }),
+  z.object({ op: z.literal("screenshot"), args: z.object({ fullPage: z.boolean().optional() }).strict().optional() }),
+  z.object({ op: z.literal("tabs.list"), args: z.object({}).strict().optional() }),
+  z.object({ op: z.literal("tabs.switch"), args: z.object({ tabId: browserTabId }).strict() }),
+  z.object({ op: z.literal("tabs.close"), args: z.object({ tabId: browserTabId }).strict() }),
+]);
+export type BrowserOp = z.infer<typeof BrowserOp>;
+export type BrowserRequest = BrowserOp & { schemaVersion: 1; id?: string };
+
+export const BrowserErrorCode = z.enum([
+  "invalid_request",
+  "unsupported_schema",
+  "unknown_op",
+  "stale_reference",
+  "pending_review",
+  "navigation_failed",
+  "action_failed",
+  "timeout",
+  "screenshot_too_large",
+  "tab_not_found",
+  "last_tab",
+  "request_too_large",
+  "response_too_large",
+  "runner_unavailable",
+  "internal_error",
+]);
+export type BrowserErrorCode = z.infer<typeof BrowserErrorCode>;
+
+/** The runner's reply. `result` is op-specific (see the *Result schemas) and untrusted. */
+export const BrowserResponse = z.discriminatedUnion("ok", [
+  z.object({ schemaVersion: z.literal(1), id: z.string().nullable(), op: z.string().nullable(), ok: z.literal(true), result: z.unknown() }),
+  z.object({ schemaVersion: z.literal(1), id: z.string().nullable(), op: z.string().nullable(), ok: z.literal(false), error: BrowserErrorCode, message: z.string().max(512) }),
+]);
+export type BrowserResponse = z.infer<typeof BrowserResponse>;
+
+export const BrowserTab = z.object({ tabId: browserTabId, url: z.string().max(BROWSER_LIMITS.urlChars * 2), title: z.string().max(1024), active: z.boolean() });
+export const BrowserControl = z.object({
+  ref: browserRef,
+  role: z.string().max(64),
+  name: z.string().max(200),
+  value: z.string().max(200).optional(),
+  disabled: z.literal(true).optional(),
+  checked: z.boolean().optional(),
+});
+export const BrowserEvent = z.object({ at: z.string(), type: z.string().max(32) }).passthrough();
+export const BrowserObserveResult = z.object({
+  generation: browserGeneration,
+  tabId: browserTabId,
+  url: z.string(),
+  title: z.string(),
+  text: z.string(),
+  textTruncated: z.boolean(),
+  controls: z.array(BrowserControl).max(BROWSER_LIMITS.controls),
+  controlsTruncated: z.boolean(),
+  tabs: z.array(BrowserTab).max(BROWSER_LIMITS.tabs),
+  events: z.array(BrowserEvent),
+  droppedEvents: z.number().int().nonnegative(),
+  pendingReview: z.boolean(),
+});
+export type BrowserObserveResult = z.infer<typeof BrowserObserveResult>;
+export const BrowserScreenshotResult = z.object({
+  png: z.string(),
+  bytes: z.number().int().positive().max(BROWSER_LIMITS.screenshotBytes),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+  sha256: sha256Hex,
+  url: z.string(),
+  tabId: browserTabId,
+  generation: browserGeneration,
+  capturedAt: z.string(),
+});
+export type BrowserScreenshotResult = z.infer<typeof BrowserScreenshotResult>;
+export const BrowserStatusResult = z.object({
+  ready: z.literal(true),
+  browserVersion: z.string(),
+  generation: browserGeneration,
+  activeTabId: browserTabId.nullable(),
+  tabCount: z.number().int().nonnegative(),
+  uid: z.number().int(),
+  proxy: z.string(),
+  sandbox: z.object({ chromiumProcesses: z.number().int(), anyNoSandboxFlag: z.boolean(), zygotePresent: z.boolean(), renderersInNestedPidNamespace: z.boolean(), renderers: z.number().int() }),
+});
+export type BrowserStatusResult = z.infer<typeof BrowserStatusResult>;
+
+/**
+ * Bounded file transfer through the browser runner: downloads land in a per-attempt tmpfs with
+ * count/size/total limits enforced while in progress; `download.read` returns the bytes (the
+ * supervisor re-verifies size and sha256); `upload` places owner-authorized bytes (sha256-checked)
+ * for a file input — never an arbitrary host path.
+ */
+export const BrowserFileOp = z.discriminatedUnion("op", [
+  z.object({ op: z.literal("download.list"), args: z.object({}).strict().optional() }),
+  z.object({ op: z.literal("download.read"), args: z.object({ downloadId: z.string().regex(/^dl-[0-9]{1,6}$/) }).strict() }),
+  z.object({
+    op: z.literal("upload"),
+    args: z
+      .object({
+        ref: browserRef,
+        generation: browserGeneration,
+        filename: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/),
+        artifactSha256: sha256Hex,
+        contentBase64: z.string().max(Math.ceil((10 * 1024 * 1024) / 3) * 4),
+      })
+      .strict(),
+  }),
+]);
+export type BrowserFileOp = z.infer<typeof BrowserFileOp>;
+export const BrowserAnyOp = z.union([BrowserOp, BrowserFileOp]);
+export type BrowserAnyOp = z.infer<typeof BrowserAnyOp>;
+
+/** Supervisor route body: one runner operation on a live browser attempt. */
+export const BrowserOpRequest = z.object({ ref: AttemptRef, operation: Operation, request: BrowserAnyOp });
+/**
+ * Supervisor reply: the runner's response plus the supervisor's own observation of the exec.
+ * `interrupted` means the runner was lost mid-operation: the outcome is unknown and the attempt
+ * is closed; the caller must never replay the operation.
+ */
+export const BrowserOpResult = z.object({
+  response: BrowserResponse.nullable(),
+  status: z.enum(["completed", "interrupted", "refused"]),
+  durationMs: z.number().int().nonnegative(),
+  generationBefore: browserGeneration.nullable(),
+});
+export type BrowserOpResult = z.infer<typeof BrowserOpResult>;
+
+/** What the supervisor established when it handed out a browser attempt (GET /attempts/:id/browser). */
+export const BrowserEvidence = z.object({
+  status: BrowserStatusResult,
+  browserInspection: RuntimeInspection,
+  egressInspection: RuntimeInspection,
+  probe: IsolationProbe.optional(),
+  networks: z.object({ internal: z.string(), egress: z.string() }),
+  egressAllow: z.array(z.string()),
+});
+export type BrowserEvidence = z.infer<typeof BrowserEvidence>;
+export const EgressLog = z.object({ decisions: z.array(EgressDecision).max(200), summary: EgressSummary });
+export type EgressLog = z.infer<typeof EgressLog>;
+
+// ---------------------------------------------------------------------------------------------
+// Human control and supported final actions (40 Stage 5)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Exclusive browser control. Taking control revokes agent dispatch, settles the in-flight
+ * operation, then grants one human session; releasing invalidates every snapshot taken before so
+ * the agent must observe afresh. Human actions keep the task's destination policy, deadline,
+ * artifact and approval rules: a manual click is never an approval.
+ */
+export const ControlState = z.object({
+  holder: z.enum(["agent", "human", "transferring"]),
+  /** The session owner id holding control while holder is "human". */
+  humanOwner: z.string().optional(),
+  since: isoDate,
+  /** Browser snapshot generation at the handover; refs from before it are stale. */
+  fenceGeneration: z.number().int().nonnegative().optional(),
+  reason: z.string().max(512).optional(),
+});
+export type ControlState = z.infer<typeof ControlState>;
+
+/**
+ * A human browser action, sent through the control plane (never to the runner directly). Uploads
+ * name one of the caller's own artifacts; the control plane supplies the bytes.
+ */
+export const HumanBrowserAction = z.object({
+  request: z.union([
+    BrowserOp,
+    z.object({ op: z.literal("download.list"), args: z.object({}).strict().optional() }),
+    z.object({ op: z.literal("download.read"), args: z.object({ downloadId: z.string().regex(/^dl-[0-9]{1,6}$/) }).strict() }),
+    z.object({ op: z.literal("upload"), args: z.object({ ref: browserRef, generation: browserGeneration, artifactId: plainId }).strict() }),
+  ]),
+});
+export type HumanBrowserAction = z.infer<typeof HumanBrowserAction>;
+
+/**
+ * A proposed final action (a form submission to a supported destination), bound to exactly one
+ * owner, task, attempt, browser generation, destination origin and normalized payload. Approval
+ * is a one-use atomic claim; any change, expiry or replay fails closed.
+ */
+export const ActionProposal = z.object({
+  schemaVersion: z.literal(SCHEMA_VERSION),
+  id: plainId,
+  owner: z.string(),
+  taskId: plainId,
+  attemptId: plainId,
+  browserGeneration: z.number().int().nonnegative(),
+  /** Origin of the supported destination, e.g. https://forms.example.org */
+  destination: z.string().max(512),
+  /** The adapter that enforces the approval at the destination (only supported adapters exist). */
+  adapter: z.literal("airlock-forms-v1"),
+  formId: z.string().max(128),
+  /** Normalized fields the model proposes to submit (name → value); bounded. */
+  fields: z.record(z.string().max(128), z.string().max(4096)),
+  payloadDigest: sha256Hex,
+  summary: z.string().max(2000),
+  createdAt: isoDate,
+  expiresAt: isoDate,
+  status: z.enum(["pending", "approved", "rejected", "expired", "claimed", "submitted", "confirmed", "outcome_unknown", "failed"]),
+  decidedBy: z.string().optional(),
+  decidedAt: isoDate.optional(),
+  /** Receipt from the destination after submission (read back by the controller). */
+  receipt: z.object({ receiptId: z.string().max(128), payloadDigest: sha256Hex, at: isoDate }).optional(),
+});
+export type ActionProposal = z.infer<typeof ActionProposal>;
+
+export const ApprovalDecision = z.object({
+  decision: z.enum(["approve", "reject"]),
+  /** Must equal the proposal's payloadDigest: the approver approves exactly what they saw. */
+  payloadDigest: sha256Hex,
+});
+
+/** payloadDigest = SHA256(canonical {adapter, destination, formId, fields}). */
+export async function payloadDigestOf(p: { adapter: string; destination: string; formId: string; fields: Record<string, string> }): Promise<string> {
+  return sha256(canonicalJson({ adapter: p.adapter, destination: p.destination, formId: p.formId, fields: p.fields }));
 }

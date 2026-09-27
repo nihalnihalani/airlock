@@ -13,7 +13,11 @@ import {
   AttemptState,
   AuthorToolResult,
   BlastRadiusCard,
+  BrowserEvidence,
+  BrowserOpResult,
+  CollectOutputsResult,
   DestroyResult as DestroyResultSchema,
+  EgressLog,
   FreezeResult as FreezeResultSchema,
   HostCheck,
   InvokeResult,
@@ -21,6 +25,7 @@ import {
   type AttemptRef,
   type AdapterRequest,
   type AuthorToolArgs,
+  type BrowserAnyOp,
   type CandidateBundle,
   type Operation,
   type SandboxRole,
@@ -28,6 +33,8 @@ import {
 import { log } from "./log.ts";
 
 export class SupervisorError extends Error {
+  /** The supervisor's machine-readable refusal code (e.g. unsupported_profile, probe_failed), when it sent one. */
+  code?: string;
   constructor(
     message: string,
     readonly status: number,
@@ -59,20 +66,28 @@ export class SupervisorUnavailableError extends SupervisorError {
   }
 }
 
-export const HealthResponse = z.object({
-  status: z.enum(["ok", "degraded"]),
-  docker: z.boolean(),
-  host: HostCheck,
-});
+/** 429: the execution host has no admission capacity for another sandbox right now. Retryable. */
+export class SupervisorCapacityError extends SupervisorError {
+  constructor(message: string, operationId?: string) {
+    super(message, 429, operationId);
+    this.name = "SupervisorCapacityError";
+  }
+}
+
+/** Unauthenticated liveness only; the host check is on the authenticated `/host`. */
+export const HealthResponse = z.object({ ok: z.boolean() });
 export type HealthResponse = z.infer<typeof HealthResponse>;
 
 export interface SupervisorClient {
   health(signal?: AbortSignal): Promise<HealthResponse>;
   host(signal?: AbortSignal): Promise<HostCheck>;
-  createAttempt(
-    input: { ref: AttemptRef; profileId: string; role: SandboxRole; absoluteDeadline: string },
-    opts?: CallOptions,
-  ): Promise<AttemptState>;
+  createAttempt(input: CreateAttemptInput, opts?: CallOptions): Promise<AttemptState>;
+  /**
+   * Extend an attempt's execution authorization (contracts `RenewRequest`). The supervisor never
+   * extends past the absolute deadline and never revives a revoked/destroyed attempt: 404/409 mean
+   * the authority is gone.
+   */
+  renew(input: { ref: AttemptRef; authorizedUntil: string }, opts?: CallOptions): Promise<AttemptState>;
   authorTool(input: { ref: AttemptRef; args: AuthorToolArgs }, opts?: CallOptions): Promise<AuthorToolResult>;
   freeze(input: { ref: AttemptRef }, opts?: CallOptions): Promise<FreezeResult>;
   revoke(input: { ref: AttemptRef }, opts?: CallOptions): Promise<AttemptState>;
@@ -91,6 +106,72 @@ export interface SupervisorClient {
     opts?: CallOptions,
   ): Promise<InvokeResult>;
   hostile(input: { profileId: string; command: string }, opts?: CallOptions): Promise<BlastRadiusCard>;
+  /**
+   * One runner operation on a live browser attempt (`POST /attempts/:id/browser`). `interrupted`
+   * means the runner was lost: the outcome is unknown, the attempt is closed, never replay it.
+   */
+  browserOp(input: { ref: AttemptRef; request: BrowserAnyOp }, opts?: CallOptions): Promise<BrowserOpResult>;
+  /** What the supervisor established when it created the browser attempt (`GET /attempts/:id/browser`). */
+  browserEvidence(attemptId: string, signal?: AbortSignal): Promise<BrowserEvidence>;
+  /** The per-attempt egress proxy's decisions (`GET /attempts/:id/egress`). */
+  egressLog(attemptId: string, signal?: AbortSignal): Promise<EgressLog>;
+  /** Stop an analysis/node sandbox and collect `outputs/` read-only (`POST /attempts/:id/collect-outputs`). */
+  collectOutputs(input: { ref: AttemptRef }, opts?: CallOptions): Promise<CollectOutputsResult>;
+  /**
+   * The supervisor journal's record of one operation (`GET /operations/:id`, M8): kind, state,
+   * recorded HTTP status, whether a result is recorded, whether a restart cut it off, and its
+   * binding. Never the result body. 404 (SupervisorNotFoundError): the supervisor has no record.
+   */
+  getOperation(operationId: string, signal?: AbortSignal): Promise<SupervisorOperationRecord>;
+}
+
+/** `GET /operations/:id` (apps/supervisor/src/operations.ts `OperationRecord`). */
+export const SupervisorOperationRecord = z.object({
+  operationId: z.string(),
+  kind: z.string(),
+  state: z.enum(["pending", "completed"]),
+  httpStatus: z.number().int().nullable(),
+  resultRecorded: z.boolean(),
+  interruptedByRestart: z.boolean(),
+  taskId: z.string().nullable(),
+  attemptId: z.string().nullable(),
+  generation: z.number().int().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type SupervisorOperationRecord = z.infer<typeof SupervisorOperationRecord>;
+
+/**
+ * C41 O2: what the supervisor's journal says about an operation the controller journaled but never
+ * saw acknowledged. Advisory only: the controller never replays it and never records its result
+ * (the sandbox it ran in is discarded). Returns the phrase recorded in the recovery event.
+ */
+export async function supervisorOperationStatus(
+  supervisor: Pick<SupervisorClient, "getOperation">,
+  operationId: string,
+  signal?: AbortSignal,
+): Promise<{ status: "completed" | "interrupted" | "pending" | "no-record" | "unknown"; text: string; record?: SupervisorOperationRecord }> {
+  try {
+    const record = await supervisor.getOperation(operationId, signal);
+    if (record.interruptedByRestart) return { status: "interrupted", text: "supervisor: interrupted by a supervisor restart (effect unknown)", record };
+    if (record.state === "completed")
+      return { status: "completed", text: `supervisor: completed${record.httpStatus !== null ? ` (HTTP ${record.httpStatus})` : ""}; result discarded, not replayed`, record };
+    return { status: "pending", text: "supervisor: still pending (no receipt; effect unknown)", record };
+  } catch (error) {
+    if (error instanceof SupervisorNotFoundError) return { status: "no-record", text: "supervisor has no record" };
+    const message = error instanceof Error ? error.message : String(error);
+    return { status: "unknown", text: `supervisor record unknown: ${message.slice(0, 160)}` };
+  }
+}
+
+export interface CreateAttemptInput {
+  ref: AttemptRef;
+  profileId: string;
+  role: SandboxRole;
+  absoluteDeadline: string;
+  authorizedUntil?: string;
+  /** Browser role only: destinations the attempt's egress proxy allows (from task policy, never from the model). */
+  egressAllow?: string[];
 }
 
 export interface CallOptions {
@@ -99,9 +180,15 @@ export interface CallOptions {
   operationId?: string;
   /** Per-request timeout (ms). Defaults depend on the call. */
   timeoutMs?: number;
+  /**
+   * Called once with the call's Operation after it is built and BEFORE the first byte is sent, so
+   * the caller can persist the dispatch intent (operation journal). If it throws, nothing is sent.
+   */
+  beforeSend?: (operation: Operation) => Promise<void> | void;
 }
 
 export type DestroyResult = z.infer<typeof DestroyResultSchema>;
+export type { BrowserEvidence, BrowserOpResult, CollectOutputsResult, EgressLog } from "@airlock/contracts";
 export type FreezeResult = z.infer<typeof FreezeResultSchema>;
 
 export function newOperationId(): string {
@@ -119,9 +206,12 @@ const DEFAULT_TIMEOUTS = {
   authorTool: 90_000,
   freeze: 120_000,
   revoke: 60_000,
+  renew: 15_000,
   destroy: 60_000,
   invoke: 180_000,
   hostile: 120_000,
+  browserOp: 90_000,
+  collectOutputs: 120_000,
 } as const;
 
 export interface HttpSupervisorClientOptions {
@@ -161,8 +251,14 @@ export class HttpSupervisorClient implements SupervisorClient {
   listAttempts(signal?: AbortSignal) {
     return this.get("/attempts", z.array(AttemptState), signal, true);
   }
-  createAttempt(input: { ref: AttemptRef; profileId: string; role: SandboxRole; absoluteDeadline: string }, opts?: CallOptions) {
-    return this.mutate("/attempts", input, AttemptState, DEFAULT_TIMEOUTS.createAttempt, opts);
+  createAttempt(input: CreateAttemptInput, opts?: CallOptions) {
+    const body: Record<string, unknown> = { ...input };
+    if (input.authorizedUntil === undefined) delete body.authorizedUntil;
+    if (input.egressAllow === undefined) delete body.egressAllow;
+    return this.mutate("/attempts", body, AttemptState, DEFAULT_TIMEOUTS.createAttempt, opts);
+  }
+  renew(input: { ref: AttemptRef; authorizedUntil: string }, opts?: CallOptions) {
+    return this.mutate(`/attempts/${encodeURIComponent(input.ref.attemptId)}/renew`, input, AttemptState, DEFAULT_TIMEOUTS.renew, opts);
   }
   authorTool(input: { ref: AttemptRef; args: AuthorToolArgs }, opts?: CallOptions) {
     return this.mutate(`/attempts/${encodeURIComponent(input.ref.attemptId)}/tool`, input, AuthorToolResult, DEFAULT_TIMEOUTS.authorTool, opts);
@@ -193,6 +289,24 @@ export class HttpSupervisorClient implements SupervisorClient {
   }
   hostile(input: { profileId: string; command: string }, opts?: CallOptions) {
     return this.mutate("/hostile", input, BlastRadiusCard, DEFAULT_TIMEOUTS.hostile, opts);
+  }
+  browserOp(input: { ref: AttemptRef; request: BrowserAnyOp }, opts?: CallOptions) {
+    return this.mutate(`/attempts/${encodeURIComponent(input.ref.attemptId)}/browser`, input, BrowserOpResult, DEFAULT_TIMEOUTS.browserOp, opts);
+  }
+  async browserEvidence(attemptId: string, signal?: AbortSignal) {
+    assertPlainId(attemptId);
+    return this.get(`/attempts/${encodeURIComponent(attemptId)}/browser`, BrowserEvidence, signal, true);
+  }
+  async egressLog(attemptId: string, signal?: AbortSignal) {
+    assertPlainId(attemptId);
+    return this.get(`/attempts/${encodeURIComponent(attemptId)}/egress`, EgressLog, signal, true);
+  }
+  async getOperation(operationId: string, signal?: AbortSignal) {
+    assertPlainId(operationId);
+    return this.get(`/operations/${encodeURIComponent(operationId)}`, SupervisorOperationRecord, signal, true);
+  }
+  collectOutputs(input: { ref: AttemptRef }, opts?: CallOptions) {
+    return this.mutate(`/attempts/${encodeURIComponent(input.ref.attemptId)}/collect-outputs`, input, CollectOutputsResult, DEFAULT_TIMEOUTS.collectOutputs, opts);
   }
 
   private headers(json: boolean): Record<string, string> {
@@ -240,6 +354,9 @@ export class HttpSupervisorClient implements SupervisorClient {
   ): Promise<T> {
     const operation = await buildOperation(body, opts?.operationId);
     const payload = JSON.stringify({ ...body, operation });
+    // The intent is recorded before anything leaves this process (37 §Cancellation: a crash between
+    // intent and acknowledgement must be reconcilable by operation id, never re-executed blindly).
+    if (opts?.beforeSend) await opts.beforeSend(operation);
     const timeoutMs = opts?.timeoutMs ?? defaultTimeout;
     let lastError: unknown;
     for (let attempt = 0; attempt <= this.retries; attempt++) {
@@ -291,11 +408,19 @@ export class HttpSupervisorClient implements SupervisorClient {
 
   private async decode<T>(response: Response, schema: z.ZodType<T>, operationId?: string): Promise<T> {
     if (!response.ok) {
-      const message = await errorText(response);
-      if (response.status === 409) throw new SupervisorFenceError(message, operationId);
-      if (response.status === 404) throw new SupervisorNotFoundError(message, operationId);
-      if (response.status === 503) throw new SupervisorUnavailableError(message, operationId);
-      throw new SupervisorError(message, response.status, operationId);
+      const { message, code } = await errorBody(response);
+      const error =
+        response.status === 409
+          ? new SupervisorFenceError(message, operationId)
+          : response.status === 404
+            ? new SupervisorNotFoundError(message, operationId)
+            : response.status === 429
+              ? new SupervisorCapacityError(message, operationId)
+              : response.status === 503
+                ? new SupervisorUnavailableError(message, operationId)
+                : new SupervisorError(message, response.status, operationId);
+      if (code) error.code = code;
+      throw error;
     }
     let json: unknown;
     try {
@@ -308,6 +433,22 @@ export class HttpSupervisorClient implements SupervisorClient {
       throw new SupervisorError(`Supervisor response failed validation: ${parsed.error.issues[0]?.message ?? "invalid"}`, 502, operationId);
     }
     return parsed.data;
+  }
+}
+
+async function errorBody(response: Response): Promise<{ message: string; code?: string }> {
+  try {
+    const text = (await response.text()).slice(0, 2000);
+    try {
+      const json = JSON.parse(text) as { error?: unknown; code?: unknown };
+      const code = typeof json?.code === "string" && /^[a-z_]{1,64}$/.test(json.code) ? json.code : undefined;
+      if (json && typeof json.error === "string") return { message: `supervisor ${response.status}: ${json.error}`, ...(code ? { code } : {}) };
+    } catch {
+      // fall through to raw text
+    }
+    return { message: `supervisor ${response.status}: ${text || response.statusText}` };
+  } catch {
+    return { message: `supervisor ${response.status}` };
   }
 }
 

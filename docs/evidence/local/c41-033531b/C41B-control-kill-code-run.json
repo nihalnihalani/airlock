@@ -1,0 +1,536 @@
+{
+  "id": "C41B-control-kill-code-run",
+  "requirement": "C41: SIGKILL the control plane during an analysis-sandbox code_run (sleep 20, then append one marker line) → the uncertain run is reconciled, never recorded as a success; any re-run is a new operation in a fresh sandbox; the marker holds exactly one line; cleanup confirmed",
+  "command": "bun scripts/acceptance/local.ts C41B-control-kill-code-run",
+  "environment": "real local runc (dev-unsafe, Colima); stack = git archive of 033531b34aeb",
+  "timestamp": "2026-09-27T13:47:50.709Z",
+  "revision": "033531b34aebf221836c79fe2e3204e082232803",
+  "result": "PASS",
+  "evidence": {
+    "timeline": {
+      "taskId": "task-4f23ddad0d41d85c",
+      "uncertainOperation": "op-bd10781f8d6f901295aae441",
+      "oldAttempt": "att-b1948034f05ef5cf1916",
+      "oldContainer": "airlock-analysis-task-4f23ddad0d41d85c-att-b1948034f05ef5cf1916",
+      "containersBefore": [
+        "airlock-analysis-task-4f23ddad0d41d85c-att-b1948034f05ef5cf1916 Up 2 seconds"
+      ],
+      "kill": {
+        "process": "control",
+        "pid": 97467,
+        "signal": "SIGKILL",
+        "at": "2026-09-27T13:46:27.660Z",
+        "dead": true
+      },
+      "whileDown": {
+        "controlHealth": "unreachable (Unable to connect. Is the computer able to access the url?)",
+        "containers": [
+          "airlock-analysis-task-4f23ddad0d41d85c-att-b1948034f05ef5cf1916 Up 5 seconds"
+        ],
+        "supervisorAttempts": [
+          {
+            "attemptId": "att-b1948034f05ef5cf1916",
+            "status": "running"
+          }
+        ],
+        "topBefore": [
+          "PID                 ELAPSED             COMMAND",
+          "287601              00:02               /usr/bin/sleep infinity",
+          "287704              00:02               /usr/bin/timeout --signal=TERM --kill-after=2s 30s /bin/bash --noprofile --norc -c /opt/airlock/run.sh code/slow.py",
+          "287710              00:02               /usr/local/bin/python3 -E -s -B code/slow.py"
+        ],
+        "topWhileDown": [
+          "PID                 ELAPSED             COMMAND",
+          "287601              00:05               /usr/bin/sleep infinity",
+          "287704              00:05               /usr/bin/timeout --signal=TERM --kill-after=2s 30s /bin/bash --noprofile --norc -c /opt/airlock/run.sh code/slow.py",
+          "287710              00:05               /usr/local/bin/python3 -E -s -B code/slow.py"
+        ]
+      },
+      "restart": {
+        "at": "2026-09-27T13:46:31.636Z",
+        "code": 0,
+        "ms": 818,
+        "lines": [
+          "supervisor already running (pid 97195)",
+          "fixtures already running (pid 94333)"
+        ],
+        "err": ""
+      }
+    },
+    "supervisorOperationRecord": {
+      "beforeKill": {
+        "status": 200,
+        "body": {
+          "operationId": "op-bd10781f8d6f901295aae441",
+          "kind": "authorTool",
+          "state": "pending",
+          "httpStatus": null,
+          "resultRecorded": false,
+          "interruptedByRestart": false,
+          "taskId": "task-4f23ddad0d41d85c",
+          "attemptId": "att-b1948034f05ef5cf1916",
+          "generation": 1,
+          "createdAt": "2026-09-27T13:46:25.110Z",
+          "updatedAt": "2026-09-27T13:46:25.110Z"
+        }
+      },
+      "atEnd": {
+        "status": 200,
+        "body": {
+          "operationId": "op-bd10781f8d6f901295aae441",
+          "kind": "authorTool",
+          "state": "completed",
+          "httpStatus": 200,
+          "resultRecorded": true,
+          "interruptedByRestart": false,
+          "taskId": "task-4f23ddad0d41d85c",
+          "attemptId": "att-b1948034f05ef5cf1916",
+          "generation": 1,
+          "createdAt": "2026-09-27T13:46:25.110Z",
+          "updatedAt": "2026-09-27T13:46:45.164Z"
+        }
+      }
+    },
+    "final": {
+      "status": "done",
+      "outcome": "RESULT_VERIFIED",
+      "recoveries": 1,
+      "cleanup": {
+        "at": "2026-09-27T13:47:48.063Z",
+        "detail": "supervisor confirmed teardown of 2 attempt(s)",
+        "status": "confirmed"
+      },
+      "attempts": [
+        {
+          "attemptId": "att-b1948034f05ef5cf1916",
+          "generation": 1,
+          "role": "analysis",
+          "status": "destroyed"
+        },
+        {
+          "attemptId": "att-2f9ee9d27596d37421ff",
+          "generation": 2,
+          "role": "analysis",
+          "status": "destroyed"
+        }
+      ],
+      "markerLines": [
+        "run 9cc536fc7b3079c5 host=sandbox started=1790516845.723 finished=1790516865.731"
+      ],
+      "artifacts": [
+        {
+          "id": "art-59d4ee0cf5d6916f9740",
+          "kind": "output",
+          "filename": "marker.txt",
+          "sha256": "d1626c27b559db4f4f29d697657b4872cd381c9be18807c7c85924fd8bc9d1fe",
+          "attemptId": "att-2f9ee9d27596d37421ff"
+        }
+      ]
+    },
+    "uncertainOperationTrail": [
+      {
+        "seq": 11,
+        "at": "2026-09-27T13:46:25.109Z",
+        "kind": "tool",
+        "title": "code_run started",
+        "tool": "code_run",
+        "opState": "started",
+        "operationId": "op-bd10781f8d6f901295aae441",
+        "attemptId": "att-b1948034f05ef5cf1916"
+      }
+    ],
+    "supervisorLogOldAttempt": [
+      "{\"ts\":\"2026-09-27T13:46:25.100Z\",\"level\":\"info\",\"app\":\"supervisor\",\"msg\":\"attempt running\",\"attemptId\":\"att-b1948034f05ef5cf1916\",\"taskId\":\"task-4f23ddad0d41d85c\",\"role\":\"analysis\",\"container\":\"airlock-analysis-task-4f23ddad0d41d85c-att-b1948034f05ef5cf1916\",\"runtime\":\"runc\",\"devUnsafe\":true,\"deadline\":\"2026-09-27T14:01:24.900Z\"}",
+      "{\"ts\":\"2026-09-27T13:47:04.905Z\",\"level\":\"info\",\"app\":\"supervisor\",\"msg\":\"attempt authorization lapsed without renewal; revoking and stopping\",\"attemptId\":\"att-b1948034f05ef5cf1916\",\"container\":\"airlock-analysis-task-4f23ddad0d41d85c-att-b1948034f05ef5cf1916\",\"deadline\":\"2026-09-27T14:01:24.900Z\",\"authorizedUntil\":\"2026-09-27T13:47:04.901Z\"}",
+      "{\"ts\":\"2026-09-27T13:47:25.462Z\",\"level\":\"info\",\"app\":\"supervisor\",\"msg\":\"attempt revoked and stopped\",\"attemptId\":\"att-b1948034f05ef5cf1916\",\"container\":\"airlock-analysis-task-4f23ddad0d41d85c-att-b1948034f05ef5cf1916\",\"status\":\"revoked\"}",
+      "{\"ts\":\"2026-09-27T13:47:25.497Z\",\"level\":\"info\",\"app\":\"supervisor\",\"msg\":\"attempt destroyed\",\"attemptId\":\"att-b1948034f05ef5cf1916\",\"container\":\"airlock-analysis-task-4f23ddad0d41d85c-att-b1948034f05ef5cf1916\",\"volume\":\"airlock-ws-task-4f23ddad0d41d85c-att-b1948034f05ef5cf1916\",\"containersRemaining\":[],\"volumesRemaining\":[]}"
+    ],
+    "events": [
+      {
+        "seq": 1,
+        "at": "2026-09-27T13:46:24.026Z",
+        "kind": "lifecycle",
+        "title": "Task created",
+        "detail": "general task, profile analysis v1; diagnostic (scripted:acc-c41-slow-code), not a model run"
+      },
+      {
+        "seq": 2,
+        "at": "2026-09-27T13:46:24.890Z",
+        "kind": "phase",
+        "title": "prepare",
+        "detail": "general task profile analysis v1; tools: code_write, code_run, code_read, files_list, submit_result"
+      },
+      {
+        "seq": 3,
+        "at": "2026-09-27T13:46:24.892Z",
+        "kind": "check",
+        "title": "dev-unsafe runtime",
+        "detail": "supervisor host runs runc with AIRLOCK_DEV_UNSAFE; results are not a deployment measurement"
+      },
+      {
+        "seq": 4,
+        "at": "2026-09-27T13:46:24.894Z",
+        "kind": "phase",
+        "title": "execute",
+        "detail": "model loop for goal under profile analysis"
+      },
+      {
+        "seq": 5,
+        "at": "2026-09-27T13:46:24.898Z",
+        "kind": "model",
+        "title": "Model turn 1",
+        "detail": "Writing the program."
+      },
+      {
+        "seq": 6,
+        "at": "2026-09-27T13:46:24.901Z",
+        "kind": "lifecycle",
+        "title": "Creating analysis sandbox",
+        "detail": "attempt att-b1948034f05ef5cf1916, generation 1, deadline 2026-09-27T14:01:24.900Z; no network",
+        "attemptId": "att-b1948034f05ef5cf1916"
+      },
+      {
+        "seq": 7,
+        "at": "2026-09-27T13:46:25.101Z",
+        "kind": "lifecycle",
+        "title": "analysis sandbox created",
+        "detail": "container airlock-analysis-task-4f23ddad0d41d85c-att-b1948034f05ef5cf1916; runtime runc (dev-unsafe); probe all BLOCKED",
+        "opState": "completed",
+        "operationId": "op-d2f7fe27d7c22a136b709a43",
+        "attemptId": "att-b1948034f05ef5cf1916"
+      },
+      {
+        "seq": 8,
+        "at": "2026-09-27T13:46:25.103Z",
+        "kind": "tool",
+        "title": "code_write started",
+        "tool": "code_write",
+        "opState": "started",
+        "operationId": "op-3bdd7dd0d822bb60c8a341a5",
+        "attemptId": "att-b1948034f05ef5cf1916"
+      },
+      {
+        "seq": 9,
+        "at": "2026-09-27T13:46:25.107Z",
+        "kind": "tool",
+        "title": "code_write code/slow.py",
+        "detail": "493 bytes (sha256 dcf6d53f049f0c775daaa3bcded984733d52f50a734513d3f3150e15bbe2776f)\n# ACCEPTANCE diagnostic (verifier_tester, C41): sleep 20 s, then APPEND one line to outputs/marker.txt.\n# Appending (not overwriting) makes a duplicate execution in the same workspace visible as two lines.\nimport os, secrets, socket, time\nt0 = time.time()\ntime.sleep(20)\nos.makedirs(\"outputs\", exist_ok=True)\nwith op",
+        "tool": "code_write",
+        "opState": "completed",
+        "operationId": "op-3bdd7dd0d822bb60c8a341a5",
+        "attemptId": "att-b1948034f05ef5cf1916"
+      },
+      {
+        "seq": 10,
+        "at": "2026-09-27T13:46:25.108Z",
+        "kind": "model",
+        "title": "Model turn 2",
+        "detail": "Running it."
+      },
+      {
+        "seq": 11,
+        "at": "2026-09-27T13:46:25.109Z",
+        "kind": "tool",
+        "title": "code_run started",
+        "tool": "code_run",
+        "opState": "started",
+        "operationId": "op-bd10781f8d6f901295aae441",
+        "attemptId": "att-b1948034f05ef5cf1916"
+      },
+      {
+        "seq": 12,
+        "at": "2026-09-27T13:47:25.449Z",
+        "kind": "phase",
+        "title": "prepare",
+        "detail": "general task profile analysis v1; tools: code_write, code_run, code_read, files_list, submit_result"
+      },
+      {
+        "seq": 13,
+        "at": "2026-09-27T13:47:25.452Z",
+        "kind": "check",
+        "title": "dev-unsafe runtime",
+        "detail": "supervisor host runs runc with AIRLOCK_DEV_UNSAFE; results are not a deployment measurement"
+      },
+      {
+        "seq": 14,
+        "at": "2026-09-27T13:47:25.454Z",
+        "kind": "lifecycle",
+        "title": "Recovering task",
+        "detail": "recovery 1 of 2; the previous run stopped in phase execute",
+        "recoveries": 1
+      },
+      {
+        "seq": 15,
+        "at": "2026-09-27T13:47:25.456Z",
+        "kind": "lifecycle",
+        "title": "Reconciled outstanding supervisor operations",
+        "detail": "authorTool op-bd10781f8d6f901295aae441 (intent): not replayed"
+      },
+      {
+        "seq": 16,
+        "at": "2026-09-27T13:47:25.498Z",
+        "kind": "lifecycle",
+        "title": "Discarded attempt from an earlier run",
+        "detail": "analysis att-b1948034f05ef5cf1916: revoked; destroyed; remaining containers=0 volumes=0",
+        "opState": "completed",
+        "attemptId": "att-b1948034f05ef5cf1916"
+      },
+      {
+        "seq": 17,
+        "at": "2026-09-27T13:47:25.501Z",
+        "kind": "phase",
+        "title": "execute",
+        "detail": "model loop for goal under profile analysis"
+      },
+      {
+        "seq": 18,
+        "at": "2026-09-27T13:47:25.504Z",
+        "kind": "model",
+        "title": "Model turn 3",
+        "detail": "Writing the program."
+      },
+      {
+        "seq": 19,
+        "at": "2026-09-27T13:47:25.507Z",
+        "kind": "lifecycle",
+        "title": "Creating analysis sandbox",
+        "detail": "attempt att-2f9ee9d27596d37421ff, generation 2, deadline 2026-09-27T14:02:25.507Z; no network",
+        "attemptId": "att-2f9ee9d27596d37421ff"
+      },
+      {
+        "seq": 20,
+        "at": "2026-09-27T13:47:25.698Z",
+        "kind": "lifecycle",
+        "title": "analysis sandbox created",
+        "detail": "container airlock-analysis-task-4f23ddad0d41d85c-att-2f9ee9d27596d37421ff; runtime runc (dev-unsafe); probe all BLOCKED",
+        "opState": "completed",
+        "operationId": "op-bfc6b2bb4f2376cb9b00d314",
+        "attemptId": "att-2f9ee9d27596d37421ff"
+      },
+      {
+        "seq": 21,
+        "at": "2026-09-27T13:47:25.699Z",
+        "kind": "tool",
+        "title": "code_write started",
+        "tool": "code_write",
+        "opState": "started",
+        "operationId": "op-544a7f537f89bcbfd834fe9b",
+        "attemptId": "att-2f9ee9d27596d37421ff"
+      },
+      {
+        "seq": 22,
+        "at": "2026-09-27T13:47:25.704Z",
+        "kind": "tool",
+        "title": "code_write code/slow.py",
+        "detail": "493 bytes (sha256 dcf6d53f049f0c775daaa3bcded984733d52f50a734513d3f3150e15bbe2776f)\n# ACCEPTANCE diagnostic (verifier_tester, C41): sleep 20 s, then APPEND one line to outputs/marker.txt.\n# Appending (not overwriting) makes a duplicate execution in the same workspace visible as two lines.\nimport os, secrets, socket, time\nt0 = time.time()\ntime.sleep(20)\nos.makedirs(\"outputs\", exist_ok=True)\nwith op",
+        "tool": "code_write",
+        "opState": "completed",
+        "operationId": "op-544a7f537f89bcbfd834fe9b",
+        "attemptId": "att-2f9ee9d27596d37421ff"
+      },
+      {
+        "seq": 23,
+        "at": "2026-09-27T13:47:25.705Z",
+        "kind": "model",
+        "title": "Model turn 4",
+        "detail": "Running it."
+      },
+      {
+        "seq": 24,
+        "at": "2026-09-27T13:47:25.707Z",
+        "kind": "tool",
+        "title": "code_run started",
+        "tool": "code_run",
+        "opState": "started",
+        "operationId": "op-749ebf2582e8a3097152351b",
+        "attemptId": "att-2f9ee9d27596d37421ff"
+      },
+      {
+        "seq": 25,
+        "at": "2026-09-27T13:47:45.768Z",
+        "kind": "exec",
+        "title": "code_run code/slow.py: succeeded",
+        "detail": "succeeded exit=0 20059ms\nstdout:\nmarker written\n\nstderr:\n",
+        "tool": "code_run",
+        "opState": "completed",
+        "operationId": "op-749ebf2582e8a3097152351b",
+        "attemptId": "att-2f9ee9d27596d37421ff",
+        "status": "succeeded"
+      },
+      {
+        "seq": 26,
+        "at": "2026-09-27T13:47:45.771Z",
+        "kind": "model",
+        "title": "Model turn 5",
+        "detail": "Submitting."
+      },
+      {
+        "seq": 27,
+        "at": "2026-09-27T13:47:45.772Z",
+        "kind": "tool",
+        "title": "submit_result",
+        "detail": "Acceptance diagnostic (C41): a slow run wrote one marker line.\noutputs: outputs/marker.txt\nsources: (none)",
+        "tool": "submit_result",
+        "opState": "completed"
+      },
+      {
+        "seq": 28,
+        "at": "2026-09-27T13:47:45.774Z",
+        "kind": "phase",
+        "title": "freeze",
+        "detail": "stopping the sandboxes and collecting outputs/ read-only"
+      },
+      {
+        "seq": 29,
+        "at": "2026-09-27T13:47:45.776Z",
+        "kind": "tool",
+        "title": "submit_result started",
+        "tool": "submit_result",
+        "opState": "started",
+        "operationId": "op-28ed8c17e599a8cabb0808c5",
+        "attemptId": "att-2f9ee9d27596d37421ff"
+      },
+      {
+        "seq": 30,
+        "at": "2026-09-27T13:47:48.032Z",
+        "kind": "lifecycle",
+        "title": "Code sandbox stopped and outputs collected",
+        "detail": "stopConfirmed=true files=1 rejected=0",
+        "tool": "collect-outputs",
+        "opState": "completed",
+        "operationId": "op-28ed8c17e599a8cabb0808c5",
+        "attemptId": "att-2f9ee9d27596d37421ff"
+      },
+      {
+        "seq": 31,
+        "at": "2026-09-27T13:47:48.034Z",
+        "kind": "artifact",
+        "title": "Output stored outputs/marker.txt",
+        "detail": "art-59d4ee0cf5d6916f9740: 81 bytes, sha256 d1626c27b559db4f4f29d697657b4872cd381c9be18807c7c85924fd8bc9d1fe"
+      },
+      {
+        "seq": 32,
+        "at": "2026-09-27T13:47:48.059Z",
+        "kind": "lifecycle",
+        "title": "analysis sandbox destroyed (result submitted)",
+        "detail": "revoked; destroyed; remaining containers=0 volumes=0",
+        "opState": "completed",
+        "attemptId": "att-2f9ee9d27596d37421ff"
+      },
+      {
+        "seq": 33,
+        "at": "2026-09-27T13:47:48.062Z",
+        "kind": "check",
+        "title": "passed: outputs-claimed",
+        "detail": "1 output(s) claimed"
+      },
+      {
+        "seq": 34,
+        "at": "2026-09-27T13:47:48.062Z",
+        "kind": "check",
+        "title": "passed: outputs-valid",
+        "detail": "all 1 claimed output(s) collected and valid"
+      },
+      {
+        "seq": 35,
+        "at": "2026-09-27T13:47:48.062Z",
+        "kind": "check",
+        "title": "passed: output:marker.txt",
+        "detail": "text, 81 bytes"
+      },
+      {
+        "seq": 36,
+        "at": "2026-09-27T13:47:48.063Z",
+        "kind": "check",
+        "title": "passed: summary-schema",
+        "detail": "no summary.json (optional for this profile)"
+      },
+      {
+        "seq": 37,
+        "at": "2026-09-27T13:47:48.063Z",
+        "kind": "phase",
+        "title": "Outcome RESULT_VERIFIED",
+        "detail": "all 4 completion checks of profile analysis passed"
+      }
+    ]
+  },
+  "checks": [
+    {
+      "ok": true,
+      "what": "create → 201 "
+    },
+    {
+      "ok": true,
+      "what": "code_run (sleep 20) dispatched"
+    },
+    {
+      "ok": true,
+      "what": "control pid 97467 killed with SIGKILL at 2026-09-27T13:46:27.660Z, 2.5 s into the run"
+    },
+    {
+      "ok": true,
+      "what": "control restarted via dev-up.sh --detach (exit 0, 818 ms) "
+    },
+    {
+      "ok": true,
+      "what": "the restarted control plane reclaimed the task (recovery 1 of 2; the previous run stopped in phase execute)"
+    },
+    {
+      "ok": true,
+      "what": "task reached a terminal status (done/RESULT_VERIFIED), not left running"
+    },
+    {
+      "ok": true,
+      "what": "cleanup confirmed (confirmed: supervisor confirmed teardown of 2 attempt(s))"
+    },
+    {
+      "ok": true,
+      "what": "the interrupted attempt att-b1948034f05ef5cf1916 is destroyed at the supervisor (destroyed)"
+    },
+    {
+      "ok": true,
+      "what": "no live attempt of the task at the supervisor (att-b1948034f05ef5cf1916:destroyed, att-2f9ee9d27596d37421ff:destroyed)"
+    },
+    {
+      "ok": true,
+      "what": "no container of the task remains (none)"
+    },
+    {
+      "ok": true,
+      "what": "no network of the task remains (none)"
+    },
+    {
+      "ok": true,
+      "what": "the uncertain code_run op-bd10781f8d6f901295aae441 never completed and was never recorded as a success (trail: code_run started[started])"
+    },
+    {
+      "ok": true,
+      "what": "recovery reconciled op-bd10781f8d6f901295aae441: \"authorTool op-bd10781f8d6f901295aae441 (intent): not replayed\""
+    },
+    {
+      "ok": true,
+      "what": "every completed code_run is a new operation on a fresh attempt (op-749ebf2582e8a3097152351b@att-2f9ee9d27596d37421ff)"
+    },
+    {
+      "ok": true,
+      "what": "at most one completed code_run recorded (1)"
+    },
+    {
+      "ok": true,
+      "what": "the old analysis sandbox was discarded (\"analysis att-b1948034f05ef5cf1916: revoked; destroyed; remaining containers=0 volumes=0\")"
+    },
+    {
+      "ok": true,
+      "what": "recovery counted (1)"
+    },
+    {
+      "ok": true,
+      "what": "outputs/marker.txt has exactly one line: the fresh sandbox's single run ([\"run 9cc536fc7b3079c5 host=sandbox started=1790516845.723 finished=1790516865.731\"])"
+    },
+    {
+      "ok": true,
+      "what": "no artifact came from the old attempt (0)"
+    }
+  ],
+  "dirtyTree": null
+}

@@ -20,13 +20,17 @@
  * row, the search field, the row anatomy and classes, the empty states, the footer rows and the rail.
  * No TanStack Router/Query, motion, dropdown or channel mutations.
  */
-import { IconBug, IconFlame, IconLogin2, IconLogout, IconPinFilled, IconPlus, IconSearch, IconShieldLock } from "@tabler/icons-react";
+import { IconBug, IconFlame, IconSparkles, IconLogin2, IconLogout, IconPinFilled, IconPlus, IconSearch, IconShieldLock } from "@tabler/icons-react";
 import { useMemo, useState } from "react";
 import type { Task } from "@airlock/contracts";
 import { useNow, useSharedTaskList } from "../../hooks/useTaskList";
+import { usePendingReviews } from "../../hooks/useBrowserControl";
 import { canOperate, useSession } from "../../hooks/session";
 import { hrefFor, type Route } from "../../lib/router";
+import { useDeployment } from "../../hooks/useDeployment";
+import { DIAGNOSTIC_LABEL, instanceIds } from "../../lib/evidence";
 import { taskRowView, type TaskDot, type TaskRowView } from "../../lib/taskList";
+import { InstanceIdsLine } from "../Evidence";
 import { cn } from "../../lib/utils";
 import { Badge, Dot, TONE_TEXT, type Tone } from "../common";
 import { Button } from "../ui/button";
@@ -65,7 +69,7 @@ export function BrandMark({ className }: { className?: string }) {
 export function matchingRows(rows: TaskRowView[], query: string): TaskRowView[] {
   const needle = query.trim().toLowerCase();
   if (!needle) return rows;
-  return rows.filter((row) => [row.title, row.profileId, row.badge.label, row.id].some((f) => f.toLowerCase().includes(needle)));
+  return rows.filter((row) => [row.title, row.profileId, row.profileLabel, row.badge.label, row.id].some((f) => f.toLowerCase().includes(needle)));
 }
 
 function rowClass(active: boolean) {
@@ -75,13 +79,13 @@ function rowClass(active: boolean) {
   );
 }
 
-function TaskRow({ row, active, onNavigate }: { row: TaskRowView; active: boolean; onNavigate: () => void }) {
+function TaskRow({ row, active, onNavigate, review }: { row: TaskRowView; active: boolean; onNavigate: () => void; review: boolean }) {
   const tone = DOT_TONE[row.dot];
   return (
     <a href={hrefFor({ name: "task", id: row.id })} className={rowClass(active)} aria-current={active ? "page" : undefined} onClick={onNavigate}>
       <div className="relative shrink-0">
         <div className="flex size-8 items-center justify-center rounded-full bg-muted-foreground/10 text-foreground/70">
-          <IconBug className="size-4" />
+          {row.kind === "general" ? <IconSparkles className="size-4" /> : <IconBug className="size-4" />}
         </div>
         <span className="absolute -right-0.5 -bottom-0.5 rounded-full bg-sidebar p-[2px]">
           <Dot tone={tone} pulse={row.live} />
@@ -92,29 +96,42 @@ function TaskRow({ row, active, onNavigate }: { row: TaskRowView; active: boolea
           <span className="min-w-0 flex-1 truncate text-[0.9rem] leading-5 font-medium tracking-[-0.01em]" title={row.title}>
             {row.title}
           </span>
+          {review ? (
+            <Badge tone="warn" className="shrink-0" title="A proposed submission waits for a person's review">
+              review
+            </Badge>
+          ) : null}
           <span className="shrink-0 whitespace-nowrap text-[12px] leading-4 text-muted-foreground/70" title={row.at}>
             {row.relative}
           </span>
         </div>
         <div className="mt-px flex min-w-0 items-center gap-1.5 text-[12px] leading-4 text-muted-foreground">
-          <span className="shrink-0">{row.profileId}</span>
+          <span className="shrink-0" title={row.profileId}>{row.profileLabel}</span>
           <span className="shrink-0 text-muted-foreground/50">·</span>
-          <span className={cn("min-w-0 truncate font-medium", TONE_TEXT[row.badge.tone])}>{row.badge.label}</span>
-          {row.scripted ? (
-            <span
-              className="ml-auto shrink-0 rounded bg-foreground/5 px-1 font-mono text-[10px] leading-4"
-              title={`Diagnostic run driven by the scripted model "${row.scripted}"; never a live repair`}
-            >
-              scripted
-            </span>
+          <span className={cn("shrink-0 font-medium", TONE_TEXT[row.badge.tone])} title={row.badge.label}>{row.badge.label}</span>
+          {row.cleanup ? (
+            <>
+              <span className="shrink-0 text-muted-foreground/50">·</span>
+              <span className={cn("min-w-0 truncate", TONE_TEXT[row.cleanup.tone])} title={`Cleanup, separate from the result: ${row.cleanup.label}`}>
+                {row.cleanup.label}
+              </span>
+            </>
           ) : null}
         </div>
+        {row.scripted ? (
+          <div
+            className="mt-px truncate text-[11px] leading-4 font-medium text-warning"
+            title={`Script "${row.scripted}" replays fixed turns; no model is called and it is never a live repair`}
+          >
+            {DIAGNOSTIC_LABEL}
+          </div>
+        ) : null}
       </div>
     </a>
   );
 }
 
-function HostileRow({ active, onNavigate }: { active: boolean; onNavigate: () => void }) {
+function HostileRow({ active, onNavigate, judge }: { active: boolean; onNavigate: () => void; judge: boolean }) {
   return (
     <a href={hrefFor({ name: "hostile" })} className={rowClass(active)} aria-current={active ? "page" : undefined} onClick={onNavigate}>
       <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-destructive/10 text-destructive">
@@ -125,7 +142,9 @@ function HostileRow({ active, onNavigate }: { active: boolean; onNavigate: () =>
           <span className="min-w-0 flex-1 truncate text-[0.9rem] leading-5 font-medium tracking-[-0.01em]">Hostile input</span>
           <IconPinFilled className="size-3 shrink-0 text-muted-foreground/70" aria-label="Pinned" />
         </div>
-        <div className="mt-px truncate text-[12px] leading-4 text-muted-foreground">Run a command in a throwaway sandbox</div>
+        <div className="mt-px truncate text-[12px] leading-4 text-muted-foreground">
+          {judge ? "Run a command in a throwaway sandbox" : "Judge only: sign in as judge to run"}
+        </div>
       </div>
     </a>
   );
@@ -133,18 +152,21 @@ function HostileRow({ active, onNavigate }: { active: boolean; onNavigate: () =>
 
 function RoleFooter() {
   const session = useSession();
+  const deployment = useDeployment();
+  const ids = instanceIds(deployment.availability, deployment.host.state === "ok" ? deployment.host.host : null);
   const role = session.loading ? "…" : session.role;
   const initials = session.loading ? "·" : session.role.slice(0, 1).toUpperCase();
   return (
+    <div className="flex flex-col gap-1">
     <div className="flex h-10 items-center gap-2 rounded-md px-2">
       <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted-foreground/10 text-xs text-foreground/70">{initials}</div>
       <div className="min-w-0 flex-1 leading-tight">
         <div className="truncate text-sm capitalize">{role}</div>
         <div className="truncate text-[11px] text-muted-foreground">
-          {session.role === "viewer" ? "Read-only" : "Can start cases and run hostile input"}
+          {session.role === "viewer" ? "Sign in to start or read cases" : session.role === "operator" ? "Sees every case" : "Sees the cases this session started"}
         </div>
       </div>
-      <Badge tone={session.role === "operator" ? "ok" : session.role === "judge" ? "info" : "neutral"} title="Roles are enforced by the control API: operator and judge may start cases and run hostile input; viewer is read-only.">
+      <Badge tone={session.role === "operator" ? "ok" : session.role === "judge" ? "info" : "neutral"} title="Roles are enforced by the control API: operator and judge may start cases; only the judge may run hostile input; a judge reads only its own session's cases; signed out, no case data is shown.">
         {role}
       </Badge>
       {session.role === "viewer" ? (
@@ -157,6 +179,8 @@ function RoleFooter() {
         </Button>
       )}
     </div>
+    <InstanceIdsLine ids={ids} className="px-2 pb-1" />
+    </div>
   );
 }
 
@@ -167,6 +191,7 @@ export function AppSidebar({ route }: { route: Route }) {
   const { isMobile, setOpenMobile } = useSidebar();
   const [search, setSearch] = useState("");
   const rows = useMemo(() => (tasks ?? []).map((t: Task) => taskRowView(t, now)), [tasks, now]);
+  const reviews = usePendingReviews(tasks);
   const visible = matchingRows(rows, search);
   const searching = search.trim().length > 0;
   const activeTask = route.name === "task" ? route.id : null;
@@ -214,7 +239,7 @@ export function AppSidebar({ route }: { route: Route }) {
             </SidebarMenuItem>
             <div className="h-2" />
             <SidebarMenuItem>
-              <HostileRow active={route.name === "hostile"} onNavigate={onNavigate} />
+              <HostileRow active={route.name === "hostile"} onNavigate={onNavigate} judge={session.role === "judge"} />
             </SidebarMenuItem>
             <div className="mx-2 my-1.5 h-px bg-sidebar-border" />
             {error ? (
@@ -249,15 +274,19 @@ export function AppSidebar({ route }: { route: Route }) {
               <div className="py-4">
                 <Empty className="min-h-[30dvh] border border-dashed">
                   <EmptyHeader>
-                    <EmptyTitle>No cases yet</EmptyTitle>
-                    <EmptyDescription className="text-pretty">Start a case from a pasted issue and it will appear here.</EmptyDescription>
+                    <EmptyTitle>{session.role === "viewer" && !session.loading ? "Signed out" : "No cases yet"}</EmptyTitle>
+                    <EmptyDescription className="text-pretty">
+                      {session.role === "viewer" && !session.loading
+                        ? "Sign in to see cases: task data needs a session."
+                        : "Start a case from a pasted issue and it will appear here."}
+                    </EmptyDescription>
                   </EmptyHeader>
                 </Empty>
               </div>
             ) : null}
             {visible.map((row) => (
               <SidebarMenuItem key={row.id}>
-                <TaskRow row={row} active={row.id === activeTask} onNavigate={onNavigate} />
+                <TaskRow row={row} active={row.id === activeTask} onNavigate={onNavigate} review={reviews.has(row.id)} />
               </SidebarMenuItem>
             ))}
           </SidebarGroup>

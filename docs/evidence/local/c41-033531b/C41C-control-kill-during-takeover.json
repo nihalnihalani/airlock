@@ -1,0 +1,826 @@
+{
+  "id": "C41C-control-kill-during-takeover",
+  "requirement": "C41: a person takes browser control, then the control plane is SIGKILLed → after restart no human action is honoured on the old session, control returns to the agent before any agent browser op (never simultaneous), the agent works in a fresh session (observes afresh), old attempt destroyed",
+  "command": "bun scripts/acceptance/local.ts C41C-control-kill-during-takeover",
+  "environment": "real local runc (dev-unsafe, Colima); stack = git archive of 033531b34aeb",
+  "timestamp": "2026-09-27T13:39:11.457Z",
+  "revision": "033531b34aebf221836c79fe2e3204e082232803",
+  "result": "PASS",
+  "evidence": {
+    "timeline": {
+      "taskId": "task-3e5004af69b3a636",
+      "oldAttempt": "att-93e30132ea70e8d2dbaa",
+      "kill": {
+        "process": "control",
+        "pid": 95018,
+        "signal": "SIGKILL",
+        "at": "2026-09-27T13:38:10.752Z",
+        "dead": true
+      },
+      "whileDown": {
+        "controlHealth": "unreachable (Unable to connect. Is the computer able to access the url?)",
+        "containers": [
+          "airlock-browser-task-3e5004af69b3a636-att-93e30132ea70e8d2dbaa Up 12 seconds (healthy)",
+          "airlock-egress-task-3e5004af69b3a636-att-93e30132ea70e8d2dbaa Up 13 seconds"
+        ]
+      },
+      "restart": {
+        "code": 0,
+        "ms": 825,
+        "lines": [
+          "supervisor already running (pid 94324)",
+          "fixtures already running (pid 94333)"
+        ],
+        "err": ""
+      },
+      "controlBefore": {
+        "since": "2026-09-27T13:38:06.651Z",
+        "holder": "human",
+        "reason": "taken by judge",
+        "humanOwner": "judge-bb848ff183da45800920e5e5",
+        "fenceGeneration": 1
+      },
+      "afterRestartBeforeReclaim": {
+        "control": {
+          "status": 200,
+          "body": {
+            "control": {
+              "since": "2026-09-27T13:38:06.651Z",
+              "holder": "human",
+              "reason": "taken by judge",
+              "humanOwner": "judge-bb848ff183da45800920e5e5",
+              "fenceGeneration": 1
+            },
+            "live": null,
+            "idleMs": 300000
+          }
+        },
+        "humanObserve": {
+          "status": 409,
+          "body": "{\"error\":\"you do not hold control of this task's browser (take control first)\"}"
+        },
+        "humanScroll": {
+          "status": 409,
+          "body": "{\"error\":\"you do not hold control of this task's browser (take control first)\"}"
+        },
+        "take": {
+          "status": 409,
+          "body": "{\"error\":\"the task's browser loop is not running in this control plane; control can be taken only while the task runs\"}"
+        }
+      },
+      "controlAfterReclaim": {
+        "control": {
+          "since": "2026-09-27T13:39:00.730Z",
+          "holder": "agent",
+          "reason": "the task's run restarted; the agent holds control"
+        },
+        "live": {
+          "holder": "agent",
+          "since": "2026-09-27T13:39:00.730Z",
+          "epoch": 0,
+          "attached": true,
+          "liveBrowser": true
+        },
+        "idleMs": 300000
+      }
+    },
+    "final": {
+      "status": "done",
+      "outcome": "RESULT_VERIFIED",
+      "recoveries": 1,
+      "cleanup": {
+        "at": "2026-09-27T13:39:09.117Z",
+        "detail": "supervisor confirmed teardown of 2 attempt(s)",
+        "status": "confirmed"
+      },
+      "control": {
+        "since": "2026-09-27T13:39:00.730Z",
+        "holder": "agent",
+        "reason": "the task's run restarted; the agent holds control"
+      },
+      "attempts": [
+        {
+          "attemptId": "att-93e30132ea70e8d2dbaa",
+          "generation": 1,
+          "role": "browser",
+          "status": "destroyed"
+        },
+        {
+          "attemptId": "att-418333b4e52b6660fa2a",
+          "generation": 2,
+          "role": "browser",
+          "status": "destroyed"
+        }
+      ]
+    },
+    "events": [
+      {
+        "seq": 1,
+        "at": "2026-09-27T13:37:59.726Z",
+        "kind": "lifecycle",
+        "title": "Task created",
+        "detail": "general task, profile web-research v1; destinations example.com; diagnostic (scripted:acc-c41-takeover), not a model run"
+      },
+      {
+        "seq": 2,
+        "at": "2026-09-27T13:38:00.442Z",
+        "kind": "phase",
+        "title": "prepare",
+        "detail": "general task profile web-research v1; tools: browser_navigate, browser_observe, browser_click, browser_type, browser_key, browser_scroll, browser_screenshot, browser_tabs, browser_download_list, browser_download_save, browser_propose_submit, submit_result; destinations: example.com"
+      },
+      {
+        "seq": 3,
+        "at": "2026-09-27T13:38:00.443Z",
+        "kind": "check",
+        "title": "dev-unsafe runtime",
+        "detail": "supervisor host runs runc with AIRLOCK_DEV_UNSAFE; results are not a deployment measurement"
+      },
+      {
+        "seq": 4,
+        "at": "2026-09-27T13:38:00.444Z",
+        "kind": "phase",
+        "title": "execute",
+        "detail": "model loop for goal under profile web-research"
+      },
+      {
+        "seq": 5,
+        "at": "2026-09-27T13:38:00.446Z",
+        "kind": "model",
+        "title": "Model turn 1",
+        "detail": "Opening example.com."
+      },
+      {
+        "seq": 6,
+        "at": "2026-09-27T13:38:00.447Z",
+        "kind": "tool",
+        "title": "browser_navigate allowed",
+        "detail": "example.com is inside the task's destinations",
+        "tool": "browser_navigate",
+        "opState": "allowed",
+        "actor": "agent"
+      },
+      {
+        "seq": 7,
+        "at": "2026-09-27T13:38:00.449Z",
+        "kind": "lifecycle",
+        "title": "Creating browser sandbox",
+        "detail": "attempt att-93e30132ea70e8d2dbaa, generation 1, deadline 2026-09-27T13:53:00.448Z; egress allowed to example.com",
+        "attemptId": "att-93e30132ea70e8d2dbaa"
+      },
+      {
+        "seq": 8,
+        "at": "2026-09-27T13:38:00.471Z",
+        "kind": "lifecycle",
+        "title": "Human control requested",
+        "detail": "agent dispatch revoked; waiting up to 10 s for the in-flight browser operation to settle"
+      },
+      {
+        "seq": 9,
+        "at": "2026-09-27T13:38:06.391Z",
+        "kind": "lifecycle",
+        "title": "browser sandbox created",
+        "detail": "container airlock-browser-task-3e5004af69b3a636-att-93e30132ea70e8d2dbaa; runtime runc (dev-unsafe)",
+        "opState": "completed",
+        "operationId": "op-6af9d9dec86a4cd96e8c3ed0",
+        "attemptId": "att-93e30132ea70e8d2dbaa"
+      },
+      {
+        "seq": 10,
+        "at": "2026-09-27T13:38:06.393Z",
+        "kind": "tool",
+        "title": "browser_navigate started",
+        "tool": "browser_navigate",
+        "opState": "started",
+        "operationId": "op-cceb162a56fc84fe4ed59d9a",
+        "attemptId": "att-93e30132ea70e8d2dbaa"
+      },
+      {
+        "seq": 11,
+        "at": "2026-09-27T13:38:06.651Z",
+        "kind": "tool",
+        "title": "browser_navigate https://example.com/",
+        "detail": "status 200",
+        "tool": "browser_navigate",
+        "opState": "completed",
+        "operationId": "op-cceb162a56fc84fe4ed59d9a",
+        "attemptId": "att-93e30132ea70e8d2dbaa",
+        "status": 200
+      },
+      {
+        "seq": 12,
+        "at": "2026-09-27T13:38:06.652Z",
+        "kind": "lifecycle",
+        "title": "Human took control",
+        "detail": "the agent is paused; every earlier page snapshot is invalid after release (fence generation 1); control returns after 300 s without an action"
+      },
+      {
+        "seq": 13,
+        "at": "2026-09-27T13:38:06.653Z",
+        "kind": "model",
+        "title": "Model turn 2",
+        "detail": "Observing."
+      },
+      {
+        "seq": 14,
+        "at": "2026-09-27T13:38:06.654Z",
+        "kind": "lifecycle",
+        "title": "Agent paused: human control",
+        "detail": "browser_observe waits while a person holds control of the browser; the task's wall clock keeps running",
+        "tool": "browser_observe"
+      },
+      {
+        "seq": 15,
+        "at": "2026-09-27T13:38:08.166Z",
+        "kind": "tool",
+        "title": "human_observe started",
+        "tool": "human_observe",
+        "opState": "started",
+        "operationId": "op-71453b7dadce40df9ce65e2b",
+        "attemptId": "att-93e30132ea70e8d2dbaa"
+      },
+      {
+        "seq": 16,
+        "at": "2026-09-27T13:38:08.240Z",
+        "kind": "tool",
+        "title": "human_observe observe",
+        "detail": "by the person holding control; https://example.com/",
+        "tool": "human_observe",
+        "opState": "completed",
+        "operationId": "op-71453b7dadce40df9ce65e2b",
+        "attemptId": "att-93e30132ea70e8d2dbaa",
+        "actor": "human"
+      },
+      {
+        "seq": 17,
+        "at": "2026-09-27T13:39:00.529Z",
+        "kind": "phase",
+        "title": "prepare",
+        "detail": "general task profile web-research v1; tools: browser_navigate, browser_observe, browser_click, browser_type, browser_key, browser_scroll, browser_screenshot, browser_tabs, browser_download_list, browser_download_save, browser_propose_submit, submit_result; destinations: example.com"
+      },
+      {
+        "seq": 18,
+        "at": "2026-09-27T13:39:00.533Z",
+        "kind": "check",
+        "title": "dev-unsafe runtime",
+        "detail": "supervisor host runs runc with AIRLOCK_DEV_UNSAFE; results are not a deployment measurement"
+      },
+      {
+        "seq": 19,
+        "at": "2026-09-27T13:39:00.535Z",
+        "kind": "lifecycle",
+        "title": "Recovering task",
+        "detail": "recovery 1 of 2; the previous run stopped in phase execute",
+        "recoveries": 1
+      },
+      {
+        "seq": 20,
+        "at": "2026-09-27T13:39:00.726Z",
+        "kind": "lifecycle",
+        "title": "Discarded attempt from an earlier run",
+        "detail": "browser att-93e30132ea70e8d2dbaa: revoked; destroyed; remaining containers=0 volumes=0",
+        "opState": "completed",
+        "attemptId": "att-93e30132ea70e8d2dbaa"
+      },
+      {
+        "seq": 21,
+        "at": "2026-09-27T13:39:00.728Z",
+        "kind": "phase",
+        "title": "execute",
+        "detail": "model loop for goal under profile web-research"
+      },
+      {
+        "seq": 22,
+        "at": "2026-09-27T13:39:00.731Z",
+        "kind": "lifecycle",
+        "title": "Control returned to the agent",
+        "detail": "the previous holder (human) lost control when the run restarted"
+      },
+      {
+        "seq": 23,
+        "at": "2026-09-27T13:39:00.733Z",
+        "kind": "model",
+        "title": "Model turn 3",
+        "detail": "Opening example.com."
+      },
+      {
+        "seq": 24,
+        "at": "2026-09-27T13:39:00.735Z",
+        "kind": "tool",
+        "title": "browser_navigate allowed",
+        "detail": "example.com is inside the task's destinations",
+        "tool": "browser_navigate",
+        "opState": "allowed",
+        "actor": "agent"
+      },
+      {
+        "seq": 25,
+        "at": "2026-09-27T13:39:00.737Z",
+        "kind": "lifecycle",
+        "title": "Creating browser sandbox",
+        "detail": "attempt att-418333b4e52b6660fa2a, generation 2, deadline 2026-09-27T13:54:00.737Z; egress allowed to example.com",
+        "attemptId": "att-418333b4e52b6660fa2a"
+      },
+      {
+        "seq": 26,
+        "at": "2026-09-27T13:39:06.689Z",
+        "kind": "lifecycle",
+        "title": "browser sandbox created",
+        "detail": "container airlock-browser-task-3e5004af69b3a636-att-418333b4e52b6660fa2a; runtime runc (dev-unsafe)",
+        "opState": "completed",
+        "operationId": "op-d2872632b2901d9ad8338203",
+        "attemptId": "att-418333b4e52b6660fa2a"
+      },
+      {
+        "seq": 27,
+        "at": "2026-09-27T13:39:06.692Z",
+        "kind": "tool",
+        "title": "browser_navigate started",
+        "tool": "browser_navigate",
+        "opState": "started",
+        "operationId": "op-85f0742ea7aaba6c89e9cccb",
+        "attemptId": "att-418333b4e52b6660fa2a"
+      },
+      {
+        "seq": 28,
+        "at": "2026-09-27T13:39:06.863Z",
+        "kind": "tool",
+        "title": "browser_navigate https://example.com/",
+        "detail": "status 200",
+        "tool": "browser_navigate",
+        "opState": "completed",
+        "operationId": "op-85f0742ea7aaba6c89e9cccb",
+        "attemptId": "att-418333b4e52b6660fa2a",
+        "status": 200
+      },
+      {
+        "seq": 29,
+        "at": "2026-09-27T13:39:06.864Z",
+        "kind": "model",
+        "title": "Model turn 4",
+        "detail": "Observing."
+      },
+      {
+        "seq": 30,
+        "at": "2026-09-27T13:39:06.865Z",
+        "kind": "tool",
+        "title": "browser_observe started",
+        "tool": "browser_observe",
+        "opState": "started",
+        "operationId": "op-209f694596b5ac5092bfae00",
+        "attemptId": "att-418333b4e52b6660fa2a"
+      },
+      {
+        "seq": 31,
+        "at": "2026-09-27T13:39:06.917Z",
+        "kind": "tool",
+        "title": "browser_observe https://example.com/",
+        "detail": "Example Domain — 129 chars, 1 controls, 1 tab(s)\n\nExample Domain\n\nThis domain is for use in documentation examples without needing permission. Avoid use in operations.\n\nLearn more",
+        "tool": "browser_observe",
+        "opState": "completed",
+        "operationId": "op-209f694596b5ac5092bfae00",
+        "attemptId": "att-418333b4e52b6660fa2a"
+      },
+      {
+        "seq": 32,
+        "at": "2026-09-27T13:39:06.919Z",
+        "kind": "model",
+        "title": "Model turn 5",
+        "detail": "Scroll 0."
+      },
+      {
+        "seq": 33,
+        "at": "2026-09-27T13:39:06.919Z",
+        "kind": "tool",
+        "title": "browser_scroll started",
+        "tool": "browser_scroll",
+        "opState": "started",
+        "operationId": "op-d8b19a006071fdb7130a3758",
+        "attemptId": "att-418333b4e52b6660fa2a"
+      },
+      {
+        "seq": 34,
+        "at": "2026-09-27T13:39:07.129Z",
+        "kind": "tool",
+        "title": "browser_scroll 0,50",
+        "detail": "https://example.com/",
+        "tool": "browser_scroll",
+        "opState": "completed",
+        "operationId": "op-d8b19a006071fdb7130a3758",
+        "attemptId": "att-418333b4e52b6660fa2a"
+      },
+      {
+        "seq": 35,
+        "at": "2026-09-27T13:39:07.130Z",
+        "kind": "model",
+        "title": "Model turn 6",
+        "detail": "Scroll 1."
+      },
+      {
+        "seq": 36,
+        "at": "2026-09-27T13:39:07.131Z",
+        "kind": "tool",
+        "title": "browser_scroll started",
+        "tool": "browser_scroll",
+        "opState": "started",
+        "operationId": "op-8989c9c3321c31170f70dfc5",
+        "attemptId": "att-418333b4e52b6660fa2a"
+      },
+      {
+        "seq": 37,
+        "at": "2026-09-27T13:39:07.340Z",
+        "kind": "tool",
+        "title": "browser_scroll 0,-50",
+        "detail": "https://example.com/",
+        "tool": "browser_scroll",
+        "opState": "completed",
+        "operationId": "op-8989c9c3321c31170f70dfc5",
+        "attemptId": "att-418333b4e52b6660fa2a"
+      },
+      {
+        "seq": 38,
+        "at": "2026-09-27T13:39:07.341Z",
+        "kind": "model",
+        "title": "Model turn 7",
+        "detail": "Scroll 2."
+      },
+      {
+        "seq": 39,
+        "at": "2026-09-27T13:39:07.346Z",
+        "kind": "tool",
+        "title": "browser_scroll started",
+        "tool": "browser_scroll",
+        "opState": "started",
+        "operationId": "op-173854f0f40eba05203900bb",
+        "attemptId": "att-418333b4e52b6660fa2a"
+      },
+      {
+        "seq": 40,
+        "at": "2026-09-27T13:39:07.553Z",
+        "kind": "tool",
+        "title": "browser_scroll 0,50",
+        "detail": "https://example.com/",
+        "tool": "browser_scroll",
+        "opState": "completed",
+        "operationId": "op-173854f0f40eba05203900bb",
+        "attemptId": "att-418333b4e52b6660fa2a"
+      },
+      {
+        "seq": 41,
+        "at": "2026-09-27T13:39:07.554Z",
+        "kind": "model",
+        "title": "Model turn 8",
+        "detail": "Scroll 3."
+      },
+      {
+        "seq": 42,
+        "at": "2026-09-27T13:39:07.556Z",
+        "kind": "tool",
+        "title": "browser_scroll started",
+        "tool": "browser_scroll",
+        "opState": "started",
+        "operationId": "op-f8ca636cbf687446d1288575",
+        "attemptId": "att-418333b4e52b6660fa2a"
+      },
+      {
+        "seq": 43,
+        "at": "2026-09-27T13:39:07.782Z",
+        "kind": "tool",
+        "title": "browser_scroll 0,-50",
+        "detail": "https://example.com/",
+        "tool": "browser_scroll",
+        "opState": "completed",
+        "operationId": "op-f8ca636cbf687446d1288575",
+        "attemptId": "att-418333b4e52b6660fa2a"
+      },
+      {
+        "seq": 44,
+        "at": "2026-09-27T13:39:07.784Z",
+        "kind": "model",
+        "title": "Model turn 9",
+        "detail": "Scroll 4."
+      },
+      {
+        "seq": 45,
+        "at": "2026-09-27T13:39:07.786Z",
+        "kind": "tool",
+        "title": "browser_scroll started",
+        "tool": "browser_scroll",
+        "opState": "started",
+        "operationId": "op-3ac93489159d94b80c4c6c8e",
+        "attemptId": "att-418333b4e52b6660fa2a"
+      },
+      {
+        "seq": 46,
+        "at": "2026-09-27T13:39:08.009Z",
+        "kind": "tool",
+        "title": "browser_scroll 0,50",
+        "detail": "https://example.com/",
+        "tool": "browser_scroll",
+        "opState": "completed",
+        "operationId": "op-3ac93489159d94b80c4c6c8e",
+        "attemptId": "att-418333b4e52b6660fa2a"
+      },
+      {
+        "seq": 47,
+        "at": "2026-09-27T13:39:08.010Z",
+        "kind": "model",
+        "title": "Model turn 10",
+        "detail": "Scroll 5."
+      },
+      {
+        "seq": 48,
+        "at": "2026-09-27T13:39:08.012Z",
+        "kind": "tool",
+        "title": "browser_scroll started",
+        "tool": "browser_scroll",
+        "opState": "started",
+        "operationId": "op-50ccc6f0ef1750b246710099",
+        "attemptId": "att-418333b4e52b6660fa2a"
+      },
+      {
+        "seq": 49,
+        "at": "2026-09-27T13:39:08.235Z",
+        "kind": "tool",
+        "title": "browser_scroll 0,-50",
+        "detail": "https://example.com/",
+        "tool": "browser_scroll",
+        "opState": "completed",
+        "operationId": "op-50ccc6f0ef1750b246710099",
+        "attemptId": "att-418333b4e52b6660fa2a"
+      },
+      {
+        "seq": 50,
+        "at": "2026-09-27T13:39:08.238Z",
+        "kind": "model",
+        "title": "Model turn 11",
+        "detail": "Scroll 6."
+      },
+      {
+        "seq": 51,
+        "at": "2026-09-27T13:39:08.240Z",
+        "kind": "tool",
+        "title": "browser_scroll started",
+        "tool": "browser_scroll",
+        "opState": "started",
+        "operationId": "op-ebcf3df982de23a33ce043ea",
+        "attemptId": "att-418333b4e52b6660fa2a"
+      },
+      {
+        "seq": 52,
+        "at": "2026-09-27T13:39:08.459Z",
+        "kind": "tool",
+        "title": "browser_scroll 0,50",
+        "detail": "https://example.com/",
+        "tool": "browser_scroll",
+        "opState": "completed",
+        "operationId": "op-ebcf3df982de23a33ce043ea",
+        "attemptId": "att-418333b4e52b6660fa2a"
+      },
+      {
+        "seq": 53,
+        "at": "2026-09-27T13:39:08.462Z",
+        "kind": "model",
+        "title": "Model turn 12",
+        "detail": "Scroll 7."
+      },
+      {
+        "seq": 54,
+        "at": "2026-09-27T13:39:08.464Z",
+        "kind": "tool",
+        "title": "browser_scroll started",
+        "tool": "browser_scroll",
+        "opState": "started",
+        "operationId": "op-115e3da9ea0e226153e36e12",
+        "attemptId": "att-418333b4e52b6660fa2a"
+      },
+      {
+        "seq": 55,
+        "at": "2026-09-27T13:39:08.679Z",
+        "kind": "tool",
+        "title": "browser_scroll 0,-50",
+        "detail": "https://example.com/",
+        "tool": "browser_scroll",
+        "opState": "completed",
+        "operationId": "op-115e3da9ea0e226153e36e12",
+        "attemptId": "att-418333b4e52b6660fa2a"
+      },
+      {
+        "seq": 56,
+        "at": "2026-09-27T13:39:08.681Z",
+        "kind": "model",
+        "title": "Model turn 13",
+        "detail": "Observe again."
+      },
+      {
+        "seq": 57,
+        "at": "2026-09-27T13:39:08.684Z",
+        "kind": "tool",
+        "title": "browser_observe started",
+        "tool": "browser_observe",
+        "opState": "started",
+        "operationId": "op-d42ab37b2a137dde9cf87e3d",
+        "attemptId": "att-418333b4e52b6660fa2a"
+      },
+      {
+        "seq": 58,
+        "at": "2026-09-27T13:39:08.736Z",
+        "kind": "tool",
+        "title": "browser_observe https://example.com/",
+        "detail": "Example Domain — 129 chars, 1 controls, 1 tab(s)\n\nExample Domain\n\nThis domain is for use in documentation examples without needing permission. Avoid use in operations.\n\nLearn more",
+        "tool": "browser_observe",
+        "opState": "completed",
+        "operationId": "op-d42ab37b2a137dde9cf87e3d",
+        "attemptId": "att-418333b4e52b6660fa2a"
+      },
+      {
+        "seq": 59,
+        "at": "2026-09-27T13:39:08.737Z",
+        "kind": "model",
+        "title": "Model turn 14",
+        "detail": "Screenshot."
+      },
+      {
+        "seq": 60,
+        "at": "2026-09-27T13:39:08.739Z",
+        "kind": "tool",
+        "title": "browser_screenshot started",
+        "tool": "browser_screenshot",
+        "opState": "started",
+        "operationId": "op-5d594f8688ad97cb66d58e80",
+        "attemptId": "att-418333b4e52b6660fa2a"
+      },
+      {
+        "seq": 61,
+        "at": "2026-09-27T13:39:08.793Z",
+        "kind": "artifact",
+        "title": "Screenshot stored art-144085039cc8f12a7f54",
+        "detail": "https://example.com/ (1280x800, sha256 74055151462e4f8b960ea307694724a88dc32b73179f9812ebfa3c4d1ab9a81a)",
+        "tool": "browser_screenshot",
+        "operationId": "op-5d594f8688ad97cb66d58e80",
+        "attemptId": "att-418333b4e52b6660fa2a",
+        "actor": "agent"
+      },
+      {
+        "seq": 62,
+        "at": "2026-09-27T13:39:08.793Z",
+        "kind": "tool",
+        "title": "browser_screenshot https://example.com/",
+        "detail": "stored as art-144085039cc8f12a7f54",
+        "tool": "browser_screenshot",
+        "opState": "completed",
+        "operationId": "op-5d594f8688ad97cb66d58e80",
+        "attemptId": "att-418333b4e52b6660fa2a"
+      },
+      {
+        "seq": 63,
+        "at": "2026-09-27T13:39:08.794Z",
+        "kind": "model",
+        "title": "Model turn 15",
+        "detail": "Submitting."
+      },
+      {
+        "seq": 64,
+        "at": "2026-09-27T13:39:08.795Z",
+        "kind": "tool",
+        "title": "submit_result",
+        "detail": "Acceptance diagnostic (C41): takeover run.\noutputs: (none)\nsources: https://example.com/",
+        "tool": "submit_result",
+        "opState": "completed"
+      },
+      {
+        "seq": 65,
+        "at": "2026-09-27T13:39:08.795Z",
+        "kind": "phase",
+        "title": "freeze",
+        "detail": "stopping the sandboxes and collecting outputs/ read-only"
+      },
+      {
+        "seq": 66,
+        "at": "2026-09-27T13:39:09.113Z",
+        "kind": "lifecycle",
+        "title": "browser sandbox destroyed (result submitted)",
+        "detail": "revoked; destroyed; remaining containers=0 volumes=0",
+        "opState": "completed",
+        "attemptId": "att-418333b4e52b6660fa2a"
+      },
+      {
+        "seq": 67,
+        "at": "2026-09-27T13:39:09.116Z",
+        "kind": "check",
+        "title": "passed: screenshot-evidence",
+        "detail": "1 screenshot(s) stored"
+      },
+      {
+        "seq": 68,
+        "at": "2026-09-27T13:39:09.116Z",
+        "kind": "check",
+        "title": "passed: sources-cited",
+        "detail": "1 source(s) cited"
+      },
+      {
+        "seq": 69,
+        "at": "2026-09-27T13:39:09.117Z",
+        "kind": "check",
+        "title": "passed: sources-visited",
+        "detail": "every cited source was reached by this task's browser"
+      },
+      {
+        "seq": 70,
+        "at": "2026-09-27T13:39:09.117Z",
+        "kind": "check",
+        "title": "passed: sources-in-policy",
+        "detail": "every cited source is inside the allowed destinations"
+      },
+      {
+        "seq": 71,
+        "at": "2026-09-27T13:39:09.117Z",
+        "kind": "phase",
+        "title": "Outcome RESULT_VERIFIED",
+        "detail": "all 4 completion checks of profile web-research passed"
+      }
+    ]
+  },
+  "checks": [
+    {
+      "ok": true,
+      "what": "create → 201"
+    },
+    {
+      "ok": true,
+      "what": "task running with a live browser"
+    },
+    {
+      "ok": true,
+      "what": "take → 200 {\"holder\":\"human\",\"humanOwner\":\"judge-bb848ff183da45800920e5e5\",\"since\":\"2026-09-27T13:38:06.651Z\",\"fenceGeneration\":1,\"reason\":\"taken by judge\"}"
+    },
+    {
+      "ok": true,
+      "what": "holder=human before the kill"
+    },
+    {
+      "ok": true,
+      "what": "human observe while holding → 200"
+    },
+    {
+      "ok": true,
+      "what": "control pid 95018 SIGKILLed while the human held control"
+    },
+    {
+      "ok": true,
+      "what": "control restarted via dev-up.sh (exit 0, 825 ms)"
+    },
+    {
+      "ok": true,
+      "what": "after restart, before reclaim: human actions on the dead run are not executed (observe → 409, scroll → 409)"
+    },
+    {
+      "ok": true,
+      "what": "task reclaimed (recovery 1 of 2; the previous run stopped in phase execute)"
+    },
+    {
+      "ok": true,
+      "what": "\"Control returned to the agent\": the previous holder (human) lost control when the run restarted"
+    },
+    {
+      "ok": true,
+      "what": "task reached a terminal status (done/RESULT_VERIFIED), not left running"
+    },
+    {
+      "ok": true,
+      "what": "cleanup confirmed (confirmed: supervisor confirmed teardown of 2 attempt(s))"
+    },
+    {
+      "ok": true,
+      "what": "the interrupted attempt att-93e30132ea70e8d2dbaa is destroyed at the supervisor (destroyed)"
+    },
+    {
+      "ok": true,
+      "what": "no live attempt of the task at the supervisor (att-93e30132ea70e8d2dbaa:destroyed, att-418333b4e52b6660fa2a:destroyed)"
+    },
+    {
+      "ok": true,
+      "what": "no container of the task remains (none)"
+    },
+    {
+      "ok": true,
+      "what": "no network of the task remains (none)"
+    },
+    {
+      "ok": true,
+      "what": "control returned to the agent (#22) before the recovered run's first browser op (#27 browser_navigate)"
+    },
+    {
+      "ok": true,
+      "what": "recovered run starts a fresh session and observes before anything else (browser_navigate → browser_observe, attempt att-418333b4e52b6660fa2a)"
+    },
+    {
+      "ok": true,
+      "what": "no human browser op completed after the kill (0)"
+    },
+    {
+      "ok": true,
+      "what": "final Task.control holder = agent"
+    }
+  ],
+  "dirtyTree": null
+}

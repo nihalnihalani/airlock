@@ -1,0 +1,13 @@
+{
+  "name": "airlock-runtime-node-deps",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Baked, pinned, zero-dependency data packages for the Airlock offline Node runtime. Installed at image build time with `npm ci --ignore-scripts`; npm is removed from the image afterwards.",
+  "license": "UNLICENSED",
+  "type": "module",
+  "dependencies": {
+    "csv-parse": "7.0.3",
+    "csv-stringify": "6.9.0",
+    "simple-statistics": "7.12.0"
+  }
+}

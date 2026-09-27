@@ -67,6 +67,22 @@ Design only, no code copied: `components/thread/tool-card.tsx` and the row discl
 
 New Airlock code: `lib/thread.ts`, `lib/taskList.ts`, `lib/eventLog.ts`, `lib/eventViews.ts`, `lib/preview.ts`, `lib/api.ts`, `lib/router.ts`, `lib/format.ts`, the hooks `session.tsx`, `useTaskEvents.ts`, `useTaskList.ts`, `components/common.tsx`, `components/thread/*`, `components/detail/*`, the panels in `components/*.tsx`, the other pages and all of `apps/web/test/`.
 
+## Browser plane: runtime/browser and apps/egress (milestone 3)
+
+Adapted at newer upstream pins than the files above; existing files keep their original pins.
+
+- **OpenBot** — pin `1ac9c35b393152e8d7e76c2331b8d5b584ba0e13` (MIT, Copyright (c) 2026 CopilotKit)
+- **OpenMuse** — pin `34b15bc80340e582fb8c25573646cfb0bbc5184d` (MIT, Copyright (c) 2026 OpenMuse contributors)
+
+| Airlock file | Upstream path | Modifications |
+|---|---|---|
+| `runtime/browser/src/aria.mjs` | OpenBot `agent-computer/src/aria-snapshot.ts` | Snapshot parsing only, as dependency-free ESM; refs bound to a snapshot generation; control limit raised to 300; bounded fields. |
+| `runtime/browser/src/runner.mjs` | OpenBot `agent-computer/src/profiles.ts`, `agent-computer/src/index.ts` | One persistent headless Chromium per container with a transient `/tmp` profile, Chromium's sandbox on, proxy-only networking, QUIC off, WebRTC limited to proxied UDP, downloads and service workers disabled; the HTTP/token API is replaced by a unix-socket framed protocol; no evaluate/CDP operations; dialogs are dismissed and held for review. |
+| `apps/egress/src/policy.ts` | OpenMuse `apps/worker/src/network.ts` (`isPublicIp`) | IPv6 parsing hardened; IPv4-mapped and CGNAT ranges refused; host allowlist matching (exact or `.suffix`). |
+| `apps/egress/src/proxy.ts` | OpenMuse `apps/worker/src/proxy.ts` | CONNECT and absolute-URI GET only; resolve once and connect to the validated address (no rebinding); per-attempt allowlist and ports from env; bounded tunnel lifetime and bytes; one JSON decision line per request. |
+
+Written from scratch: `runtime/browser/src/{client,protocol,state}.mjs`, `runtime/browser/demo.sh`, `runtime/browser/seccomp/derive.py`, `apps/egress/src/index.ts`, all tests. `runtime/browser/seccomp/chromium.json` is Docker's default seccomp profile (moby/profiles v0.1.0, Apache-2.0) plus one rule allowing `clone`/`unshare`/`chroot` for Chromium's own sandbox.
+
 ## runtime/python and profile adapters
 
 No source code in `runtime/python/` or `profiles/tabulate-365/airlock_adapter_tabulate.py` is copied from either upstream. Design ideas taken, with no code carried over:

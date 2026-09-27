@@ -3,13 +3,19 @@
  *
  * Files are delivered into containers with Docker's PUT /archive (a tar upload), never by shell
  * interpolation. This writer produces only regular files and directories, owned by 1000:1000, with
- * validated relative paths. It is deliberately not a general tar implementation.
+ * validated relative paths. It is deliberately not a general tar implementation. An entry may override
+ * its owner and mode (analysis/node inputs are root-owned and read-only: uid 0, 0444 / dirs 0555).
  */
 export interface TarEntry {
   /** Relative POSIX path (already validated by the caller as traversal-free). */
   path: string;
   bytes?: Uint8Array;
   kind: "file" | "dir";
+  /** Permission bits (default 0644 file, 0755 dir). */
+  mode?: number;
+  /** Owner uid/gid (default 1000:1000, the sandbox user). */
+  uid?: number;
+  gid?: number;
 }
 
 const BLOCK = 512;
@@ -53,9 +59,11 @@ function header(entry: TarEntry, size: number): Uint8Array {
   const enc = new TextEncoder();
   const { name, prefix } = splitName(entry.kind === "dir" ? `${entry.path}/` : entry.path);
   write(buf, 0, enc.encode(name));
-  write(buf, 100, octal(entry.kind === "dir" ? 0o755 : 0o644, 8));
-  write(buf, 108, octal(UID, 8));
-  write(buf, 116, octal(GID, 8));
+  const mode = entry.mode ?? (entry.kind === "dir" ? 0o755 : 0o644);
+  if (!Number.isInteger(mode) || mode < 0 || mode > 0o777) throw new TarError("mode must be permission bits only (no setuid/setgid/sticky)");
+  write(buf, 100, octal(mode, 8));
+  write(buf, 108, octal(entry.uid ?? UID, 8));
+  write(buf, 116, octal(entry.gid ?? GID, 8));
   write(buf, 124, octal(size, 12));
   write(buf, 136, octal(Math.floor(Date.now() / 1000), 12));
   // checksum placeholder: 8 spaces

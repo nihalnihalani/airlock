@@ -1,0 +1,7 @@
+{ "_comment": "ACCEPTANCE diagnostic (verifier_tester), not a model run: analysis profile, uploaded CSV -> summary.json + chart.png.",
+  "turns": [
+    { "text": "Listing inputs.", "toolCalls": [{ "name": "files_list", "args": {} }] },
+    { "text": "Writing the program.", "toolCalls": [{ "name": "code_write", "args": { "path": "code/acc.py", "contentFile": "acc_analysis.py" } }] },
+    { "text": "Running it.", "toolCalls": [{ "name": "code_run", "args": { "language": "python", "file": "code/acc.py" } }] },
+    { "text": "Submitting.", "toolCalls": [{ "name": "submit_result", "args": { "summary": "Acceptance diagnostic: totals of the uploaded CSV with a chart.", "outputs": ["outputs/summary.json", "outputs/chart.png"], "sources": [] } }] }
+  ] }

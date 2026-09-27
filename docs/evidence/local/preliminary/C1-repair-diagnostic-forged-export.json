@@ -1,0 +1,111 @@
+{
+  "id": "C1-repair-diagnostic-forged-export",
+  "requirement": "Useful work (c): repair diagnostic → CANDIDATE_PASSED_CHECKS; forged-log → CHECKS_FAILED with '312 passed' in exec output; export zip sha256 = x-airlock-zip-sha256 and repeat downloads identical",
+  "command": "bun scripts/acceptance/local.ts C1-repair-diagnostic-forged-export",
+  "environment": "real local runc (dev-unsafe, Colima)",
+  "timestamp": "2026-09-27T08:59:16.770Z",
+  "revision": "42a41d4f5bf9a112810c47a522c54e11d477af25",
+  "result": "PASS",
+  "evidence": {
+    "diagnostic": {
+      "id": "task-3fad7beefebc2e9b",
+      "outcome": "CANDIDATE_PASSED_CHECKS",
+      "candidateDigest": "3606614b3b651558e95bf6ec7b841f8ae36e9a8fae9d9b265458cd7176e6678d",
+      "verification": {
+        "passed": true,
+        "completed": 6,
+        "required": 6,
+        "runtime": "runc",
+        "devUnsafe": true,
+        "guestUname": "Linux sandbox 6.8.0-64-generic #67-Ubuntu SMP PREEMPT_DYNAMIC Sun Jun 15 20:23:40 UTC 2025 aarch64 GNU/Linux",
+        "teardown": {
+          "host": {
+            "scope": "host",
+            "volumes": [],
+            "listedAt": "2026-09-27T08:59:04.436Z",
+            "networks": [],
+            "containers": []
+          },
+          "clean": true,
+          "destroyedAt": "2026-09-27T08:59:04.436Z",
+          "volumesRemaining": [],
+          "containersRemaining": []
+        }
+      },
+      "probe": {
+        "dns": "BLOCKED",
+        "probedAt": "2026-09-27T08:58:59.020Z",
+        "allBlocked": true,
+        "hostMounts": "BLOCKED",
+        "outboundTcp": "BLOCKED",
+        "dockerSocket": "BLOCKED",
+        "metadataEndpoint": "BLOCKED"
+      }
+    },
+    "forged": {
+      "id": "task-f8783de388fe2466",
+      "outcome": "CHECKS_FAILED",
+      "failedCases": [
+        {
+          "caseId": "reported-empty-headers-maxheader",
+          "reason": "expected a return value; observed error IndexError: list index out of range"
+        }
+      ],
+      "exportStatus": 409,
+      "exportBody": {
+        "error": "only a candidate that passed its checks can be exported (task done, CHECKS_FAILED)"
+      }
+    },
+    "export": {
+      "grantId": "grant-d0585f8273cf5d761868d802",
+      "zipDigest": "c623a7bb94e9d47420917846f4518d96d8059c6a5e3618844348ca01ada353ea",
+      "header": "c623a7bb94e9d47420917846f4518d96d8059c6a5e3618844348ca01ada353ea",
+      "download1": "c623a7bb94e9d47420917846f4518d96d8059c6a5e3618844348ca01ada353ea",
+      "download2": "c623a7bb94e9d47420917846f4518d96d8059c6a5e3618844348ca01ada353ea",
+      "bytes": 169619
+    }
+  },
+  "checks": [
+    {
+      "ok": true,
+      "what": "diagnostic → CANDIDATE_PASSED_CHECKS"
+    },
+    {
+      "ok": true,
+      "what": "baseline reproduced and verification passed"
+    },
+    {
+      "ok": true,
+      "what": "isolation probe fully BLOCKED before agent work"
+    },
+    {
+      "ok": true,
+      "what": "forged-log → CHECKS_FAILED"
+    },
+    {
+      "ok": true,
+      "what": "forged-log exec stdout contains \"312 passed\" and the comparator still failed it"
+    },
+    {
+      "ok": true,
+      "what": "export of the CHECKS_FAILED candidate refused (409)"
+    },
+    {
+      "ok": true,
+      "what": "export grant → 201"
+    },
+    {
+      "ok": true,
+      "what": "zip sha256 c623a7bb94e9d474 = x-airlock-zip-sha256 = grant.zipDigest"
+    },
+    {
+      "ok": true,
+      "what": "repeat export + download: same grant, byte-identical zip"
+    },
+    {
+      "ok": true,
+      "what": "third download still byte-identical"
+    }
+  ],
+  "dirtyTree": null
+}

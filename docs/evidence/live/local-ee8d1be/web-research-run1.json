@@ -1,0 +1,443 @@
+{
+  "scenario": "web-research",
+  "label": "run1",
+  "taskId": "task-44bde658c315ad41",
+  "durationMs": 21050,
+  "status": "done",
+  "outcome": "RESULT_VERIFIED",
+  "cleanup": {
+    "at": "2026-09-27T16:06:43.407Z",
+    "detail": "supervisor confirmed teardown of 1 attempt(s)",
+    "status": "confirmed"
+  },
+  "checks": [
+    {
+      "name": "screenshot-evidence",
+      "detail": "1 screenshot(s) stored; cited source(s) shown: https://www.iana.org/help/example-domains",
+      "passed": true
+    },
+    {
+      "name": "sources-cited",
+      "detail": "1 source(s) cited",
+      "passed": true
+    },
+    {
+      "name": "sources-visited",
+      "detail": "every cited source was reached by this task's browser",
+      "passed": true
+    },
+    {
+      "name": "sources-in-policy",
+      "detail": "every cited source is inside the allowed destinations",
+      "passed": true
+    }
+  ],
+  "sources": [
+    {
+      "url": "https://www.iana.org/help/example-domains",
+      "screenshotArtifactId": "art-2eeaf2ef27ab42d272e0"
+    }
+  ],
+  "resultSummary": "Starting at https://example.com, I followed the 'Learn more' link to the IANA page at https://www.iana.org/help/example-domains. That page states: \"As described in RFC 2606 and RFC 6761, a number of domains such as example.com and example.org are maintained for documentation purposes.\" Therefore, the two RFCs describing the reserved example domains are RFC 2606 and RFC 6761. A screenshot of the IANA page was captured as evidence (artifact art-2eeaf2ef27ab42d272e0).",
+  "answerCorrect": true,
+  "screenshots": [
+    {
+      "id": "art-2eeaf2ef27ab42d272e0",
+      "kind": "screenshot",
+      "filename": "screenshot-005-1.png",
+      "mediaType": "image/png",
+      "byteLength": 86658,
+      "recordedSha256": "8e396907da4d90a4f94d386c7ea783b090040ac9b76b0477f3a56786560e855f",
+      "downloadedSha256": "8e396907da4d90a4f94d386c7ea783b090040ac9b76b0477f3a56786560e855f",
+      "headerSha256": "8e396907da4d90a4f94d386c7ea783b090040ac9b76b0477f3a56786560e855f",
+      "taskRouteSha256": "8e396907da4d90a4f94d386c7ea783b090040ac9b76b0477f3a56786560e855f",
+      "match": true,
+      "source": {
+        "url": "https://www.iana.org/help/example-domains",
+        "step": 5,
+        "tool": "browser_screenshot",
+        "attemptId": "att-55c64f1bce489b88e8ce"
+      },
+      "png": {
+        "valid": true,
+        "width": 1280,
+        "height": 800
+      }
+    }
+  ],
+  "imageTurns": [
+    {
+      "seq": 24,
+      "imageArtifactId": "art-2eeaf2ef27ab42d272e0",
+      "imageSha256": "8e396907da4d90a4f94d386c7ea783b090040ac9b76b0477f3a56786560e855f"
+    }
+  ],
+  "imageShaMatchesScreenshot": true,
+  "navigations": [
+    {
+      "seq": 10,
+      "detail": "status 200",
+      "status": 200
+    }
+  ],
+  "model": {
+    "modelCalls": 6,
+    "models": [
+      "glm-5.3-normalize"
+    ],
+    "hosts": [
+      "api.vultrinference.com"
+    ],
+    "inputTokens": 16980,
+    "outputTokens": 815,
+    "reasoningTokens": 470,
+    "imageAttachedTurns": 1,
+    "modelErrors": 0
+  },
+  "events": [
+    {
+      "seq": 1,
+      "at": "2026-09-27T16:06:24.113Z",
+      "kind": "lifecycle",
+      "title": "Task created",
+      "detail": "general task, profile web-research v1; destinations example.com, iana.org, www.iana.org"
+    },
+    {
+      "seq": 2,
+      "at": "2026-09-27T16:06:24.149Z",
+      "kind": "phase",
+      "title": "prepare",
+      "detail": "general task profile web-research v1; tools: browser_navigate, browser_observe, browser_click, browser_type, browser_key, browser_scroll, browser_screenshot, browser_tabs, browser_download_list, browser_download_save, browser_propose_submit, submit_result; destinations: example.com, iana.org, www.iana.org"
+    },
+    {
+      "seq": 3,
+      "at": "2026-09-27T16:06:24.150Z",
+      "kind": "check",
+      "title": "dev-unsafe runtime",
+      "detail": "supervisor host runs runc with AIRLOCK_DEV_UNSAFE; results are not a deployment measurement"
+    },
+    {
+      "seq": 4,
+      "at": "2026-09-27T16:06:24.150Z",
+      "kind": "phase",
+      "title": "execute",
+      "detail": "model loop for goal under profile web-research"
+    },
+    {
+      "seq": 5,
+      "at": "2026-09-27T16:06:25.621Z",
+      "kind": "model",
+      "title": "Model turn 1",
+      "detail": "I'll start by navigating to example.com as instructed.",
+      "model": "glm-5.3-normalize",
+      "host": "https://api.vultrinference.com/v1",
+      "durationMs": 1468,
+      "toolCalls": [
+        {
+          "name": "browser_navigate"
+        }
+      ],
+      "usage": {
+        "input": 2177,
+        "output": 111,
+        "reasoning": 84
+      },
+      "tokensCharged": 2372,
+      "finishReason": "tool_calls",
+      "imageAttached": false
+    },
+    {
+      "seq": 6,
+      "at": "2026-09-27T16:06:25.624Z",
+      "kind": "tool",
+      "title": "browser_navigate allowed",
+      "detail": "example.com is inside the task's destinations",
+      "tool": "browser_navigate",
+      "opState": "allowed"
+    },
+    {
+      "seq": 7,
+      "at": "2026-09-27T16:06:25.627Z",
+      "kind": "lifecycle",
+      "title": "Creating browser sandbox",
+      "detail": "attempt att-55c64f1bce489b88e8ce, generation 1, deadline 2026-09-27T16:21:25.625Z; egress allowed to example.com, iana.org, www.iana.org"
+    },
+    {
+      "seq": 8,
+      "at": "2026-09-27T16:06:31.638Z",
+      "kind": "lifecycle",
+      "title": "browser sandbox created",
+      "detail": "container airlock-browser-task-44bde658c315ad41-att-55c64f1bce489b88e8ce; runtime runc (dev-unsafe)",
+      "opState": "completed"
+    },
+    {
+      "seq": 9,
+      "at": "2026-09-27T16:06:31.640Z",
+      "kind": "tool",
+      "title": "browser_navigate started",
+      "tool": "browser_navigate",
+      "opState": "started"
+    },
+    {
+      "seq": 10,
+      "at": "2026-09-27T16:06:31.885Z",
+      "kind": "tool",
+      "title": "browser_navigate https://example.com/",
+      "detail": "status 200",
+      "tool": "browser_navigate",
+      "opState": "completed"
+    },
+    {
+      "seq": 11,
+      "at": "2026-09-27T16:06:32.777Z",
+      "kind": "model",
+      "title": "Model turn 2",
+      "detail": "(no text)",
+      "model": "glm-5.3-normalize",
+      "host": "https://api.vultrinference.com/v1",
+      "durationMs": 891,
+      "toolCalls": [
+        {
+          "name": "browser_observe"
+        }
+      ],
+      "usage": {
+        "input": 2244,
+        "output": 21,
+        "reasoning": 14
+      },
+      "tokensCharged": 2279,
+      "finishReason": "tool_calls",
+      "imageAttached": false
+    },
+    {
+      "seq": 12,
+      "at": "2026-09-27T16:06:32.783Z",
+      "kind": "tool",
+      "title": "browser_observe started",
+      "tool": "browser_observe",
+      "opState": "started"
+    },
+    {
+      "seq": 13,
+      "at": "2026-09-27T16:06:32.861Z",
+      "kind": "tool",
+      "title": "browser_observe https://example.com/",
+      "detail": "Example Domain — 129 chars, 1 controls, 1 tab(s)\n\nExample Domain\n\nThis domain is for use in documentation examples without needing permission. Avoid use in operations.\n\nLearn more",
+      "tool": "browser_observe",
+      "opState": "completed"
+    },
+    {
+      "seq": 14,
+      "at": "2026-09-27T16:06:33.771Z",
+      "kind": "model",
+      "title": "Model turn 3",
+      "detail": "I found the 'Learn more' link. Let me click it to follow to IANA.",
+      "model": "glm-5.3-normalize",
+      "host": "https://api.vultrinference.com/v1",
+      "durationMs": 909,
+      "toolCalls": [
+        {
+          "name": "browser_click"
+        }
+      ],
+      "usage": {
+        "input": 2378,
+        "output": 38,
+        "reasoning": 0
+      },
+      "tokensCharged": 2416,
+      "finishReason": "tool_calls",
+      "imageAttached": false
+    },
+    {
+      "seq": 15,
+      "at": "2026-09-27T16:06:33.773Z",
+      "kind": "tool",
+      "title": "browser_click started",
+      "tool": "browser_click",
+      "opState": "started"
+    },
+    {
+      "seq": 16,
+      "at": "2026-09-27T16:06:35.099Z",
+      "kind": "tool",
+      "title": "browser_click ref e6",
+      "detail": "generation 3; page changed; https://www.iana.org/help/example-domains",
+      "tool": "browser_click",
+      "opState": "completed"
+    },
+    {
+      "seq": 17,
+      "at": "2026-09-27T16:06:36.007Z",
+      "kind": "model",
+      "title": "Model turn 4",
+      "detail": "(no text)",
+      "model": "glm-5.3-normalize",
+      "host": "https://api.vultrinference.com/v1",
+      "durationMs": 906,
+      "toolCalls": [
+        {
+          "name": "browser_observe"
+        }
+      ],
+      "usage": {
+        "input": 2461,
+        "output": 7,
+        "reasoning": 0
+      },
+      "tokensCharged": 2468,
+      "finishReason": "tool_calls",
+      "imageAttached": false
+    },
+    {
+      "seq": 18,
+      "at": "2026-09-27T16:06:36.013Z",
+      "kind": "tool",
+      "title": "browser_observe started",
+      "tool": "browser_observe",
+      "opState": "started"
+    },
+    {
+      "seq": 19,
+      "at": "2026-09-27T16:06:36.095Z",
+      "kind": "tool",
+      "title": "browser_observe https://www.iana.org/help/example-domains",
+      "detail": "Example Domains — 1279 chars, 31 controls, 1 tab(s)\n\nDomains\nProtocols\nNumbers\nAbout\nInstructions and Guides\nExample Domains\n\nAs described in RFC 2606 and RFC 6761, a number of domains such as example.com and example.org are maintained for documentation purposes. These domains may be used as illustrative examples in documents without prior coordination with us. They are not available for registration or transfer.\n\nWe provide a web service on the example domain hosts to provide basic information on the purpose of the domain. These web services are provided as best effort, but are not designed t",
+      "tool": "browser_observe",
+      "opState": "completed"
+    },
+    {
+      "seq": 20,
+      "at": "2026-09-27T16:06:37.233Z",
+      "kind": "model",
+      "title": "Model turn 5",
+      "detail": "I found the answer on the IANA page: the reserved example domains are described in **RFC 2606** and **RFC 6761**. Now let me take a screenshot of the IANA page as evidence.",
+      "model": "glm-5.3-normalize",
+      "host": "https://api.vultrinference.com/v1",
+      "durationMs": 1137,
+      "toolCalls": [
+        {
+          "name": "browser_screenshot"
+        }
+      ],
+      "usage": {
+        "input": 3348,
+        "output": 132,
+        "reasoning": 79
+      },
+      "tokensCharged": 3559,
+      "finishReason": "tool_calls",
+      "imageAttached": false
+    },
+    {
+      "seq": 21,
+      "at": "2026-09-27T16:06:37.236Z",
+      "kind": "tool",
+      "title": "browser_screenshot started",
+      "tool": "browser_screenshot",
+      "opState": "started"
+    },
+    {
+      "seq": 22,
+      "at": "2026-09-27T16:06:37.324Z",
+      "kind": "artifact",
+      "title": "Screenshot stored art-2eeaf2ef27ab42d272e0",
+      "detail": "https://www.iana.org/help/example-domains (1280x800, sha256 8e396907da4d90a4f94d386c7ea783b090040ac9b76b0477f3a56786560e855f)",
+      "tool": "browser_screenshot",
+      "sha256": "8e396907da4d90a4f94d386c7ea783b090040ac9b76b0477f3a56786560e855f"
+    },
+    {
+      "seq": 23,
+      "at": "2026-09-27T16:06:37.324Z",
+      "kind": "tool",
+      "title": "browser_screenshot https://www.iana.org/help/example-domains",
+      "detail": "stored as art-2eeaf2ef27ab42d272e0",
+      "tool": "browser_screenshot",
+      "opState": "completed"
+    },
+    {
+      "seq": 24,
+      "at": "2026-09-27T16:06:43.046Z",
+      "kind": "model",
+      "title": "Model turn 6",
+      "detail": "I have completed the task. I navigated from example.com via its 'Learn more' link to the IANA page, found the answer, and captured a screenshot as evidence.\n\n**Answer:** The two RFCs that describe the reserved example domains are **RFC 2606** and **RFC 6761**.",
+      "model": "glm-5.3-normalize",
+      "host": "https://api.vultrinference.com/v1",
+      "durationMs": 5720,
+      "toolCalls": [
+        {
+          "name": "submit_result"
+        }
+      ],
+      "usage": {
+        "input": 4372,
+        "output": 506,
+        "reasoning": 293
+      },
+      "tokensCharged": 5171,
+      "finishReason": "tool_calls",
+      "imageAttached": true,
+      "imageSha256": "8e396907da4d90a4f94d386c7ea783b090040ac9b76b0477f3a56786560e855f"
+    },
+    {
+      "seq": 25,
+      "at": "2026-09-27T16:06:43.050Z",
+      "kind": "tool",
+      "title": "submit_result",
+      "detail": "Starting at https://example.com, I followed the 'Learn more' link to the IANA page at https://www.iana.org/help/example-domains. That page states: \"As described in RFC 2606 and RFC 6761, a number of domains such as example.com and example.org are maintained for documentation purposes.\" Therefore, the two RFCs describing the reserved example domains are RFC 2606 and RFC 6761. A screenshot of the IANA page was captured as evidence (artifact art-2eeaf2ef27ab42d272e0).\noutputs: (none)\nsources: https://www.iana.org/help/example-domains",
+      "tool": "submit_result",
+      "opState": "completed"
+    },
+    {
+      "seq": 26,
+      "at": "2026-09-27T16:06:43.053Z",
+      "kind": "phase",
+      "title": "freeze",
+      "detail": "stopping the sandboxes and collecting outputs/ read-only"
+    },
+    {
+      "seq": 27,
+      "at": "2026-09-27T16:06:43.403Z",
+      "kind": "lifecycle",
+      "title": "browser sandbox destroyed (result submitted)",
+      "detail": "revoked; destroyed; remaining containers=0 volumes=0",
+      "opState": "completed"
+    },
+    {
+      "seq": 28,
+      "at": "2026-09-27T16:06:43.406Z",
+      "kind": "check",
+      "title": "passed: screenshot-evidence",
+      "detail": "1 screenshot(s) stored; cited source(s) shown: https://www.iana.org/help/example-domains"
+    },
+    {
+      "seq": 29,
+      "at": "2026-09-27T16:06:43.406Z",
+      "kind": "check",
+      "title": "passed: sources-cited",
+      "detail": "1 source(s) cited"
+    },
+    {
+      "seq": 30,
+      "at": "2026-09-27T16:06:43.406Z",
+      "kind": "check",
+      "title": "passed: sources-visited",
+      "detail": "every cited source was reached by this task's browser"
+    },
+    {
+      "seq": 31,
+      "at": "2026-09-27T16:06:43.406Z",
+      "kind": "check",
+      "title": "passed: sources-in-policy",
+      "detail": "every cited source is inside the allowed destinations"
+    },
+    {
+      "seq": 32,
+      "at": "2026-09-27T16:06:43.407Z",
+      "kind": "phase",
+      "title": "Outcome RESULT_VERIFIED",
+      "detail": "all 4 completion checks of profile web-research passed"
+    }
+  ]
+}

@@ -1,0 +1,566 @@
+{
+  "id": "V-C-repair-live",
+  "requirement": "Repair (C): fresh live repair from profiles/tabulate-365/issue.md as a judge → CANDIDATE_PASSED_CHECKS; export zip sha256 = x-airlock-zip-sha256, identical on repeat; preview with a changed input returns the fixed behaviour",
+  "command": "bun scripts/acceptance/vultr.ts V-C-repair-live",
+  "category": "real Vultr compute + live model",
+  "environment": "real Vultr compute (control vc2-2c-4gb @ 155.138.198.12, sandbox vx1-g-4c-16g-240s @ 144.202.28.80, region atl, Kata) + live model (glm-5.3 via Vultr Serverless Inference); public HTTPS API https://155-138-198-12.sslip.io",
+  "startedAt": "2026-09-27T16:54:35.092Z",
+  "timestamp": "2026-09-27T16:56:28.612Z",
+  "revision": "f223c19aa19d0429c0d51dd033fca61e9ac8baea",
+  "result": "PASS",
+  "checks": [
+    {
+      "ok": true,
+      "what": "repair availability: live gate passed 3 of 3 on kata with glm-5.3-normalize (2026-09-27T16:45:49.029Z)"
+    },
+    {
+      "ok": true,
+      "what": "create live repair task → 201 task-8c04acc7d173484d"
+    },
+    {
+      "ok": true,
+      "what": "live model run: 11 model events, models glm-5.3-normalize, hosts https://api.vultrinference.com/v1"
+    },
+    {
+      "ok": true,
+      "what": "outcome done/CANDIDATE_PASSED_CHECKS"
+    },
+    {
+      "ok": true,
+      "what": "baseline reproduced (true); verification passed (true, 6/6 cases)"
+    },
+    {
+      "ok": true,
+      "what": "verification ran on kata (devUnsafe false)"
+    },
+    {
+      "ok": true,
+      "what": "export grant → 201"
+    },
+    {
+      "ok": true,
+      "what": "zip sha256 342434c7a9ab58aa = x-airlock-zip-sha256 342434c7a9ab58aa = grant.zipDigest"
+    },
+    {
+      "ok": true,
+      "what": "repeat export+download byte-identical (342434c7a9ab58aa; grant same)"
+    },
+    {
+      "ok": true,
+      "what": "zip carries patch.diff touching tabulate/__init__.py (16 lines)"
+    },
+    {
+      "ok": true,
+      "what": "the unpatched base raises IndexError for the changed input (locally)"
+    },
+    {
+      "ok": true,
+      "what": "preview (changed input) → 200 ok: \"Qty    Sum    Avg\\n-----  -----  -----\" (expected \"Qty    Sum    Avg\\n-----  -----  -----\") on kata"
+    },
+    {
+      "ok": true,
+      "what": "preview with a foreign digest refused (409)"
+    }
+  ],
+  "evidence": {
+    "task": {
+      "id": "task-8c04acc7d173484d",
+      "profileId": "tabulate-365",
+      "status": "done",
+      "outcome": "CANDIDATE_PASSED_CHECKS",
+      "phase": "ready",
+      "budget": {
+        "tokensUsed": 59449,
+        "attemptTokens": 59449,
+        "modelCallsUsed": 11,
+        "attemptModelCalls": 11,
+        "repairAttemptsUsed": 1
+      },
+      "cleanup": {
+        "at": "2026-09-27T16:56:00.239Z",
+        "detail": "supervisor confirmed teardown of attempt att-7dffe2c8d1481475c68e",
+        "status": "confirmed"
+      },
+      "createdAt": "2026-09-27T16:54:38.626Z",
+      "updatedAt": "2026-09-27T16:56:17.152Z",
+      "completion": null,
+      "candidateDigest": "fc6da3c89997f5bc26adf9596880ce6fdfdeda5f14c37c6b87a0f80dcf9463ab",
+      "verification": {
+        "passed": true,
+        "completed": 6,
+        "required": 6,
+        "runtime": "kata",
+        "imageId": "sha256:9952f7eb8b4830391bddfcd2ec81207bfcd02dc8280bab0b8b8f25e9a19ec238",
+        "guestUname": "Linux sandbox 6.18.35 #1 SMP Mon Jun 15 12:55:58 UTC 2026 x86_64 GNU/Linux",
+        "cases": [
+          {
+            "caseId": "reported-empty-headers-maxheader",
+            "passed": true
+          },
+          {
+            "caseId": "reg-small-table-maxheader",
+            "passed": true
+          },
+          {
+            "caseId": "reg-small-table-plain",
+            "passed": true
+          },
+          {
+            "caseId": "reg-empty-headers-no-option",
+            "passed": true
+          },
+          {
+            "caseId": "reg-maxcolwidths-wrap",
+            "passed": true
+          },
+          {
+            "caseId": "reg-scalar-maxheader-int",
+            "passed": true
+          }
+        ]
+      },
+      "baselinePassed": true
+    },
+    "provenance": {
+      "modelEvents": 11,
+      "models": [
+        "glm-5.3-normalize"
+      ],
+      "hosts": [
+        "https://api.vultrinference.com/v1"
+      ],
+      "scripted": false
+    },
+    "export": {
+      "grantId": "grant-46672d64def0e2c941a420ba",
+      "zipDigest": "342434c7a9ab58aa8f2e251e5fc1b62c4250974ba19fb96c5c43cf6f07fa5679",
+      "header": "342434c7a9ab58aa8f2e251e5fc1b62c4250974ba19fb96c5c43cf6f07fa5679",
+      "download1": "342434c7a9ab58aa8f2e251e5fc1b62c4250974ba19fb96c5c43cf6f07fa5679",
+      "download2": "342434c7a9ab58aa8f2e251e5fc1b62c4250974ba19fb96c5c43cf6f07fa5679",
+      "bytes": 184943,
+      "entries": [
+        "2618  01-01-1980 00:00   README.txt",
+        "7223  01-01-1980 00:00   baseline.json",
+        "55552  01-01-1980 00:00   events.jsonl",
+        "340  01-01-1980 00:00   manifest.json",
+        "559  01-01-1980 00:00   patch.diff",
+        "2629  01-01-1980 00:00   reproduction/README.txt",
+        "107737  01-01-1980 00:00   reproduction/files/tabulate/__init__.py",
+        "1492  01-01-1980 00:00   task.json",
+        "5795  01-01-1980 00:00   verification.json"
+      ],
+      "patch": "diff --git a/tabulate/__init__.py b/tabulate/__init__.py\n--- a/tabulate/__init__.py\n+++ b/tabulate/__init__.py\n@@ -2288,7 +2288,10 @@\n         )\n \n     if maxheadercolwidths is not None:\n-        num_cols = len(list_of_lists[0])\n+        if len(list_of_lists):\n+            num_cols = len(list_of_lists[0])\n+        else:\n+            num_cols = len(headers)\n         if isinstance(maxheadercolwidths, int):  # Expand scalar for all columns\n             maxheadercolwidths = _expand_iterable(\n                 maxheadercolwidths, num_cols, maxheadercolwidths\n"
+    },
+    "preview": {
+      "input": {
+        "headers": [
+          "Qty",
+          "Sum",
+          "Avg"
+        ],
+        "maxheadercolwidths": 10,
+        "tabular_data": []
+      },
+      "status": 200,
+      "observation": {
+        "caseId": "preview",
+        "status": "ok",
+        "valueCanonical": "\"Qty    Sum    Avg\\n-----  -----  -----\""
+      },
+      "expected": "\"Qty    Sum    Avg\\n-----  -----  -----\"",
+      "exec": {
+        "status": "succeeded",
+        "exitCode": 0,
+        "durationMs": 182
+      },
+      "runtime": "kata",
+      "foreignDigest": 409
+    },
+    "events": [
+      {
+        "seq": 1,
+        "at": "2026-09-27T16:54:38.626Z",
+        "kind": "lifecycle",
+        "title": "Task created",
+        "detail": "profile tabulate-365"
+      },
+      {
+        "seq": 2,
+        "at": "2026-09-27T16:55:15.749Z",
+        "kind": "phase",
+        "title": "prepare",
+        "detail": "profile tabulate-365 @ e13a4d0dd292cade200e653eb9155a1ca0f1dbea; 6 contract cases"
+      },
+      {
+        "seq": 3,
+        "at": "2026-09-27T16:55:15.756Z",
+        "kind": "phase",
+        "title": "baseline",
+        "detail": "creating and probing the author sandbox, then measuring the pristine tree: one fresh one-shot sandbox for each of 6 cases"
+      },
+      {
+        "seq": 4,
+        "at": "2026-09-27T16:55:15.760Z",
+        "kind": "lifecycle",
+        "title": "Creating author sandbox",
+        "detail": "attempt att-7dffe2c8d1481475c68e, generation 1, deadline 2026-09-27T17:00:15.758Z; execution authorized for 40 s at a time, renewed while this run holds its lease"
+      },
+      {
+        "seq": 5,
+        "at": "2026-09-27T16:55:18.224Z",
+        "kind": "lifecycle",
+        "title": "Author sandbox created",
+        "detail": "container airlock-author-task-8c04acc7d173484d-att-7dffe2c8d1481475c68e; runtime kata; probe all BLOCKED"
+      },
+      {
+        "seq": 6,
+        "at": "2026-09-27T16:55:18.226Z",
+        "kind": "check",
+        "title": "Isolation checkpoints",
+        "detail": "runtime kata; guest Linux sandbox 6.18.35 #1 SMP Mon Jun 15 12:55:58 UTC 2026 x86_64 GNU/Linux; hostname sandbox; probe all BLOCKED"
+      },
+      {
+        "seq": 7,
+        "at": "2026-09-27T16:55:21.320Z",
+        "kind": "exec",
+        "title": "baseline invocation reported-empty-headers-maxheader succeeded",
+        "detail": "exit=0 256ms observations=1 protocolErrors=0",
+        "tool": "baseline"
+      },
+      {
+        "seq": 8,
+        "at": "2026-09-27T16:55:24.390Z",
+        "kind": "exec",
+        "title": "baseline invocation reg-small-table-maxheader succeeded",
+        "detail": "exit=0 245ms observations=1 protocolErrors=0",
+        "tool": "baseline"
+      },
+      {
+        "seq": 9,
+        "at": "2026-09-27T16:55:27.296Z",
+        "kind": "exec",
+        "title": "baseline invocation reg-small-table-plain succeeded",
+        "detail": "exit=0 192ms observations=1 protocolErrors=0",
+        "tool": "baseline"
+      },
+      {
+        "seq": 10,
+        "at": "2026-09-27T16:55:30.030Z",
+        "kind": "exec",
+        "title": "baseline invocation reg-empty-headers-no-option succeeded",
+        "detail": "exit=0 183ms observations=1 protocolErrors=0",
+        "tool": "baseline"
+      },
+      {
+        "seq": 11,
+        "at": "2026-09-27T16:55:32.693Z",
+        "kind": "exec",
+        "title": "baseline invocation reg-maxcolwidths-wrap succeeded",
+        "detail": "exit=0 179ms observations=1 protocolErrors=0",
+        "tool": "baseline"
+      },
+      {
+        "seq": 12,
+        "at": "2026-09-27T16:55:35.268Z",
+        "kind": "exec",
+        "title": "baseline invocation reg-scalar-maxheader-int succeeded",
+        "detail": "exit=0 180ms observations=1 protocolErrors=0",
+        "tool": "baseline"
+      },
+      {
+        "seq": 13,
+        "at": "2026-09-27T16:55:35.278Z",
+        "kind": "check",
+        "title": "Baseline reproduces the reported failure",
+        "detail": "6/6 cases completed; 6 passed, 0 failed; exec succeeded"
+      },
+      {
+        "seq": 14,
+        "at": "2026-09-27T16:55:35.283Z",
+        "kind": "phase",
+        "title": "reproduce",
+        "detail": "model reproduction in author sandbox (attempt att-7dffe2c8d1481475c68e, generation 1, deadline 2026-09-27T17:00:15.758Z)"
+      },
+      {
+        "seq": 15,
+        "at": "2026-09-27T16:55:36.132Z",
+        "kind": "model",
+        "title": "Model turn 1",
+        "detail": "(no text)"
+      },
+      {
+        "seq": 16,
+        "at": "2026-09-27T16:55:36.187Z",
+        "kind": "tool",
+        "title": "read_file tabulate/__init__.py [2240-2330]",
+        "detail": "3921 chars, lines 2240-2330 of 3045",
+        "tool": "read_file",
+        "opState": "completed"
+      },
+      {
+        "seq": 17,
+        "at": "2026-09-27T16:55:38.230Z",
+        "kind": "model",
+        "title": "Model turn 2",
+        "detail": "(no text)"
+      },
+      {
+        "seq": 18,
+        "at": "2026-09-27T16:55:38.291Z",
+        "kind": "exec",
+        "title": "run: cd /workspace/src && grep -n \"_normalize_tabular_data\\|def _expand_iterable\\|def _wrap_text_to_colwidths\" tabulate/__init__.py | head -30",
+        "detail": "succeeded exit=0 51ms\nstdout:\n1436:def _normalize_tabular_data(tabular_data, headers, showindex=\"default\"):\n1641:def _wrap_text_to_colwidths(\n2263:    list_of_lists, headers, headers_pad = _normalize_tabular_data(\n2514:def _expand_iterable(original, num_desired, default):\n\nstderr:\n",
+        "tool": "run",
+        "opState": "completed"
+      },
+      {
+        "seq": 19,
+        "at": "2026-09-27T16:55:39.097Z",
+        "kind": "model",
+        "title": "Model turn 3",
+        "detail": "(no text)"
+      },
+      {
+        "seq": 20,
+        "at": "2026-09-27T16:55:39.147Z",
+        "kind": "tool",
+        "title": "read_file tabulate/__init__.py [1436-1640]",
+        "detail": "7795 chars, lines 1436-1640 of 3045",
+        "tool": "read_file",
+        "opState": "completed"
+      },
+      {
+        "seq": 21,
+        "at": "2026-09-27T16:55:45.853Z",
+        "kind": "model",
+        "title": "Model turn 4",
+        "detail": "(no text)"
+      },
+      {
+        "seq": 22,
+        "at": "2026-09-27T16:55:45.916Z",
+        "kind": "tool",
+        "title": "read_file tabulate/__init__.py [2505-2560]",
+        "detail": "1912 chars, lines 2505-2560 of 3045",
+        "tool": "read_file",
+        "opState": "completed"
+      },
+      {
+        "seq": 23,
+        "at": "2026-09-27T16:55:47.264Z",
+        "kind": "model",
+        "title": "Model turn 5",
+        "detail": "(no text)"
+      },
+      {
+        "seq": 24,
+        "at": "2026-09-27T16:55:47.397Z",
+        "kind": "exec",
+        "title": "run: cd /workspace/src && python -c \"\nfrom tabulate import tabulate\nprint(tabulate([], headers=['Name','Value'], maxheadercolwidths=5))\n\"",
+        "detail": "failed exit=1 122ms\nstdout:\n\nstderr:\nTraceback (most recent call last):\n  File \"<string>\", line 3, in <module>\n  File \"/workspace/src/tabulate/__init__.py\", line 2291, in tabulate\n    num_cols = len(list_of_lists[0])\n                   ~~~~~~~~~~~~~^^^\nIndexError: list index out of range\n",
+        "tool": "run",
+        "opState": "completed"
+      },
+      {
+        "seq": 25,
+        "at": "2026-09-27T16:55:48.280Z",
+        "kind": "model",
+        "title": "Model turn 6",
+        "detail": "(no text)"
+      },
+      {
+        "seq": 26,
+        "at": "2026-09-27T16:55:48.410Z",
+        "kind": "exec",
+        "title": "run: cd /workspace/src && python -c \"\nfrom tabulate import tabulate\nprint(tabulate([], headers=['Name','Value']))\nprint('---')\nprint(tabulate([], headers=['Name','Value'], maxcolwidths=5))\nprint('---')\npri\n…[truncated 58 chars]",
+        "detail": "failed exit=1 120ms\nstdout:\nName    Value\n------  -------\n---\nName    Value\n------  -------\n---\n\nstderr:\nTraceback (most recent call last):\n  File \"<string>\", line 7, in <module>\n  File \"/workspace/src/tabulate/__init__.py\", line 2291, in tabulate\n    num_cols = len(list_of_lists[0])\n               ",
+        "tool": "run",
+        "opState": "completed"
+      },
+      {
+        "seq": 27,
+        "at": "2026-09-27T16:55:49.312Z",
+        "kind": "model",
+        "title": "Model turn 7",
+        "detail": "(no text)"
+      },
+      {
+        "seq": 28,
+        "at": "2026-09-27T16:55:49.377Z",
+        "kind": "tool",
+        "title": "edit_file tabulate/__init__.py",
+        "detail": "107737 bytes; replaced 160 chars with 245 chars at offset 75777\n--- old\n    if maxheadercolwidths is not None:\n        num_cols = len(list_of_lists[0])\n        if isinstance(maxheadercolwidths, int):  # Expand scalar for all columns\n--- new\n    if maxheadercolwidths is not None:\n        if len(list_",
+        "tool": "edit_file",
+        "opState": "completed"
+      },
+      {
+        "seq": 29,
+        "at": "2026-09-27T16:55:49.381Z",
+        "kind": "phase",
+        "title": "repair",
+        "detail": "first change to tabulate/__init__.py: the model moved from reproduction to repair"
+      },
+      {
+        "seq": 30,
+        "at": "2026-09-27T16:55:50.049Z",
+        "kind": "model",
+        "title": "Model turn 8",
+        "detail": "(no text)"
+      },
+      {
+        "seq": 31,
+        "at": "2026-09-27T16:55:50.305Z",
+        "kind": "tool",
+        "title": "read_file tabulate/__init__.py [2286-2315]",
+        "detail": "1203 chars, lines 2286-2315 of 3048",
+        "tool": "read_file",
+        "opState": "completed"
+      },
+      {
+        "seq": 32,
+        "at": "2026-09-27T16:55:51.775Z",
+        "kind": "model",
+        "title": "Model turn 9",
+        "detail": "(no text)"
+      },
+      {
+        "seq": 33,
+        "at": "2026-09-27T16:55:51.901Z",
+        "kind": "exec",
+        "title": "run: cd /workspace/src && python -c \"\nfrom tabulate import tabulate\nprint(tabulate([], headers=['Name','Value'], maxheadercolwidths=5))\nprint('---')\nprint(tabulate([], headers=['Name','Value'], maxcolwidth\n…[truncated 406 chars]",
+        "detail": "succeeded exit=0 116ms\nstdout:\nName    Value\n------  -------\n---\nName    Value\n------  -------\n---\nName    Value\n------  -------\n---\n''\n---\nName    Val\n        ue\n------  -----\n---\nName    Value\n------  -------\na       b\n---\nName    Value\n------  -------\na       b\n\nstderr:\n",
+        "tool": "run",
+        "opState": "completed"
+      },
+      {
+        "seq": 34,
+        "at": "2026-09-27T16:55:53.888Z",
+        "kind": "model",
+        "title": "Model turn 10",
+        "detail": "(no text)"
+      },
+      {
+        "seq": 35,
+        "at": "2026-09-27T16:55:55.772Z",
+        "kind": "exec",
+        "title": "run: cd /workspace/src && python -c \"\nfrom tabulate import tabulate\nprint(repr(tabulate([], headers=[])))\nprint(repr(tabulate([], headers=['Name','Value'], tablefmt='grid', maxheadercolwidths=4)))\n\" && pyt\n…[truncated 39 chars]",
+        "detail": "succeeded exit=0 1872ms\nstdout:\n''\n'+--------+--------+\\n| Name   | Valu   |\\n|        | e      |\\n+========+========+\\n+--------+--------+'\n..s.......................s......s......s......s......s......s......s... [ 45%]\n....s....s..s..s..s..s..s..s............................................ [ 68%]",
+        "tool": "run",
+        "opState": "completed"
+      },
+      {
+        "seq": 36,
+        "at": "2026-09-27T16:55:57.503Z",
+        "kind": "model",
+        "title": "Model turn 11",
+        "detail": "(no text)"
+      },
+      {
+        "seq": 37,
+        "at": "2026-09-27T16:55:57.506Z",
+        "kind": "tool",
+        "title": "submit_candidate",
+        "detail": "Fixed IndexError for empty tables with maxheadercolwidths (issue #365). In tabulate(), the maxheadercolwidths block unconditionally read list_of_lists[0] to get num_cols; for an empty table there are no data rows. Now num_cols falls back to len(headers) when list_of_lists is empty (headers are the o",
+        "opState": "completed"
+      },
+      {
+        "seq": 38,
+        "at": "2026-09-27T16:55:57.509Z",
+        "kind": "phase",
+        "title": "freeze",
+        "detail": "revoking dispatch, stopping the author sandbox and collecting allowed files"
+      },
+      {
+        "seq": 39,
+        "at": "2026-09-27T16:56:00.190Z",
+        "kind": "lifecycle",
+        "title": "Author sandbox frozen",
+        "detail": "stopConfirmed=true settled=true files=1 rejected=0"
+      },
+      {
+        "seq": 40,
+        "at": "2026-09-27T16:56:00.200Z",
+        "kind": "artifact",
+        "title": "Candidate sealed",
+        "detail": "candidateDigest fc6da3c89997f5bc26adf9596880ce6fdfdeda5f14c37c6b87a0f80dcf9463ab; 1 replacement file(s); attempt att-7dffe2c8d1481475c68e"
+      },
+      {
+        "seq": 41,
+        "at": "2026-09-27T16:56:00.238Z",
+        "kind": "lifecycle",
+        "title": "Attempt destroyed (sealed)",
+        "detail": "revoked; destroyed; remaining containers=0 volumes=0",
+        "opState": "completed"
+      },
+      {
+        "seq": 42,
+        "at": "2026-09-27T16:56:00.243Z",
+        "kind": "phase",
+        "title": "verify",
+        "detail": "invoking 6 cases against sealed candidate fc6da3c89997f5bc26adf9596880ce6fdfdeda5f14c37c6b87a0f80dcf9463ab, one fresh one-shot sandbox per case"
+      },
+      {
+        "seq": 43,
+        "at": "2026-09-27T16:56:02.928Z",
+        "kind": "exec",
+        "title": "candidate invocation reported-empty-headers-maxheader succeeded",
+        "detail": "exit=0 185ms observations=1 protocolErrors=0",
+        "tool": "candidate"
+      },
+      {
+        "seq": 44,
+        "at": "2026-09-27T16:56:05.782Z",
+        "kind": "exec",
+        "title": "candidate invocation reg-small-table-maxheader succeeded",
+        "detail": "exit=0 225ms observations=1 protocolErrors=0",
+        "tool": "candidate"
+      },
+      {
+        "seq": 45,
+        "at": "2026-09-27T16:56:08.516Z",
+        "kind": "exec",
+        "title": "candidate invocation reg-small-table-plain succeeded",
+        "detail": "exit=0 180ms observations=1 protocolErrors=0",
+        "tool": "candidate"
+      },
+      {
+        "seq": 46,
+        "at": "2026-09-27T16:56:11.679Z",
+        "kind": "exec",
+        "title": "candidate invocation reg-empty-headers-no-option succeeded",
+        "detail": "exit=0 291ms observations=1 protocolErrors=0",
+        "tool": "candidate"
+      },
+      {
+        "seq": 47,
+        "at": "2026-09-27T16:56:14.498Z",
+        "kind": "exec",
+        "title": "candidate invocation reg-maxcolwidths-wrap succeeded",
+        "detail": "exit=0 183ms observations=1 protocolErrors=0",
+        "tool": "candidate"
+      },
+      {
+        "seq": 48,
+        "at": "2026-09-27T16:56:17.141Z",
+        "kind": "exec",
+        "title": "candidate invocation reg-scalar-maxheader-int succeeded",
+        "detail": "exit=0 185ms observations=1 protocolErrors=0",
+        "tool": "candidate"
+      },
+      {
+        "seq": 49,
+        "at": "2026-09-27T16:56:17.148Z",
+        "kind": "check",
+        "title": "Candidate passed these checks",
+        "detail": "6/6 cases completed; 6 passed, 0 failed; exec succeeded"
+      },
+      {
+        "seq": 50,
+        "at": "2026-09-27T16:56:17.149Z",
+        "kind": "phase",
+        "title": "Outcome CANDIDATE_PASSED_CHECKS",
+        "detail": "all 6 frozen cases passed"
+      }
+    ]
+  }
+}

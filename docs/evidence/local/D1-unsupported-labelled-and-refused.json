@@ -1,0 +1,387 @@
+{
+  "id": "D1-unsupported-labelled-and-refused",
+  "requirement": "Deferred/unsupported capabilities labelled unavailable (not simulated); unsupported mutations (arbitrary-site submit) refused; unsafe egressAllow refused",
+  "command": "bun scripts/acceptance/local.ts D1-unsupported-labelled-and-refused",
+  "environment": "real local runc (dev-unsafe, Colima); stack = git archive of 42a41d4f5bf9",
+  "timestamp": "2026-09-27T09:17:35.874Z",
+  "revision": "42a41d4f5bf9a112810c47a522c54e11d477af25",
+  "result": "PASS",
+  "evidence": {
+    "refusedCreates": [
+      {
+        "what": "unknown repair profile",
+        "status": 422,
+        "error": "profile \"desktop-automation\" is not supported"
+      },
+      {
+        "what": "unknown general profile",
+        "status": 422,
+        "error": "general task profile \"desktop\" is not supported; available: analysis, web-research, web-analysis"
+      },
+      {
+        "what": "IP-literal destination",
+        "status": 422,
+        "error": "egressAllow refused: 169.254.169.254: IP literals are not allowed"
+      },
+      {
+        "what": "localhost destination",
+        "status": 422,
+        "error": "egressAllow refused: localhost: single-label names are not allowed"
+      },
+      {
+        "what": ".internal destination",
+        "status": 422,
+        "error": "egressAllow refused: metadata.google.internal: special-use or internal names are not allowed"
+      },
+      {
+        "what": "browser profile without destinations",
+        "status": 422,
+        "error": "egressAllow refused: profile \"web-research\" needs at least one allowed destination (egressAllow)"
+      },
+      {
+        "what": "egress for a no-browser profile",
+        "status": 422,
+        "error": "egressAllow refused: profile \"analysis\" has no browser; egressAllow must be empty"
+      }
+    ],
+    "taskProfiles": [
+      {
+        "id": "analysis",
+        "tools": [
+          "code_write",
+          "code_run",
+          "code_read",
+          "files_list",
+          "submit_result"
+        ],
+        "browser": false
+      },
+      {
+        "id": "web-research",
+        "tools": [
+          "browser_navigate",
+          "browser_observe",
+          "browser_click",
+          "browser_type",
+          "browser_key",
+          "browser_scroll",
+          "browser_screenshot",
+          "browser_tabs",
+          "browser_download_list",
+          "browser_download_save",
+          "browser_propose_submit",
+          "submit_result"
+        ],
+        "browser": true
+      },
+      {
+        "id": "web-analysis",
+        "tools": [
+          "browser_navigate",
+          "browser_observe",
+          "browser_click",
+          "browser_type",
+          "browser_key",
+          "browser_scroll",
+          "browser_screenshot",
+          "browser_tabs",
+          "browser_save_text",
+          "browser_download_list",
+          "browser_download_save",
+          "browser_propose_submit",
+          "code_write",
+          "code_run",
+          "code_read",
+          "files_list",
+          "submit_result"
+        ],
+        "browser": true
+      }
+    ],
+    "task": {
+      "id": "task-7eacd955087813a4",
+      "status": "done",
+      "outcome": "UNSUPPORTED",
+      "result": {
+        "checks": [
+          {
+            "name": "capability",
+            "detail": "unsupported: desktop application automation",
+            "passed": false
+          },
+          {
+            "name": "screenshot-evidence",
+            "detail": "1 screenshot(s) stored",
+            "passed": true
+          },
+          {
+            "name": "sources-cited",
+            "detail": "1 source(s) cited",
+            "passed": true
+          },
+          {
+            "name": "sources-visited",
+            "detail": "every cited source was reached by this task's browser",
+            "passed": true
+          },
+          {
+            "name": "sources-in-policy",
+            "detail": "every cited source is inside the allowed destinations",
+            "passed": true
+          }
+        ],
+        "sources": [
+          {
+            "url": "https://example.com/",
+            "screenshotArtifactId": "art-88a1e86af04fbdb77a94"
+          }
+        ],
+        "summary": "The request needs desktop application automation, which Airlock does not provide.",
+        "outputArtifactIds": []
+      }
+    },
+    "events": [
+      {
+        "seq": 1,
+        "at": "2026-09-27T09:17:27.825Z",
+        "kind": "lifecycle",
+        "title": "Task created",
+        "detail": "general task, profile web-research v1; destinations example.com; diagnostic (scripted:acc-unsupported), not a model run"
+      },
+      {
+        "seq": 2,
+        "at": "2026-09-27T09:17:28.416Z",
+        "kind": "phase",
+        "title": "prepare",
+        "detail": "general task profile web-research v1; tools: browser_navigate, browser_observe, browser_click, browser_type, browser_key, browser_scroll, browser_screenshot, browser_tabs, browser_download_list, browser_download_save, browser_propose_submit, submit_result; destinations: example.com"
+      },
+      {
+        "seq": 3,
+        "at": "2026-09-27T09:17:28.417Z",
+        "kind": "check",
+        "title": "dev-unsafe runtime",
+        "detail": "supervisor host runs runc with AIRLOCK_DEV_UNSAFE; results are not a deployment measurement"
+      },
+      {
+        "seq": 4,
+        "at": "2026-09-27T09:17:28.417Z",
+        "kind": "phase",
+        "title": "execute",
+        "detail": "model loop for goal under profile web-research"
+      },
+      {
+        "seq": 5,
+        "at": "2026-09-27T09:17:28.419Z",
+        "kind": "model",
+        "title": "Model turn 1",
+        "detail": "Opening example.com."
+      },
+      {
+        "seq": 6,
+        "at": "2026-09-27T09:17:28.420Z",
+        "kind": "tool",
+        "title": "browser_navigate allowed",
+        "detail": "example.com is inside the task's destinations",
+        "tool": "browser_navigate",
+        "opState": "allowed",
+        "actor": "agent"
+      },
+      {
+        "seq": 7,
+        "at": "2026-09-27T09:17:28.421Z",
+        "kind": "lifecycle",
+        "title": "Creating browser sandbox",
+        "detail": "attempt att-54e098c6a33c5c343746, generation 1, deadline 2026-09-27T09:32:28.421Z; egress allowed to example.com"
+      },
+      {
+        "seq": 8,
+        "at": "2026-09-27T09:17:34.880Z",
+        "kind": "lifecycle",
+        "title": "browser sandbox created",
+        "detail": "container airlock-browser-task-7eacd955087813a4-att-54e098c6a33c5c343746; runtime runc (dev-unsafe)",
+        "opState": "completed"
+      },
+      {
+        "seq": 9,
+        "at": "2026-09-27T09:17:34.881Z",
+        "kind": "tool",
+        "title": "browser_navigate started",
+        "tool": "browser_navigate",
+        "opState": "started"
+      },
+      {
+        "seq": 10,
+        "at": "2026-09-27T09:17:35.151Z",
+        "kind": "tool",
+        "title": "browser_navigate https://example.com/",
+        "detail": "status 200",
+        "tool": "browser_navigate",
+        "opState": "completed"
+      },
+      {
+        "seq": 11,
+        "at": "2026-09-27T09:17:35.152Z",
+        "kind": "model",
+        "title": "Model turn 2",
+        "detail": "Try to submit on an arbitrary site."
+      },
+      {
+        "seq": 12,
+        "at": "2026-09-27T09:17:35.153Z",
+        "kind": "tool",
+        "title": "browser_propose_submit refused",
+        "detail": "https://example.com is not a supported final-action destination (supported: http://127.0.0.1:3100, https://forms.example.com); arbitrary-site submissions are not supported",
+        "tool": "browser_propose_submit",
+        "opState": "failed"
+      },
+      {
+        "seq": 13,
+        "at": "2026-09-27T09:17:35.154Z",
+        "kind": "model",
+        "title": "Model turn 3",
+        "detail": "Screenshot."
+      },
+      {
+        "seq": 14,
+        "at": "2026-09-27T09:17:35.155Z",
+        "kind": "tool",
+        "title": "browser_screenshot started",
+        "tool": "browser_screenshot",
+        "opState": "started"
+      },
+      {
+        "seq": 15,
+        "at": "2026-09-27T09:17:35.241Z",
+        "kind": "artifact",
+        "title": "Screenshot stored art-88a1e86af04fbdb77a94",
+        "detail": "https://example.com/ (1280x800, sha256 74055151462e4f8b960ea307694724a88dc32b73179f9812ebfa3c4d1ab9a81a)",
+        "actor": "agent"
+      },
+      {
+        "seq": 16,
+        "at": "2026-09-27T09:17:35.241Z",
+        "kind": "tool",
+        "title": "browser_screenshot https://example.com/",
+        "detail": "stored as art-88a1e86af04fbdb77a94",
+        "tool": "browser_screenshot",
+        "opState": "completed"
+      },
+      {
+        "seq": 17,
+        "at": "2026-09-27T09:17:35.242Z",
+        "kind": "model",
+        "title": "Model turn 4",
+        "detail": "This needs a desktop app."
+      },
+      {
+        "seq": 18,
+        "at": "2026-09-27T09:17:35.243Z",
+        "kind": "tool",
+        "title": "submit_result",
+        "detail": "The request needs desktop application automation, which Airlock does not provide.\noutputs: (none)\nsources: https://example.com/\nunsupported: desktop application automation",
+        "tool": "submit_result",
+        "opState": "completed"
+      },
+      {
+        "seq": 19,
+        "at": "2026-09-27T09:17:35.243Z",
+        "kind": "phase",
+        "title": "freeze",
+        "detail": "stopping the sandboxes and collecting outputs/ read-only"
+      },
+      {
+        "seq": 20,
+        "at": "2026-09-27T09:17:35.557Z",
+        "kind": "lifecycle",
+        "title": "browser sandbox destroyed (result submitted)",
+        "detail": "revoked; destroyed; remaining containers=0 volumes=0",
+        "opState": "completed"
+      },
+      {
+        "seq": 21,
+        "at": "2026-09-27T09:17:35.559Z",
+        "kind": "check",
+        "title": "failed: capability",
+        "detail": "unsupported: desktop application automation"
+      },
+      {
+        "seq": 22,
+        "at": "2026-09-27T09:17:35.559Z",
+        "kind": "check",
+        "title": "passed: screenshot-evidence",
+        "detail": "1 screenshot(s) stored"
+      },
+      {
+        "seq": 23,
+        "at": "2026-09-27T09:17:35.559Z",
+        "kind": "check",
+        "title": "passed: sources-cited",
+        "detail": "1 source(s) cited"
+      },
+      {
+        "seq": 24,
+        "at": "2026-09-27T09:17:35.560Z",
+        "kind": "check",
+        "title": "passed: sources-visited",
+        "detail": "every cited source was reached by this task's browser"
+      },
+      {
+        "seq": 25,
+        "at": "2026-09-27T09:17:35.560Z",
+        "kind": "check",
+        "title": "passed: sources-in-policy",
+        "detail": "every cited source is inside the allowed destinations"
+      },
+      {
+        "seq": 26,
+        "at": "2026-09-27T09:17:35.560Z",
+        "kind": "phase",
+        "title": "Outcome UNSUPPORTED",
+        "detail": "the model reported a missing capability: desktop application automation"
+      }
+    ]
+  },
+  "checks": [
+    {
+      "ok": true,
+      "what": "unknown repair profile → 422 (profile \"desktop-automation\" is not supported)"
+    },
+    {
+      "ok": true,
+      "what": "unknown general profile → 422 (general task profile \"desktop\" is not supported; available: analysis, web-research, web-analysis)"
+    },
+    {
+      "ok": true,
+      "what": "IP-literal destination → 422 (egressAllow refused: 169.254.169.254: IP literals are not allowed)"
+    },
+    {
+      "ok": true,
+      "what": "localhost destination → 422 (egressAllow refused: localhost: single-label names are not allowed)"
+    },
+    {
+      "ok": true,
+      "what": ".internal destination → 422 (egressAllow refused: metadata.google.internal: special-use or internal names are not allowed)"
+    },
+    {
+      "ok": true,
+      "what": "browser profile without destinations → 422 (egressAllow refused: profile \"web-research\" needs at least one allowed destination (egressAllow))"
+    },
+    {
+      "ok": true,
+      "what": "egress for a no-browser profile → 422 (egressAllow refused: profile \"analysis\" has no browser; egressAllow must be empty)"
+    },
+    {
+      "ok": true,
+      "what": "arbitrary-site submit refused: https://example.com is not a supported final-action destination (supported: http://127.0.0.1:3100, https://forms.example.com); arbitrary-site submissions are no"
+    },
+    {
+      "ok": true,
+      "what": "no proposal was recorded for the arbitrary site"
+    },
+    {
+      "ok": true,
+      "what": "a task needing an absent capability ends UNSUPPORTED (done/UNSUPPORTED)"
+    }
+  ],
+  "dirtyTree": null
+}

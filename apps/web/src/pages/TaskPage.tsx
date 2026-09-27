@@ -1,6 +1,6 @@
 import { IconLayoutSidebarRight, IconPlayerStopFilled, IconPlus } from "@tabler/icons-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { TaskView } from "@airlock/contracts";
+import type { Artifact, RunEvent, TaskView } from "@airlock/contracts";
 import { Badge, Dot, ErrorBox, Notice, type Tone } from "../components/common";
 import { STREAM_LABEL, TaskDetail } from "../components/detail/task-detail";
 import { DetailPanel } from "../components/layout/detail-panel";
@@ -21,7 +21,18 @@ import { Skeleton } from "../components/ui/skeleton";
 import { canOperate, useSession } from "../hooks/session";
 import { useSharedTaskList } from "../hooks/useTaskList";
 import { useTaskEvents, type StreamStatus } from "../hooks/useTaskEvents";
-import { cancelTask, describeError, getTask } from "../lib/api";
+import { CleanupBadge, DiagnosticBadge, RepairDisabledBanner } from "../components/Evidence";
+import { ApiError, cancelTask, describeError, getTask, getTaskProfiles, listTaskArtifacts, type TaskProfileInfo } from "../lib/api";
+import { GeneralTaskDetail } from "../components/general/detail";
+import { GeneralTaskSummary, StatusDimensions } from "../components/general/status";
+import { GeneralMark, GeneralResultPanel, GoalMessage, TurnMessage, type ScreenshotInfo } from "../components/general/thread";
+import { OperationCard } from "../components/general/op-card";
+import { ControlPanel, HumanActions, LiveView } from "../components/general/control";
+import { ApprovalsSection, ReviewBanner } from "../components/general/approvals";
+import { useBrowserControl } from "../hooks/useBrowserControl";
+import { controlView, humanActorLabel, humanHolderBySeq, knownOwnerId, pendingProposals, reviewWaitingFromEvents, type Viewer } from "../lib/control";
+import { buildGeneralThread, GENERAL_PHASES, generalPhase, profileShortName, screenshotMeta, type GeneralItem, type Operation } from "../lib/general";
+import { cleanupStatus, isDiagnostic, type CleanupStatus } from "../lib/evidence";
 import { extractCheckpoints, runtimeTier } from "../lib/eventViews";
 import { isTerminalStatus, PHASE_LABEL, STATUS_LABEL } from "../lib/format";
 import { hrefFor } from "../lib/router";
@@ -85,20 +96,61 @@ function writeDetailPref(open: boolean) {
   }
 }
 
-function ThreadRow({ item, view, onOpenDetails }: { item: ThreadItem; view: TaskView | null; onOpenDetails: () => void }) {
+function ThreadRow({ item, view, cleanup, onOpenDetails }: { item: ThreadItem; view: TaskView | null; cleanup: CleanupStatus; onOpenDetails: () => void }) {
   switch (item.type) {
     case "user":
       return <UserMessage item={item} />;
     case "assistant":
-      return <AssistantMessage item={item} />;
+      return <AssistantMessage item={item} onOpenDetails={onOpenDetails} />;
     case "tool":
       return <StandaloneTool item={item} />;
     case "mark":
       return <MarkRow item={item} />;
     case "result":
-      return <ResultCard item={item} view={view} onOpenDetails={onOpenDetails} />;
+      return <ResultCard item={item} view={view} cleanup={cleanup} onOpenDetails={onOpenDetails} />;
     case "working":
       return <WorkingRow item={item} />;
+  }
+}
+
+function GeneralRow({
+  item,
+  task,
+  terminal,
+  screenshotInfo,
+  events,
+  artifacts,
+  artifactsError,
+  canExport,
+  actorOf,
+}: {
+  item: GeneralItem;
+  task: TaskView["task"];
+  terminal: boolean;
+  screenshotInfo: ScreenshotInfo;
+  events: readonly RunEvent[];
+  artifacts: Artifact[] | null;
+  artifactsError: string | null;
+  canExport: boolean;
+  actorOf: (op: Operation) => string;
+}) {
+  switch (item.type) {
+    case "goal":
+      return <GoalMessage item={item} task={task} />;
+    case "turn":
+      return <TurnMessage item={item} terminal={terminal} screenshotInfo={screenshotInfo} actorOf={actorOf} />;
+    case "op":
+      return (
+        <div className="min-w-0 pl-[2.125rem]">
+          <OperationCard op={item.op} terminal={terminal} screenshotInfo={screenshotInfo} actorOf={actorOf} />
+        </div>
+      );
+    case "mark":
+      return <GeneralMark item={item} />;
+    case "working":
+      return <WorkingRow item={{ type: "working", key: item.key, status: item.status, phase: generalPhase(item.phase) }} />;
+    case "result":
+      return <GeneralResultPanel task={task} events={events} artifacts={artifacts} artifactsError={artifactsError} canExport={canExport} />;
   }
 }
 
@@ -125,8 +177,12 @@ export function TaskPage({ id }: { id: string }) {
   const [lastFetch, setLastFetch] = useState<string | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(readDetailPref);
   const inflight = useRef<AbortController | null>(null);
+  const [artifacts, setArtifacts] = useState<Artifact[] | null>(null);
+  const [artifactsError, setArtifactsError] = useState<string | null>(null);
+  const [taskProfiles, setTaskProfiles] = useState<TaskProfileInfo[] | null>(null);
 
   const terminal = view ? isTerminalStatus(view.task.status) : false;
+  const general = view?.task.kind === "general";
   const stream = useTaskEvents(id, true, !terminal);
 
   const refresh = useCallback(async () => {
@@ -141,14 +197,41 @@ export function TaskPage({ id }: { id: string }) {
       setLastFetch(new Date().toISOString());
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
-      setLoadError(describeError(err));
+      setLoadError(
+        err instanceof ApiError && err.status === 401
+          ? "Sign in to read this case: task data needs a session."
+          : err instanceof ApiError && (err.status === 404 || err.status === 403)
+            ? `This case does not exist or is not visible to this session (HTTP ${err.status}). A judge sees only the cases its own session started.`
+            : describeError(err),
+      );
     }
   }, [id]);
+
+  const refreshArtifacts = useCallback(async () => {
+    try {
+      setArtifacts(await listTaskArtifacts(id));
+      setArtifactsError(null);
+    } catch (err) {
+      setArtifactsError(describeError(err));
+    }
+  }, [id]);
+
+  // General tasks: the profile (for its limits and name) and the task's artifacts.
+  useEffect(() => {
+    if (!general) return;
+    const controller = new AbortController();
+    getTaskProfiles(controller.signal)
+      .then(setTaskProfiles)
+      .catch(() => setTaskProfiles([]));
+    return () => controller.abort();
+  }, [general]);
 
   useEffect(() => {
     setView(null);
     setLoadError(null);
     setCancelError(null);
+    setArtifacts(null);
+    setArtifactsError(null);
     void refresh();
     return () => inflight.current?.abort();
   }, [refresh]);
@@ -174,6 +257,14 @@ export function TaskPage({ id }: { id: string }) {
     if (stream.status === "ended") void refresh();
   }, [stream.status, refresh]);
 
+  const artifactEvents = useMemo(() => stream.log.events.filter((e) => e.kind === "artifact").length, [stream.log.events]);
+  const viewStatus = view?.task.status;
+  useEffect(() => {
+    if (!general) return;
+    const timer = setTimeout(() => void refreshArtifacts(), EVENT_REFRESH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [general, artifactEvents, viewStatus, refreshArtifacts]);
+
   // The roster shows this task's status too; nudge it when this view learns something new.
   const status = view?.task.status;
   const outcome = view?.task.outcome;
@@ -184,9 +275,41 @@ export function TaskPage({ id }: { id: string }) {
 
   const checkpoints = useMemo(() => extractCheckpoints(view, stream.log.events), [view, stream.log.events]);
   const tier = useMemo(() => runtimeTier(checkpoints), [checkpoints]);
-  const items = useMemo(() => buildThread(view?.task ?? null, stream.log.events), [view?.task, stream.log.events]);
+  const items = useMemo(() => (general ? [] : buildThread(view?.task ?? null, stream.log.events)), [general, view?.task, stream.log.events]);
   const groups = useMemo(() => groupItems(items), [items]);
-  const scroller = useStickToBottom(`${lastSeq ?? -1}:${items.length}:${status ?? ""}`);
+  const generalItems = useMemo(() => (general ? buildGeneralThread(view?.task ?? null, stream.log.events) : []), [general, view?.task, stream.log.events]);
+  const shots = useMemo(() => screenshotMeta(stream.log.events), [stream.log.events]);
+  const sentImages = useMemo(() => {
+    const set = new Set<string>();
+    for (const e of stream.log.events) {
+      const d = e.data as Record<string, unknown> | undefined;
+      if (e.kind === "model" && d?.["imageAttached"] === true && typeof d["imageArtifactId"] === "string") set.add(d["imageArtifactId"]);
+    }
+    return set;
+  }, [stream.log.events]);
+  const screenshotInfo: ScreenshotInfo = useCallback(
+    (artifactId: string) => {
+      const m = shots.get(artifactId);
+      return { capturedAt: m?.capturedAt ?? null, width: m?.width ?? null, height: m?.height ?? null, sentToModel: sentImages.has(artifactId) ? true : terminal ? false : undefined };
+    },
+    [shots, sentImages, terminal],
+  );
+  const taskProfile = view ? (taskProfiles?.find((p) => p.id === view.task.profileId) ?? null) : null;
+
+  // Human control, live view and proposals (browser profiles only).
+  const browserTask = general && (taskProfile ? taskProfile.browser : (view?.task.egressAllow?.length ?? 0) > 0);
+  const running = view?.task.status === "running";
+  const browser = useBrowserControl(id, browserTask, running, stream.log.events);
+  const [ownerId, setOwnerId] = useState<string | null>(() => knownOwnerId());
+  const viewer: Viewer = useMemo(() => ({ ownerId, role: session.role, taskOwner: view?.task.owner ?? "" }), [ownerId, session.role, view?.task.owner]);
+  const holderAt = useMemo(() => humanHolderBySeq(stream.log.events), [stream.log.events]);
+  const actorOf = useCallback((op: Operation) => humanActorLabel(holderAt(op.seq), viewer), [holderAt, viewer]);
+  const reviewEventIds = useMemo(() => reviewWaitingFromEvents(stream.log.events), [stream.log.events]);
+  const pendingReview = browser.proposals ? pendingProposals(browser.proposals, Date.now()).length > 0 : reviewEventIds.length > 0;
+  const control = browserTask ? controlView(browser.control, viewer, { running, canOperate: canOperate(session.role) }) : null;
+  const waiting = running ? { review: pendingReview, humanControl: control !== null && control.holder !== "Agent" && control.holder !== "Transferring" } : undefined;
+  const cleanup = useMemo(() => cleanupStatus({ status: view?.task.status ?? "queued" }, stream.log.events), [view?.task.status, stream.log.events]);
+  const scroller = useStickToBottom(`${lastSeq ?? -1}:${items.length + generalItems.length}:${status ?? ""}`);
 
   const setDetails = (open: boolean) => {
     setDetailsOpen(open);
@@ -241,6 +364,12 @@ export function TaskPage({ id }: { id: string }) {
       <span className="min-w-0 truncate text-sm tracking-tight" title={title}>
         {title}
       </span>
+      {task && isDiagnostic(task) ? <DiagnosticBadge className="shrink-0" /> : null}
+      {general && running && pendingReview ? (
+        <Badge tone="warn" className="shrink-0" title="A proposed submission waits for a person's decision">
+          waiting for review
+        </Badge>
+      ) : null}
       {task?.outcome ? (
         <span className="hidden shrink-0 lg:inline-flex">
           <OutcomeBadge outcome={task.outcome} />
@@ -256,7 +385,30 @@ export function TaskPage({ id }: { id: string }) {
       detailWidth={DETAIL_WIDTH}
       title={<span className="px-2 text-sm font-medium">Details</span>}
       detail={
-        view ? (
+        view && general ? (
+          <GeneralTaskDetail
+            view={view}
+            events={stream.log.events}
+            checkpoints={checkpoints}
+            tier={tier}
+            profile={taskProfile}
+            artifacts={artifacts}
+            artifactsError={artifactsError}
+            stream={{
+              status: stream.status,
+              note: stream.note,
+              count: stream.log.events.length,
+              dropped: stream.log.dropped,
+              malformed: stream.log.malformed,
+            }}
+            lastFetch={lastFetch}
+            onReconnect={stream.reconnect}
+            onRefresh={() => {
+              void refresh();
+              void refreshArtifacts();
+            }}
+          />
+        ) : view ? (
           <TaskDetail
             view={view}
             events={stream.log.events}
@@ -290,13 +442,78 @@ export function TaskPage({ id }: { id: string }) {
             <MessageScroller>
               <MessageScrollerViewport ref={scroller.viewportRef}>
                 <MessageScrollerContent ref={scroller.contentRef} className="mx-auto w-full max-w-2xl px-4 py-6" aria-busy={!terminal}>
+                  {task?.repairDisabledReason ? <RepairDisabledBanner reason={task.repairDisabledReason} className="mb-4" /> : null}
                   {stream.log.dropped > 0 ? (
                     <Notice className="text-xs">{stream.log.dropped} older events were dropped from this view; the full log is in the export.</Notice>
                   ) : null}
+                  {general && task ? (
+                    <GeneralTaskSummary
+                      task={task}
+                      waiting={waiting}
+                      profileName={taskProfile?.displayName ?? profileShortName(task.profileId)}
+                      inputNames={(task.inputArtifactIds ?? []).map((aid) => artifacts?.find((a) => a.id === aid)?.filename ?? aid)}
+                    />
+                  ) : null}
+                  {general && task
+                    ? generalItems.filter((item) => item.type !== "working" && item.type !== "result").map((item) => (
+                        <MessageScrollerItem key={item.key} className="flex flex-col gap-1.5 animate-in fade-in-0 duration-300 motion-reduce:animate-none">
+                          <GeneralRow
+                            item={item}
+                            task={task}
+                            terminal={terminal}
+                            screenshotInfo={screenshotInfo}
+                            events={stream.log.events}
+                            artifacts={artifacts}
+                            artifactsError={artifactsError}
+                            canExport={canOperate(session.role)}
+                            actorOf={actorOf}
+                          />
+                        </MessageScrollerItem>
+                      ))
+                    : null}
+                  {general && task && browserTask ? (
+                    <MessageScrollerItem className="flex flex-col gap-4 py-2">
+                      <ApprovalsSection
+                        taskId={task.id}
+                        proposals={browser.proposals}
+                        error={browser.proposalsError}
+                        viewer={viewer}
+                        canDecide={canOperate(session.role)}
+                        running={running}
+                        onDecided={browser.refreshProposals}
+                      />
+                      {!terminal ? (
+                        <section aria-label="Browser" className="flex flex-col gap-4 rounded-xl border border-border bg-card p-4 dark:border-transparent">
+                          <ControlPanel task={task} data={browser} viewer={viewer} canOperate={canOperate(session.role)} onOwnerLearned={setOwnerId} />
+                          <LiveView task={task} data={browser} events={stream.log.events} canOperate={canOperate(session.role)} />
+                          {control?.youHold ? <HumanActions task={task} data={browser} /> : null}
+                        </section>
+                      ) : null}
+                    </MessageScrollerItem>
+                  ) : null}
+                  {general && task
+                    ? generalItems
+                        .filter((item) => item.type === "working" || item.type === "result")
+                        .map((item) => (
+                          <MessageScrollerItem key={item.key} className="flex flex-col gap-1.5 animate-in fade-in-0 duration-300 motion-reduce:animate-none">
+                            <GeneralRow
+                              item={item}
+                              task={task}
+                              terminal={terminal}
+                              screenshotInfo={screenshotInfo}
+                              events={stream.log.events}
+                              artifacts={artifacts}
+                              artifactsError={artifactsError}
+                              canExport={canOperate(session.role)}
+                              actorOf={actorOf}
+                            />
+                          </MessageScrollerItem>
+                        ))
+                    : null}
                   {groups.map((group) => (
                     <MessageScrollerItem key={group.key} className="flex flex-col gap-1.5 animate-in fade-in-0 duration-300 motion-reduce:animate-none">
                       {group.items.map((item) => (
-                        <ThreadRow key={item.key} item={item} view={view} onOpenDetails={() => setDetails(true)} />
+                        <ThreadRow key={item.key} item={item} view={view} cleanup={cleanup} onOpenDetails={() => setDetails(true)} />
                       ))}
                     </MessageScrollerItem>
                   ))}
@@ -310,6 +527,7 @@ export function TaskPage({ id }: { id: string }) {
               <div className="mb-2 flex flex-col gap-2">
                 {loadError ? <ErrorBox message={`Could not refresh the task view: ${loadError}`} onRetry={() => void refresh()} /> : null}
                 {cancelError ? <ErrorBox message={cancelError} /> : null}
+                {general && browserTask && running ? <ReviewBanner proposals={browser.proposals} eventIds={reviewEventIds} /> : null}
                 {stream.note && (stream.status === "closed" || stream.status === "reconnecting" || stream.status === "unsupported") ? (
                   <Notice tone={streamTone(stream.status) === "bad" ? "bad" : "warn"} className="text-xs">
                     {stream.note}
@@ -317,25 +535,36 @@ export function TaskPage({ id }: { id: string }) {
                 ) : null}
               </div>
             }
-            footnote="Nothing typed here reaches the model: its inputs are fixed by the control plane (issue text, profile, tool results)."
+            footnote={
+              general
+                ? "Nothing typed here reaches the model: its inputs are fixed by the control plane (goal, profile, your files, tool results)."
+                : "Nothing typed here reaches the model: its inputs are fixed by the control plane (issue text, profile, tool results)."
+            }
           >
-            {task ? <PhaseRail task={task} /> : null}
+            {task ? general ? <PhaseRail task={task} phases={GENERAL_PHASES} current={generalPhase(task.phase)} /> : <PhaseRail task={task} /> : null}
             <div className="flex items-center gap-3">
               <div className="min-w-0 flex-1 text-sm">
-                {task ? (
+                {task && general ? (
+                  <StatusDimensions task={task} compact waiting={waiting} />
+                ) : task ? (
                   task.outcome ? (
                     <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                       <OutcomeBadge outcome={task.outcome} />
                       <span className="text-pretty text-muted-foreground">Finished in the {PHASE_LABEL[task.phase].toLowerCase()} phase</span>
+                      <CleanupBadge cleanup={cleanup} />
                     </span>
                   ) : terminal ? (
                     <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
                       <Badge tone={task.status === "cancelled" ? "neutral" : "bad"}>{STATUS_LABEL[task.status]}</Badge>
                       <span className="text-pretty text-muted-foreground">No outcome was recorded</span>
+                      <CleanupBadge cleanup={cleanup} />
                     </span>
                   ) : (
-                    <span className="tool-line-running text-muted-foreground">
-                      {STATUS_LABEL[task.status]} · {PHASE_LABEL[task.phase]} phase
+                    <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <span className="tool-line-running text-muted-foreground">
+                        {STATUS_LABEL[task.status]} · {PHASE_LABEL[task.phase]} phase
+                      </span>
+                      {task.status === "cancelling" ? <CleanupBadge cleanup={cleanup} /> : null}
                     </span>
                   )
                 ) : null}
@@ -356,7 +585,7 @@ export function TaskPage({ id }: { id: string }) {
               ) : terminal ? (
                 <Button size="sm" variant="outline" className="rounded-full" render={<a href={hrefFor({ name: "new" })} />}>
                   <IconPlus />
-                  New case
+                  {general ? "New task" : "New case"}
                 </Button>
               ) : null}
             </div>

@@ -67,10 +67,12 @@ export class Store {
     expected: Record<string, unknown>,
     patch: Record<string, unknown>,
     unset: string[] = [],
+    /** Keys that must be absent for the swap to apply (containment cannot express absence). */
+    absent: string[] = [],
   ): Promise<T | null> {
     const result = await this.db.query(
-      "UPDATE records SET data=(data - $6::text[]) || $5::jsonb,updated_at=now() WHERE owner=$1 AND kind=$2 AND id=$3 AND data @> $4::jsonb RETURNING data",
-      [owner, kind, id, JSON.stringify(expected), JSON.stringify(patch), unset],
+      "UPDATE records SET data=(data - $6::text[]) || $5::jsonb,updated_at=now() WHERE owner=$1 AND kind=$2 AND id=$3 AND data @> $4::jsonb AND NOT (data ?| $7::text[]) RETURNING data",
+      [owner, kind, id, JSON.stringify(expected), JSON.stringify(patch), unset, absent],
     );
     return (result.rows[0]?.data as T | undefined) ?? null;
   }

@@ -9,10 +9,15 @@
 #      from $AIRLOCK_ENV_FILE (default <repo>/.env). Nothing is printed; nothing goes through Vultr user_data.
 #   2. rsync the tree to both VMs (/opt/airlock/app), excluding node_modules, data, .env*, dist, research/.
 #   3. VM B: deploy/host/sandbox-host.sh (docker, runsc, kata, bun, service user, nftables, unit), then
-#      `bun install --frozen-lockfile`, build airlock-runtime-python:tabulate-365 on the host, write
-#      /etc/airlock/supervisor.env (root, 0600), restart airlock-supervisor, wait for /health on the VPC address.
+#      `bun install --frozen-lockfile`, build airlock-runtime-python:tabulate-365 on the host and capture
+#      its image ID (AIRLOCK_RUNTIME_IMAGE_ID, enforced by the supervisor on every inspection), write
+#      /etc/airlock/supervisor.env (root, 0600; also AIRLOCK_INSTANCE_ID = the sandbox instance id from
+#      state.json), build airlock-egress:dev and airlock-browser:dev and pin their IDs
+#      (AIRLOCK_EGRESS_IMAGE_ID / AIRLOCK_BROWSER_IMAGE_ID), build airlock-runtime-analysis:dev and
+#      airlock-runtime-node:dev (runtime/analysis/build.sh, runtime/node/build.sh) and pin their IDs
+#      (AIRLOCK_ANALYSIS_IMAGE_ID / AIRLOCK_NODE_IMAGE_ID), (re)apply the egress guard, restart airlock-supervisor, wait for /health on the VPC address, log the /host check.
 #   4. VM A: deploy/host/control-host.sh (caddy, bun, service user, unit), `bun install --frozen-lockfile`,
-#      `bun run --cwd apps/web build`, write /etc/airlock/control.env (root, 0600), restart airlock-control,
+#      `bun run --cwd apps/web build`, write /etc/airlock/control.env (root, 0600; AIRLOCK_PRODUCTION=1, AIRLOCK_INSTANCE_ID, AIRLOCK_DIAGNOSTIC_SCRIPTS_DIR), restart airlock-control,
 #      wait for /api/session on 127.0.0.1:3000 and then over https on the public name.
 #   5. print the public URL and where the passwords are.
 #
@@ -57,6 +62,7 @@ CONTROL_IP="$(jq -r .control.publicIp "$STATE")"
 CONTROL_VPC_IP="$(jq -r .control.vpcIp "$STATE")"
 SANDBOX_IP="$(jq -r .sandbox.publicIp "$STATE")"
 SANDBOX_VPC_IP="$(jq -r .sandbox.vpcIp "$STATE")"
+SANDBOX_INSTANCE_ID="$(jq -r '.sandbox.id // empty' "$STATE")"
 PUBLIC_HOST="$(jq -r .publicHost "$STATE")"
 SSH_KEY_FILE="$(jq -r .sshKeyFile "$STATE")"
 SSH=(ssh -i "$SSH_KEY_FILE" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=15)
@@ -73,11 +79,17 @@ if [[ ! -f "$SECRETS" ]]; then
   umask 022
   log "generated $SECRETS"
 fi
+# Secrets added after a stack was first deployed are appended, never regenerated.
+if ! grep -q '^AIRLOCK_FORMS_SECRET=' "$SECRETS"; then
+  (umask 077 && echo "AIRLOCK_FORMS_SECRET=$(openssl rand -hex 32)" >> "$SECRETS")
+fi
 chmod 0600 "$SECRETS"
-read_kv() { grep -E "^$2=" "$1" | head -n1 | cut -d= -f2- | tr -d '"'"'"' \r'; }
+# Value of KEY in an env file: an unquoted value ends at an inline " # comment"; quotes and spaces are stripped.
+read_kv() { grep -E "^$2=" "$1" | head -n1 | cut -d= -f2- | sed -e 's/[[:space:]]\{1,\}#.*$//' | tr -d '"'"'"' \r'; }
 SUPERVISOR_TOKEN="$(read_kv "$SECRETS" SUPERVISOR_TOKEN)"
 OPERATOR_PASSWORD="$(read_kv "$SECRETS" AIRLOCK_OPERATOR_PASSWORD)"
 JUDGE_PASSWORD="$(read_kv "$SECRETS" AIRLOCK_JUDGE_PASSWORD)"
+FORMS_SECRET="$(read_kv "$SECRETS" AIRLOCK_FORMS_SECRET)"
 [[ ${#SUPERVISOR_TOKEN} -ge 16 ]] || { echo "deploy: SUPERVISOR_TOKEN in $SECRETS is too short" >&2; exit 1; }
 INFERENCE_KEY="${VULTR_INFERENCE_API_KEY:-}"
 if [[ -z "$INFERENCE_KEY" && -f "$ENV_FILE" ]]; then INFERENCE_KEY="$(read_kv "$ENV_FILE" VULTR_INFERENCE_API_KEY)"; fi
@@ -88,9 +100,9 @@ if [[ "$DRIVER" == "vultr" && -z "$INFERENCE_KEY" ]]; then
 fi
 
 # --- 2. sync the tree ----------------------------------------------------------------------------------------------
-RSYNC_EXCLUDES=(--exclude node_modules --exclude data --exclude '.env' --exclude '.env.*' --exclude 'apps/web/dist' --exclude dist
+RSYNC_EXCLUDES=(--exclude node_modules --exclude /data --exclude '.env' --exclude '.env.*' --exclude 'apps/web/dist' --exclude dist
   --exclude research --exclude '.git' --exclude '.claude' --exclude '.omc' --exclude '__pycache__' --exclude '*.sqlite'
-  --exclude '.pytest_cache' --exclude '*.log' --exclude '.DS_Store')
+  --exclude '.pytest_cache' --exclude '*.log' --exclude '.DS_Store' --exclude 'videos' --exclude 'docs/demo' --exclude 'docs/assets')
 sync_tree() { # ip service-user
   log "rsync tree -> root@$1:/opt/airlock/app"
   "${SSH[@]}" "root@$1" "install -d -m 0755 /opt/airlock/app"
@@ -121,6 +133,29 @@ if [[ -z "$ONLY" || "$ONLY" == "sandbox" ]]; then
   "${SSH[@]}" "root@$SANDBOX_IP" "cd /opt/airlock/app && sudo -u airlock-supervisor -H /usr/local/bin/bun install --frozen-lockfile"
   log "building the runtime image on VM B (runtime/python/build.sh tabulate-365)"
   "${SSH[@]}" "root@$SANDBOX_IP" "cd /opt/airlock/app && PATH=/usr/local/bin:\$PATH runtime/python/build.sh tabulate-365 && chown -R airlock-supervisor:airlock-supervisor /opt/airlock/app"
+  RUNTIME_IMAGE_ID="$("${SSH[@]}" "root@$SANDBOX_IP" "docker image inspect --format '{{.Id}}' airlock-runtime-python:tabulate-365")"
+  [[ "$RUNTIME_IMAGE_ID" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "deploy: could not read the runtime image ID on VM B (got '$RUNTIME_IMAGE_ID')" >&2; exit 1; }
+  log "runtime image ID: $RUNTIME_IMAGE_ID (AIRLOCK_RUNTIME_IMAGE_ID; a retag fails every inspection)"
+  # Browser plane (milestone 3): the egress proxy and the Chromium runner images, built on the host and
+  # pinned by ID like the runtime image; the seccomp profile ships in the tree.
+  log "building the browser-plane images on VM B (apps/egress, runtime/browser)"
+  "${SSH[@]}" "root@$SANDBOX_IP" "cd /opt/airlock/app && docker build -q -t airlock-egress:dev apps/egress >/dev/null && docker build -q -t airlock-browser:dev runtime/browser >/dev/null"
+  EGRESS_IMAGE_ID="$("${SSH[@]}" "root@$SANDBOX_IP" "docker image inspect --format '{{.Id}}' airlock-egress:dev")"
+  BROWSER_IMAGE_ID="$("${SSH[@]}" "root@$SANDBOX_IP" "docker image inspect --format '{{.Id}}' airlock-browser:dev")"
+  [[ "$EGRESS_IMAGE_ID" =~ ^sha256:[a-f0-9]{64}$ && "$BROWSER_IMAGE_ID" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "deploy: could not read the browser/egress image IDs on VM B" >&2; exit 1; }
+  log "browser image ID: $BROWSER_IMAGE_ID; egress image ID: $EGRESS_IMAGE_ID"
+  # Code sandboxes (milestone 4): offline analysis (Python) and Node images, built from hash-locked
+  # dependencies and pinned by ID like the others. The node build's probe-parity test needs node on
+  # the build host; VM B has none, so it is skipped here (SKIP_PARITY=1) and enforced in development
+  # builds, where runtime/node/build.sh runs it before every build.
+  log "building the code-sandbox images on VM B (runtime/analysis, runtime/node)"
+  "${SSH[@]}" "root@$SANDBOX_IP" "cd /opt/airlock/app && runtime/analysis/build.sh dev >/dev/null && SKIP_PARITY=1 runtime/node/build.sh dev >/dev/null"
+  ANALYSIS_IMAGE_ID="$("${SSH[@]}" "root@$SANDBOX_IP" "docker image inspect --format '{{.Id}}' airlock-runtime-analysis:dev")"
+  NODE_IMAGE_ID="$("${SSH[@]}" "root@$SANDBOX_IP" "docker image inspect --format '{{.Id}}' airlock-runtime-node:dev")"
+  [[ "$ANALYSIS_IMAGE_ID" =~ ^sha256:[a-f0-9]{64}$ && "$NODE_IMAGE_ID" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "deploy: could not read the analysis/node image IDs on VM B" >&2; exit 1; }
+  log "analysis image ID: $ANALYSIS_IMAGE_ID; node image ID: $NODE_IMAGE_ID"
+  # the host firewall for the per-attempt bridges (installed by sandbox-host.sh; the tree now has the script)
+  "${SSH[@]}" "root@$SANDBOX_IP" "install -m 0755 /opt/airlock/app/deploy/host/airlock-egress-guard.sh /usr/local/sbin/airlock-egress-guard && systemctl enable airlock-egress-guard.service >/dev/null 2>&1; systemctl restart airlock-egress-guard.service && iptables -S AIRLOCK-FWD | head -3"
   log "writing /etc/airlock/supervisor.env (root, 0600)"
   write_env "$SANDBOX_IP" /etc/airlock/supervisor.env <<EOF
 PORT=4300
@@ -131,6 +166,35 @@ AIRLOCK_DOCKER_RUNTIME_NAME=${AIRLOCK_DOCKER_RUNTIME_NAME:-}
 AIRLOCK_DATA_DIR=/var/lib/airlock/supervisor
 AIRLOCK_PROFILES_DIR=/opt/airlock/app/profiles
 AIRLOCK_NAMESPACE=airlock
+AIRLOCK_RUNTIME_IMAGE_ID=$RUNTIME_IMAGE_ID
+AIRLOCK_INSTANCE_ID=$SANDBOX_INSTANCE_ID
+AIRLOCK_HOST_MEMORY_BYTES=${AIRLOCK_HOST_MEMORY_BYTES:-}
+AIRLOCK_HOST_HEADROOM_BYTES=${AIRLOCK_HOST_HEADROOM_BYTES:-}
+AIRLOCK_HOST_PIDS=${AIRLOCK_HOST_PIDS:-}
+AIRLOCK_HOST_SCRATCH_BYTES=${AIRLOCK_HOST_SCRATCH_BYTES:-}
+AIRLOCK_MAX_SANDBOXES=${AIRLOCK_MAX_SANDBOXES:-}
+AIRLOCK_VM_OVERHEAD_BYTES=${AIRLOCK_VM_OVERHEAD_BYTES:-}
+AIRLOCK_BROWSER_IMAGE=airlock-browser:dev
+AIRLOCK_BROWSER_IMAGE_ID=$BROWSER_IMAGE_ID
+AIRLOCK_EGRESS_IMAGE=airlock-egress:dev
+AIRLOCK_EGRESS_IMAGE_ID=$EGRESS_IMAGE_ID
+AIRLOCK_BROWSER_SECCOMP=/opt/airlock/app/runtime/browser/seccomp/chromium.json
+AIRLOCK_BROWSER_MUTATION_ORIGINS='["https://forms.$PUBLIC_HOST"]'
+AIRLOCK_EGRESS_RESOLVERS=${AIRLOCK_EGRESS_RESOLVERS:-108.61.10.10,1.1.1.1}
+AIRLOCK_BROWSER_MEMORY_BYTES=${AIRLOCK_BROWSER_MEMORY_BYTES:-}
+AIRLOCK_BROWSER_PIDS=${AIRLOCK_BROWSER_PIDS:-}
+AIRLOCK_BROWSER_SHM_BYTES=${AIRLOCK_BROWSER_SHM_BYTES:-}
+AIRLOCK_BROWSER_TMP_BYTES=${AIRLOCK_BROWSER_TMP_BYTES:-}
+AIRLOCK_ANALYSIS_IMAGE=airlock-runtime-analysis:dev
+AIRLOCK_ANALYSIS_IMAGE_ID=$ANALYSIS_IMAGE_ID
+AIRLOCK_ANALYSIS_MEMORY_BYTES=${AIRLOCK_ANALYSIS_MEMORY_BYTES:-}
+AIRLOCK_ANALYSIS_COMMAND_TIMEOUT_MS=${AIRLOCK_ANALYSIS_COMMAND_TIMEOUT_MS:-}
+AIRLOCK_ANALYSIS_WORKSPACE_BYTES=${AIRLOCK_ANALYSIS_WORKSPACE_BYTES:-}
+AIRLOCK_NODE_IMAGE=airlock-runtime-node:dev
+AIRLOCK_NODE_IMAGE_ID=$NODE_IMAGE_ID
+AIRLOCK_NODE_MEMORY_BYTES=${AIRLOCK_NODE_MEMORY_BYTES:-}
+AIRLOCK_NODE_COMMAND_TIMEOUT_MS=${AIRLOCK_NODE_COMMAND_TIMEOUT_MS:-}
+AIRLOCK_NODE_WORKSPACE_BYTES=${AIRLOCK_NODE_WORKSPACE_BYTES:-}
 EOF
   "${SSH[@]}" "root@$SANDBOX_IP" "systemctl daemon-reload && systemctl restart airlock-supervisor.service"
   log "waiting for the supervisor on http://$SANDBOX_VPC_IP:4300/health (VPC only)"
@@ -144,7 +208,11 @@ EOF
     "${SSH[@]}" "root@$SANDBOX_IP" "journalctl -u airlock-supervisor -n 40 --no-pager" >&2 || true
     exit 1
   fi
-  log "supervisor health: $(jq -c '{status, host: {selectedRuntime: .host.selectedRuntime, devUnsafe: .host.devUnsafe, kvmPresent: .host.kvmPresent, kvmReadWrite: .host.kvmReadWrite, availableRuntimes: .host.availableRuntimes}}' <<<"$HEALTH")"
+  log "supervisor health: $(jq -c . <<<"$HEALTH")"
+  # /health says only {ok:true}; the host check is on the authenticated /host. The bearer header is
+  # passed on stdin (curl -H @-) so the token never appears in a process list on VM B.
+  HOSTCHECK="$("${SSH[@]}" "root@$SANDBOX_IP" "curl -fsS -m 5 -H @- http://$SANDBOX_VPC_IP:4300/host" <<<"Authorization: Bearer $SUPERVISOR_TOKEN")"
+  log "supervisor host check: $(jq -c '{selectedRuntime, devUnsafe, kvmPresent, kvmReadWrite, availableRuntimes, runtimeImageId, instanceId, hostUname}' <<<"$HOSTCHECK")"
 fi
 
 # --- 4. VM A: control plane ------------------------------------------------------------------------------------------------
@@ -161,8 +229,15 @@ if [[ -z "$ONLY" || "$ONLY" == "control" ]]; then
   else
     DRIVER_VALUE="vultr"
   fi
-  log "writing /etc/airlock/control.env (root, 0600; driver=$DRIVER_VALUE model=$MODEL)"
+  # VM A's own Vultr instance id (shown as "the instance" on repair availability), read the same
+  # way as the sandbox's above. The scripted fixtures are the labelled diagnostic catalog.
+  CONTROL_INSTANCE_ID="$(jq -r '.control.id // empty' "$STATE")"
+  DIAGNOSTIC_SCRIPTS_DIR="/opt/airlock/app/apps/control/test/fixtures/scripted"
+  log "writing /etc/airlock/control.env (root, 0600; driver=$DRIVER_VALUE model=$MODEL production=1 instance=${CONTROL_INSTANCE_ID:-unknown})"
   write_env "$CONTROL_IP" /etc/airlock/control.env <<EOF
+AIRLOCK_PRODUCTION=1
+AIRLOCK_INSTANCE_ID=$CONTROL_INSTANCE_ID
+AIRLOCK_DIAGNOSTIC_SCRIPTS_DIR=$DIAGNOSTIC_SCRIPTS_DIR
 PORT=3000
 CONTROL_BIND=127.0.0.1
 AIRLOCK_TRUST_PROXY=1
@@ -179,8 +254,20 @@ AIRLOCK_MODEL_MAX_TOKENS=${AIRLOCK_MODEL_MAX_TOKENS:-16384}
 AIRLOCK_MODEL_REASONING_EFFORT=${AIRLOCK_MODEL_REASONING_EFFORT:-}
 AIRLOCK_OPERATOR_PASSWORD=$OPERATOR_PASSWORD
 AIRLOCK_JUDGE_PASSWORD=$JUDGE_PASSWORD
+AIRLOCK_GENERAL_DIAGNOSTIC_SCRIPTS_DIR=/opt/airlock/app/apps/control/test/fixtures/scripted-general
+AIRLOCK_FIXTURES_ORIGIN=https://forms.$PUBLIC_HOST
+AIRLOCK_FORMS_ORIGINS=https://forms.$PUBLIC_HOST
+AIRLOCK_FORMS_SECRET=$FORMS_SECRET
 EOF
-  "${SSH[@]}" "root@$CONTROL_IP" "systemctl daemon-reload && systemctl restart airlock-control.service"
+  log "writing /etc/airlock/fixtures.env (root, 0600; origin https://forms.$PUBLIC_HOST)"
+  write_env "$CONTROL_IP" /etc/airlock/fixtures.env <<EOF
+AIRLOCK_FIXTURES_ORIGIN=https://forms.$PUBLIC_HOST
+AIRLOCK_FORMS_SECRET=$FORMS_SECRET
+AIRLOCK_FIXTURES_DATA_DIR=/var/lib/airlock/fixtures
+AIRLOCK_FIXTURES_LISTEN=127.0.0.1:3100
+AIRLOCK_TRUST_PROXY=1
+EOF
+  "${SSH[@]}" "root@$CONTROL_IP" "systemctl daemon-reload && systemctl restart airlock-control.service airlock-fixtures.service"
   log "waiting for the control plane on 127.0.0.1:3000"
   READY=0
   for i in $(seq 1 40); do
@@ -203,12 +290,15 @@ EOF
     "${SSH[@]}" "root@$CONTROL_IP" "journalctl -u caddy -n 30 --no-pager" >&2 || true
     exit 1
   fi
-  log "control plane host view: $(curl -fsS -m 10 "https://$PUBLIC_HOST/api/host" | jq -c '{selectedRuntime, devUnsafe, kvmPresent, availableRuntimes}')"
+  # /api/host needs a session now; the public view is liveness plus repair availability.
+  log "control plane: health $(curl -fsS -m 10 "https://$PUBLIC_HOST/api/health" | jq -c .) repair $(curl -fsS -m 10 "https://$PUBLIC_HOST/api/repair-availability" | jq -c '{available, reason, driver}')"
+  log "fixtures: $(curl -fsS -m 10 -o /dev/null -w '%{http_code}' "https://forms.$PUBLIC_HOST/data/regional-sales" || echo unreachable)"
 fi
 
 echo
 echo "Airlock is deployed."
 echo "  public URL        https://$PUBLIC_HOST"
+echo "  demo fixtures     https://forms.$PUBLIC_HOST/data/regional-sales  (disclosed synthetic data; airlock-forms-v1 forms)"
 echo "  model driver      ${DRIVER_VALUE:-unchanged} ${MODEL:+(model $MODEL)}"
 echo "  passwords         $SECRETS  (AIRLOCK_OPERATOR_PASSWORD, AIRLOCK_JUDGE_PASSWORD; judge = hostile panel + preview)"
 echo "  supervisor        http://$SANDBOX_VPC_IP:4300 (VPC only; VM B has no public listener)"

@@ -135,15 +135,22 @@ export async function invoke(core: Supervisor, body: InvokeRequest): Promise<Ope
     }
     const labels = oneShotLabels(names.value);
     const filter = ownedFilter(core.config.namespace, { taskId: names.value.taskId, attemptId: `op-${names.value.operationId}` });
-    core.journal.insertEphemeral({
-      container: names.value.container,
-      volume: names.value.volume,
-      taskId: names.value.taskId,
-      operationId: names.value.operationId,
-      role: body.role,
-      deadline,
-      createdAt: new Date().toISOString(),
-    });
+    // Host admission before any Docker call (429 with nothing created); released on confirmed removal.
+    core.admit(names.value.container, profile, true);
+    try {
+      core.journal.insertEphemeral({
+        container: names.value.container,
+        volume: names.value.volume,
+        taskId: names.value.taskId,
+        operationId: names.value.operationId,
+        role: body.role,
+        deadline,
+        createdAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      core.capacity.release(names.value.container);
+      throw error;
+    }
     try {
       const provisioned = await core.provision({
         container: names.value.container,
@@ -207,5 +214,5 @@ export async function invoke(core: Supervisor, body: InvokeRequest): Promise<Ope
       await core.removeResources(names.value.container, names.value.volume);
       core.journal.deleteEphemeral(names.value.container);
     }
-  });
+  }, { taskId: body.taskId });
 }

@@ -1,0 +1,419 @@
+{
+  "id": "T6-proposal-decide-semantics",
+  "requirement": "Task behaviour: proposals (API level): wrong digest 409, replay 409, expired 410, reject; destination not reachable from the local sandbox",
+  "command": "bun scripts/acceptance/local.ts T6-proposal-decide-semantics",
+  "environment": "real local runc (dev-unsafe, Colima); stack = git archive of c39340c6091a",
+  "timestamp": "2026-09-27T10:35:36.735Z",
+  "revision": "c39340c6091a32ff8203fba5fd205bccac8614fd",
+  "result": "PASS",
+  "evidence": {
+    "proposals": [
+      {
+        "id": "prop-644cf4462fc3d7c82268",
+        "status": "expired",
+        "formId": "contact-request",
+        "destination": "https://forms.example.com",
+        "payloadDigest": "c552630e3c9c315d508d3f080ca876de236f9e99b9e9c6b5ccc50a6e9e3059b2",
+        "expiresAt": "2026-09-27T10:35:32.678Z",
+        "receipt": null
+      },
+      {
+        "id": "prop-53b4bacba4235bab963d",
+        "status": "failed",
+        "formId": "contact-request",
+        "destination": "https://forms.example.com",
+        "payloadDigest": "d52310a6d16ec4fba08740bdf19d423a26c7b07bd461ecd4202833b7af8d81ca",
+        "expiresAt": "2026-09-27T10:36:32.692Z",
+        "receipt": null
+      },
+      {
+        "id": "prop-d060cb704c108af6f950",
+        "status": "rejected",
+        "formId": "contact-request",
+        "destination": "https://forms.example.com",
+        "payloadDigest": "9f35350df903a3ae877597f224ef5fe4c28f30a96075be889cdcc72493f913be",
+        "expiresAt": "2026-09-27T10:36:35.330Z",
+        "receipt": null
+      }
+    ],
+    "task": {
+      "id": "task-1c661856076d3677",
+      "status": "done",
+      "outcome": "RESULT_VERIFIED",
+      "cleanup": {
+        "at": "2026-09-27T10:35:36.520Z",
+        "detail": "supervisor confirmed teardown of 1 attempt(s)",
+        "status": "confirmed"
+      }
+    },
+    "events": [
+      {
+        "seq": 1,
+        "at": "2026-09-27T10:34:26.454Z",
+        "kind": "lifecycle",
+        "title": "Task created",
+        "detail": "general task, profile web-research v1; destinations example.com, forms.example.com; diagnostic (scripted:acc-propose), not a model run"
+      },
+      {
+        "seq": 2,
+        "at": "2026-09-27T10:34:26.555Z",
+        "kind": "phase",
+        "title": "prepare",
+        "detail": "general task profile web-research v1; tools: browser_navigate, browser_observe, browser_click, browser_type, browser_key, browser_scroll, browser_screenshot, browser_tabs, browser_download_list, browser_download_save, browser_propose_submit, submit_result; destinations: example.com, forms.example.co"
+      },
+      {
+        "seq": 3,
+        "at": "2026-09-27T10:34:26.556Z",
+        "kind": "check",
+        "title": "dev-unsafe runtime",
+        "detail": "supervisor host runs runc with AIRLOCK_DEV_UNSAFE; results are not a deployment measurement"
+      },
+      {
+        "seq": 4,
+        "at": "2026-09-27T10:34:26.556Z",
+        "kind": "phase",
+        "title": "execute",
+        "detail": "model loop for goal under profile web-research"
+      },
+      {
+        "seq": 5,
+        "at": "2026-09-27T10:34:26.558Z",
+        "kind": "model",
+        "title": "Model turn 1",
+        "detail": "Opening example.com."
+      },
+      {
+        "seq": 6,
+        "at": "2026-09-27T10:34:26.559Z",
+        "kind": "tool",
+        "title": "browser_navigate allowed",
+        "detail": "example.com is inside the task's destinations",
+        "tool": "browser_navigate",
+        "opState": "allowed",
+        "actor": "agent"
+      },
+      {
+        "seq": 7,
+        "at": "2026-09-27T10:34:26.560Z",
+        "kind": "lifecycle",
+        "title": "Creating browser sandbox",
+        "detail": "attempt att-b140790643d1dff44f6c, generation 1, deadline 2026-09-27T10:49:26.559Z; egress allowed to example.com, forms.example.com"
+      },
+      {
+        "seq": 8,
+        "at": "2026-09-27T10:34:32.496Z",
+        "kind": "lifecycle",
+        "title": "browser sandbox created",
+        "detail": "container airlock-browser-task-1c661856076d3677-att-b140790643d1dff44f6c; runtime runc (dev-unsafe)",
+        "opState": "completed"
+      },
+      {
+        "seq": 9,
+        "at": "2026-09-27T10:34:32.498Z",
+        "kind": "tool",
+        "title": "browser_navigate started",
+        "tool": "browser_navigate",
+        "opState": "started"
+      },
+      {
+        "seq": 10,
+        "at": "2026-09-27T10:34:32.675Z",
+        "kind": "tool",
+        "title": "browser_navigate https://example.com/",
+        "detail": "status 200",
+        "tool": "browser_navigate",
+        "opState": "completed"
+      },
+      {
+        "seq": 11,
+        "at": "2026-09-27T10:34:32.676Z",
+        "kind": "model",
+        "title": "Model turn 2",
+        "detail": "Proposal A (left to expire)."
+      },
+      {
+        "seq": 12,
+        "at": "2026-09-27T10:34:32.678Z",
+        "kind": "tool",
+        "title": "browser_propose_submit contact-request",
+        "detail": "proposal prop-644cf4462fc3d7c82268 recorded; waiting for a person to review it",
+        "tool": "browser_propose_submit",
+        "opState": "allowed"
+      },
+      {
+        "seq": 13,
+        "at": "2026-09-27T10:34:32.678Z",
+        "kind": "lifecycle",
+        "title": "Waiting for review",
+        "detail": "contact-request on https://forms.example.com: Acceptance proposal A (expires 2026-09-27T10:35:32.678Z)"
+      },
+      {
+        "seq": 14,
+        "at": "2026-09-27T10:35:32.684Z",
+        "kind": "lifecycle",
+        "title": "Proposal expired",
+        "detail": "no decision before 2026-09-27T10:35:32.678Z; nothing was submitted"
+      },
+      {
+        "seq": 15,
+        "at": "2026-09-27T10:35:32.688Z",
+        "kind": "model",
+        "title": "Model turn 3",
+        "detail": "Proposal B (wrong digest, approve, replay)."
+      },
+      {
+        "seq": 16,
+        "at": "2026-09-27T10:35:32.693Z",
+        "kind": "tool",
+        "title": "browser_propose_submit contact-request",
+        "detail": "proposal prop-53b4bacba4235bab963d recorded; waiting for a person to review it",
+        "tool": "browser_propose_submit",
+        "opState": "allowed"
+      },
+      {
+        "seq": 17,
+        "at": "2026-09-27T10:35:32.694Z",
+        "kind": "lifecycle",
+        "title": "Waiting for review",
+        "detail": "contact-request on https://forms.example.com: Acceptance proposal B (expires 2026-09-27T10:36:32.692Z)"
+      },
+      {
+        "seq": 18,
+        "at": "2026-09-27T10:35:35.195Z",
+        "kind": "lifecycle",
+        "title": "Proposal approved",
+        "detail": "contact-request on https://forms.example.com by judge; payload digest d52310a6d16ec4fba08740bdf19d423a26c7b07bd461ecd4202833b7af8d81ca"
+      },
+      {
+        "seq": 19,
+        "at": "2026-09-27T10:35:35.197Z",
+        "kind": "lifecycle",
+        "title": "Approved: Airlock submits the form",
+        "detail": "approved by judge-25a178d200fc9c390ae3f23b; the controller fills in exactly the approved values and the approval code"
+      },
+      {
+        "seq": 20,
+        "at": "2026-09-27T10:35:35.199Z",
+        "kind": "tool",
+        "title": "approved_submit allowed",
+        "detail": "forms.example.com is inside the task's destinations",
+        "tool": "approved_submit",
+        "opState": "allowed",
+        "actor": "controller"
+      },
+      {
+        "seq": 21,
+        "at": "2026-09-27T10:35:35.203Z",
+        "kind": "tool",
+        "title": "approved_submit started",
+        "tool": "approved_submit",
+        "opState": "started"
+      },
+      {
+        "seq": 22,
+        "at": "2026-09-27T10:35:35.328Z",
+        "kind": "tool",
+        "title": "approved_submit navigation_failed",
+        "detail": "page.goto: net::ERR_TUNNEL_CONNECTION_FAILED at https://forms.example.com/f/contact-request",
+        "tool": "approved_submit",
+        "opState": "failed",
+        "actor": "controller"
+      },
+      {
+        "seq": 23,
+        "at": "2026-09-27T10:35:35.329Z",
+        "kind": "error",
+        "title": "Final action not completed",
+        "detail": "not submitted: the form page could not be opened (navigation_failed)"
+      },
+      {
+        "seq": 24,
+        "at": "2026-09-27T10:35:35.330Z",
+        "kind": "model",
+        "title": "Model turn 4",
+        "detail": "Proposal C (reject)."
+      },
+      {
+        "seq": 25,
+        "at": "2026-09-27T10:35:35.331Z",
+        "kind": "tool",
+        "title": "browser_propose_submit contact-request",
+        "detail": "proposal prop-d060cb704c108af6f950 recorded; waiting for a person to review it",
+        "tool": "browser_propose_submit",
+        "opState": "allowed"
+      },
+      {
+        "seq": 26,
+        "at": "2026-09-27T10:35:35.331Z",
+        "kind": "lifecycle",
+        "title": "Waiting for review",
+        "detail": "contact-request on https://forms.example.com: Acceptance proposal C (expires 2026-09-27T10:36:35.330Z)"
+      },
+      {
+        "seq": 27,
+        "at": "2026-09-27T10:35:35.715Z",
+        "kind": "lifecycle",
+        "title": "Proposal rejected",
+        "detail": "contact-request on https://forms.example.com by judge; payload digest 9f35350df903a3ae877597f224ef5fe4c28f30a96075be889cdcc72493f913be"
+      },
+      {
+        "seq": 28,
+        "at": "2026-09-27T10:35:35.717Z",
+        "kind": "lifecycle",
+        "title": "Proposal rejected",
+        "detail": "rejected by judge-25a178d200fc9c390ae3f23b; nothing was submitted"
+      },
+      {
+        "seq": 29,
+        "at": "2026-09-27T10:35:35.720Z",
+        "kind": "model",
+        "title": "Model turn 5",
+        "detail": "Screenshot."
+      },
+      {
+        "seq": 30,
+        "at": "2026-09-27T10:35:35.723Z",
+        "kind": "tool",
+        "title": "browser_screenshot started",
+        "tool": "browser_screenshot",
+        "opState": "started"
+      },
+      {
+        "seq": 31,
+        "at": "2026-09-27T10:35:35.811Z",
+        "kind": "artifact",
+        "title": "Screenshot stored art-96463b04ed2aabf0f4f6",
+        "detail": "chrome-error://chromewebdata/ (1280x800, sha256 3eab349ebf404dae5a2a20d041325042a032d46aeab4b9730d8f8962686fb9b0)",
+        "tool": "browser_screenshot",
+        "actor": "agent"
+      },
+      {
+        "seq": 32,
+        "at": "2026-09-27T10:35:35.811Z",
+        "kind": "tool",
+        "title": "browser_screenshot chrome-error://chromewebdata/",
+        "detail": "stored as art-96463b04ed2aabf0f4f6",
+        "tool": "browser_screenshot",
+        "opState": "completed"
+      },
+      {
+        "seq": 33,
+        "at": "2026-09-27T10:35:35.812Z",
+        "kind": "model",
+        "title": "Model turn 6",
+        "detail": "Submitting."
+      },
+      {
+        "seq": 34,
+        "at": "2026-09-27T10:35:35.813Z",
+        "kind": "tool",
+        "title": "submit_result",
+        "detail": "Acceptance diagnostic: proposals exercised.\noutputs: (none)\nsources: https://example.com/",
+        "tool": "submit_result",
+        "opState": "completed"
+      },
+      {
+        "seq": 35,
+        "at": "2026-09-27T10:35:35.814Z",
+        "kind": "phase",
+        "title": "freeze",
+        "detail": "stopping the sandboxes and collecting outputs/ read-only"
+      },
+      {
+        "seq": 36,
+        "at": "2026-09-27T10:35:36.517Z",
+        "kind": "lifecycle",
+        "title": "browser sandbox destroyed (result submitted)",
+        "detail": "revoked; destroyed; remaining containers=0 volumes=0",
+        "opState": "completed"
+      },
+      {
+        "seq": 37,
+        "at": "2026-09-27T10:35:36.519Z",
+        "kind": "check",
+        "title": "passed: screenshot-evidence",
+        "detail": "1 screenshot(s) stored"
+      },
+      {
+        "seq": 38,
+        "at": "2026-09-27T10:35:36.520Z",
+        "kind": "check",
+        "title": "passed: sources-cited",
+        "detail": "1 source(s) cited"
+      },
+      {
+        "seq": 39,
+        "at": "2026-09-27T10:35:36.520Z",
+        "kind": "check",
+        "title": "passed: sources-visited",
+        "detail": "every cited source was reached by this task's browser"
+      },
+      {
+        "seq": 40,
+        "at": "2026-09-27T10:35:36.520Z",
+        "kind": "check",
+        "title": "passed: sources-in-policy",
+        "detail": "every cited source is inside the allowed destinations"
+      },
+      {
+        "seq": 41,
+        "at": "2026-09-27T10:35:36.521Z",
+        "kind": "phase",
+        "title": "Outcome RESULT_VERIFIED",
+        "detail": "all 4 completion checks of profile web-research passed"
+      }
+    ]
+  },
+  "checks": [
+    {
+      "ok": true,
+      "what": "create → 201 {\"id\":\"task-1c661856076d3677\",\"owner\":\"judge-25a178d200fc9c390ae3f23b\",\"profileId\":\"web-research\",\"issueText\":\"proposal semantics\",\"kind\":\"general\",\"egressAllow"
+    },
+    {
+      "ok": true,
+      "what": "proposal A pending (prop-644cf4462fc3d7c82268, expires 2026-09-27T10:35:32.678Z)"
+    },
+    {
+      "ok": true,
+      "what": "decide expired proposal A → 410 {\"error\":\"the proposal expired\"}"
+    },
+    {
+      "ok": true,
+      "what": "proposal B pending (prop-53b4bacba4235bab963d)"
+    },
+    {
+      "ok": true,
+      "what": "approve B with a wrong digest → 409 {\"error\":\"payloadDigest does not match the proposal: approve exactly the payload you reviewed\"}"
+    },
+    {
+      "ok": true,
+      "what": "another judge approving B → 404"
+    },
+    {
+      "ok": true,
+      "what": "approve B with the exact digest → 200 approved"
+    },
+    {
+      "ok": true,
+      "what": "replayed approval of B → 409"
+    },
+    {
+      "ok": true,
+      "what": "reject after approve → 409"
+    },
+    {
+      "ok": true,
+      "what": "reject C → 200 rejected"
+    },
+    {
+      "ok": true,
+      "what": "approved B did not become 'confirmed' without a reachable destination (final status failed)"
+    },
+    {
+      "ok": true,
+      "what": "decide after the task ended → 409"
+    }
+  ],
+  "note": "forms.example.com is a configured-but-unreachable airlock-forms-v1 origin; the loopback fixtures destination is not reachable from the sandboxed browser (egress allows public addresses only), so an approved submission cannot be confirmed locally",
+  "dirtyTree": null
+}

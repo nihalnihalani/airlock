@@ -19,8 +19,27 @@
       "version": "0.1.0",
       "dependencies": {
         "@airlock/contracts": "workspace:*",
+        "@airlock/fixtures": "workspace:*",
         "@electric-sql/pglite": "^0.3.4",
         "hono": "^4.10.0",
+        "zod": "^3.23.8",
+      },
+      "devDependencies": {
+        "typescript": "^5.9.3",
+      },
+    },
+    "apps/egress": {
+      "name": "@airlock/egress",
+      "version": "0.1.0",
+      "devDependencies": {
+        "typescript": "^5.9.3",
+      },
+    },
+    "apps/fixtures": {
+      "name": "@airlock/fixtures",
+      "version": "0.1.0",
+      "dependencies": {
+        "@airlock/contracts": "workspace:*",
         "zod": "^3.23.8",
       },
       "devDependencies": {
@@ -82,6 +101,10 @@
     "@airlock/contracts": ["@airlock/contracts@workspace:packages/contracts"],
 
     "@airlock/control": ["@airlock/control@workspace:apps/control"],
+
+    "@airlock/egress": ["@airlock/egress@workspace:apps/egress"],
+
+    "@airlock/fixtures": ["@airlock/fixtures@workspace:apps/fixtures"],
 
     "@airlock/supervisor": ["@airlock/supervisor@workspace:apps/supervisor"],
 

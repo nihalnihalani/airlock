@@ -1,0 +1,545 @@
+{
+  "id": "C41F-supervisor-kill-browser-navigate",
+  "requirement": "C41: SIGKILL the SUPERVISOR while a browser navigate (httpbin.org/delay/8) is in flight, restart it with dev-up.sh → the uncertain op is not replayed, the browser attempt is revoked/stopped at restart and destroyed, egress container and networks removed, the task does not run forever",
+  "command": "bun scripts/acceptance/local.ts C41F-supervisor-kill-browser-navigate",
+  "environment": "real local runc (dev-unsafe, Colima); stack = git archive of a07cf3228ef7",
+  "timestamp": "2026-09-27T15:32:38.732Z",
+  "revision": "a07cf3228ef791f5bb1f44aae751df80077edc00",
+  "result": "PASS",
+  "evidence": {
+    "timeline": {
+      "taskId": "task-67e372e068173166",
+      "uncertainOperation": "op-0628b5000ba554807b580a63",
+      "oldAttempt": "att-9bedfbd415f2c8c95ea3",
+      "containersBefore": [
+        "airlock-browser-task-67e372e068173166-att-9bedfbd415f2c8c95ea3 Up 7 seconds (healthy)",
+        "airlock-egress-task-67e372e068173166-att-9bedfbd415f2c8c95ea3 Up 7 seconds"
+      ],
+      "attemptBefore": [
+        {
+          "attemptId": "att-9bedfbd415f2c8c95ea3",
+          "status": "running"
+        }
+      ],
+      "kill": {
+        "process": "supervisor",
+        "pid": 52488,
+        "signal": "SIGKILL",
+        "at": "2026-09-27T15:32:25.694Z",
+        "dead": true
+      },
+      "whileDown": {
+        "containers": [
+          "airlock-browser-task-67e372e068173166-att-9bedfbd415f2c8c95ea3 Up 10 seconds (healthy)",
+          "airlock-egress-task-67e372e068173166-att-9bedfbd415f2c8c95ea3 Up 10 seconds"
+        ],
+        "controlHealth": 200
+      },
+      "restart": {
+        "at": "2026-09-27T15:32:29.633Z",
+        "code": 0,
+        "ms": 814,
+        "lines": [
+          "fixtures already running (pid 50650)",
+          "control already running (pid 54148)"
+        ],
+        "err": ""
+      },
+      "afterRestart": {
+        "containers": [
+          "airlock-browser-task-67e372e068173166-att-9bedfbd415f2c8c95ea3 Exited (0) Less than a second ago",
+          "airlock-egress-task-67e372e068173166-att-9bedfbd415f2c8c95ea3 Exited (0) Less than a second ago"
+        ],
+        "supervisorAttempts": [
+          {
+            "attemptId": "att-9bedfbd415f2c8c95ea3",
+            "status": "unknown"
+          }
+        ]
+      }
+    },
+    "supervisorOperationRecord": {
+      "beforeKill": {
+        "status": 200,
+        "body": {
+          "operationId": "op-0628b5000ba554807b580a63",
+          "kind": "browserOp",
+          "state": "pending",
+          "httpStatus": null,
+          "resultRecorded": false,
+          "interruptedByRestart": false,
+          "taskId": "task-67e372e068173166",
+          "attemptId": "att-9bedfbd415f2c8c95ea3",
+          "generation": 1,
+          "createdAt": "2026-09-27T15:32:24.163Z",
+          "updatedAt": "2026-09-27T15:32:24.163Z"
+        }
+      },
+      "atEnd": {
+        "status": 200,
+        "body": {
+          "operationId": "op-0628b5000ba554807b580a63",
+          "kind": "browserOp",
+          "state": "completed",
+          "httpStatus": 409,
+          "resultRecorded": true,
+          "interruptedByRestart": true,
+          "taskId": "task-67e372e068173166",
+          "attemptId": "att-9bedfbd415f2c8c95ea3",
+          "generation": 1,
+          "createdAt": "2026-09-27T15:32:24.163Z",
+          "updatedAt": "2026-09-27T15:32:29.291Z"
+        }
+      }
+    },
+    "final": {
+      "status": "done",
+      "outcome": "RESULT_PARTIAL",
+      "recoveries": 0,
+      "cleanup": {
+        "at": "2026-09-27T15:32:36.353Z",
+        "detail": "supervisor confirmed teardown of 2 attempt(s)",
+        "status": "confirmed"
+      },
+      "attempts": [
+        {
+          "attemptId": "att-9bedfbd415f2c8c95ea3",
+          "generation": 1,
+          "role": "browser",
+          "status": "destroyed"
+        },
+        {
+          "attemptId": "att-bda60c480c04c435f777",
+          "generation": 2,
+          "role": "browser",
+          "status": "destroyed"
+        }
+      ],
+      "result": {
+        "checks": [
+          {
+            "name": "screenshot-evidence",
+            "detail": "1 screenshot(s) stored, none of an http(s) page (e.g. about:blank)",
+            "passed": false
+          },
+          {
+            "name": "sources-cited",
+            "detail": "2 source(s) cited",
+            "passed": true
+          },
+          {
+            "name": "sources-visited",
+            "detail": "never reached by this task's browser: https://httpbin.org/delay/8",
+            "passed": false
+          },
+          {
+            "name": "sources-in-policy",
+            "detail": "every cited source is inside the allowed destinations",
+            "passed": true
+          }
+        ],
+        "sources": [
+          {
+            "url": "https://example.com/"
+          },
+          {
+            "url": "https://httpbin.org/delay/8"
+          }
+        ],
+        "summary": "Acceptance diagnostic (C41): example.com and a slow page were opened and captured.",
+        "outputArtifactIds": []
+      }
+    },
+    "uncertainOperationTrail": [
+      {
+        "seq": 13,
+        "at": "2026-09-27T15:32:24.162Z",
+        "kind": "tool",
+        "title": "browser_navigate started",
+        "tool": "browser_navigate",
+        "opState": "started",
+        "operationId": "op-0628b5000ba554807b580a63",
+        "attemptId": "att-9bedfbd415f2c8c95ea3"
+      },
+      {
+        "seq": 14,
+        "at": "2026-09-27T15:32:27.212Z",
+        "kind": "tool",
+        "title": "browser_navigate outcome unknown",
+        "detail": "the supervisor call did not complete (Supervisor call failed after retries: Unable to connect. Is the computer able to access the url?); the operation is not replayed and the browser session is closed (interruption 1)",
+        "tool": "browser_navigate",
+        "opState": "unknown",
+        "operationId": "op-0628b5000ba554807b580a63",
+        "attemptId": "att-9bedfbd415f2c8c95ea3",
+        "actor": "agent"
+      }
+    ],
+    "supervisorLogOldAttempt": [
+      "{\"ts\":\"2026-09-27T15:32:23.948Z\",\"level\":\"info\",\"app\":\"supervisor\",\"msg\":\"browser attempt running\",\"attemptId\":\"att-9bedfbd415f2c8c95ea3\",\"taskId\":\"task-67e372e068173166\",\"container\":\"airlock-browser-task-67e372e068173166-att-9bedfbd415f2c8c95ea3\",\"egress\":\"airlock-egress-task-67e372e068173166-att-9bedfbd415f2c8c95ea3\",\"networks\":[\"airlock-bnet-task-67e372e068173166-att-9bedfbd415f2c8c95ea3\",\"airl",
+      "{\"ts\":\"2026-09-27T15:32:29.434Z\",\"level\":\"warn\",\"app\":\"supervisor\",\"msg\":\"attempt was live at restart; revoked, stopped and marked unknown\",\"attemptId\":\"att-9bedfbd415f2c8c95ea3\",\"role\":\"browser\",\"containers\":[\"airlock-browser-task-67e372e068173166-att-9bedfbd415f2c8c95ea3\",\"airlock-egress-task-67e372e068173166-att-9bedfbd415f2c8c95ea3\"],\"status\":\"running\",\"wasRunning\":true}",
+      "{\"ts\":\"2026-09-27T15:32:29.908Z\",\"level\":\"info\",\"app\":\"supervisor\",\"msg\":\"attempt destroyed\",\"attemptId\":\"att-9bedfbd415f2c8c95ea3\",\"container\":\"airlock-browser-task-67e372e068173166-att-9bedfbd415f2c8c95ea3\",\"volume\":\"airlock-ws-task-67e372e068173166-att-9bedfbd415f2c8c95ea3\",\"containersRemaining\":[],\"volumesRemaining\":[]}"
+    ],
+    "events": [
+      {
+        "seq": 1,
+        "at": "2026-09-27T15:32:17.174Z",
+        "kind": "lifecycle",
+        "title": "Task created",
+        "detail": "general task, profile web-research v1; destinations example.com, httpbin.org; diagnostic (scripted:acc-c41-slow-nav), not a model run"
+      },
+      {
+        "seq": 2,
+        "at": "2026-09-27T15:32:17.975Z",
+        "kind": "phase",
+        "title": "prepare",
+        "detail": "general task profile web-research v1; tools: browser_navigate, browser_observe, browser_click, browser_type, browser_key, browser_scroll, browser_screenshot, browser_tabs, browser_download_list, browser_download_save, browser_propose_submit, submit_result; destinations: example.com, httpbin.org"
+      },
+      {
+        "seq": 3,
+        "at": "2026-09-27T15:32:17.976Z",
+        "kind": "check",
+        "title": "dev-unsafe runtime",
+        "detail": "supervisor host runs runc with AIRLOCK_DEV_UNSAFE; results are not a deployment measurement"
+      },
+      {
+        "seq": 4,
+        "at": "2026-09-27T15:32:17.979Z",
+        "kind": "phase",
+        "title": "execute",
+        "detail": "model loop for goal under profile web-research"
+      },
+      {
+        "seq": 5,
+        "at": "2026-09-27T15:32:17.984Z",
+        "kind": "model",
+        "title": "Model turn 1",
+        "detail": "Opening example.com."
+      },
+      {
+        "seq": 6,
+        "at": "2026-09-27T15:32:17.985Z",
+        "kind": "tool",
+        "title": "browser_navigate allowed",
+        "detail": "example.com is inside the task's destinations",
+        "tool": "browser_navigate",
+        "opState": "allowed",
+        "actor": "agent"
+      },
+      {
+        "seq": 7,
+        "at": "2026-09-27T15:32:17.988Z",
+        "kind": "lifecycle",
+        "title": "Creating browser sandbox",
+        "detail": "attempt att-9bedfbd415f2c8c95ea3, generation 1, deadline 2026-09-27T15:47:17.987Z; egress allowed to example.com, httpbin.org",
+        "attemptId": "att-9bedfbd415f2c8c95ea3"
+      },
+      {
+        "seq": 8,
+        "at": "2026-09-27T15:32:23.950Z",
+        "kind": "lifecycle",
+        "title": "browser sandbox created",
+        "detail": "container airlock-browser-task-67e372e068173166-att-9bedfbd415f2c8c95ea3; runtime runc (dev-unsafe)",
+        "opState": "completed",
+        "operationId": "op-352bf9948affbc4086c0f0ee",
+        "attemptId": "att-9bedfbd415f2c8c95ea3"
+      },
+      {
+        "seq": 9,
+        "at": "2026-09-27T15:32:23.952Z",
+        "kind": "tool",
+        "title": "browser_navigate started",
+        "tool": "browser_navigate",
+        "opState": "started",
+        "operationId": "op-057743e655a59fa4fdec60e6",
+        "attemptId": "att-9bedfbd415f2c8c95ea3"
+      },
+      {
+        "seq": 10,
+        "at": "2026-09-27T15:32:24.158Z",
+        "kind": "tool",
+        "title": "browser_navigate https://example.com/",
+        "detail": "status 200",
+        "tool": "browser_navigate",
+        "opState": "completed",
+        "operationId": "op-057743e655a59fa4fdec60e6",
+        "attemptId": "att-9bedfbd415f2c8c95ea3",
+        "status": 200
+      },
+      {
+        "seq": 11,
+        "at": "2026-09-27T15:32:24.160Z",
+        "kind": "model",
+        "title": "Model turn 2",
+        "detail": "Opening a slow page."
+      },
+      {
+        "seq": 12,
+        "at": "2026-09-27T15:32:24.161Z",
+        "kind": "tool",
+        "title": "browser_navigate allowed",
+        "detail": "httpbin.org is inside the task's destinations",
+        "tool": "browser_navigate",
+        "opState": "allowed",
+        "actor": "agent"
+      },
+      {
+        "seq": 13,
+        "at": "2026-09-27T15:32:24.162Z",
+        "kind": "tool",
+        "title": "browser_navigate started",
+        "tool": "browser_navigate",
+        "opState": "started",
+        "operationId": "op-0628b5000ba554807b580a63",
+        "attemptId": "att-9bedfbd415f2c8c95ea3"
+      },
+      {
+        "seq": 14,
+        "at": "2026-09-27T15:32:27.212Z",
+        "kind": "tool",
+        "title": "browser_navigate outcome unknown",
+        "detail": "the supervisor call did not complete (Supervisor call failed after retries: Unable to connect. Is the computer able to access the url?); the operation is not replayed and the browser session is closed (interruption 1)",
+        "tool": "browser_navigate",
+        "opState": "unknown",
+        "operationId": "op-0628b5000ba554807b580a63",
+        "attemptId": "att-9bedfbd415f2c8c95ea3",
+        "actor": "agent"
+      },
+      {
+        "seq": 15,
+        "at": "2026-09-27T15:32:29.909Z",
+        "kind": "lifecycle",
+        "title": "browser sandbox destroyed (browser session interrupted)",
+        "detail": "revoke failed: Supervisor call failed after retries: Unable to connect. Is the computer able to access the url?; destroyed; remaining containers=0 volumes=0",
+        "opState": "completed",
+        "attemptId": "att-9bedfbd415f2c8c95ea3"
+      },
+      {
+        "seq": 16,
+        "at": "2026-09-27T15:32:29.911Z",
+        "kind": "model",
+        "title": "Model turn 3",
+        "detail": "Observing."
+      },
+      {
+        "seq": 17,
+        "at": "2026-09-27T15:32:29.913Z",
+        "kind": "lifecycle",
+        "title": "Creating browser sandbox",
+        "detail": "attempt att-bda60c480c04c435f777, generation 2, deadline 2026-09-27T15:47:29.912Z; egress allowed to example.com, httpbin.org",
+        "attemptId": "att-bda60c480c04c435f777"
+      },
+      {
+        "seq": 18,
+        "at": "2026-09-27T15:32:35.886Z",
+        "kind": "lifecycle",
+        "title": "browser sandbox created",
+        "detail": "container airlock-browser-task-67e372e068173166-att-bda60c480c04c435f777; runtime runc (dev-unsafe)",
+        "opState": "completed",
+        "operationId": "op-9603f17f92ba57d28d710905",
+        "attemptId": "att-bda60c480c04c435f777"
+      },
+      {
+        "seq": 19,
+        "at": "2026-09-27T15:32:35.887Z",
+        "kind": "tool",
+        "title": "browser_observe started",
+        "tool": "browser_observe",
+        "opState": "started",
+        "operationId": "op-aa89f78d1a0b572c34eabbe0",
+        "attemptId": "att-bda60c480c04c435f777"
+      },
+      {
+        "seq": 20,
+        "at": "2026-09-27T15:32:35.949Z",
+        "kind": "tool",
+        "title": "browser_observe about:blank",
+        "detail": " — 0 chars, 0 controls, 1 tab(s)\n\n",
+        "tool": "browser_observe",
+        "opState": "completed",
+        "operationId": "op-aa89f78d1a0b572c34eabbe0",
+        "attemptId": "att-bda60c480c04c435f777"
+      },
+      {
+        "seq": 21,
+        "at": "2026-09-27T15:32:35.950Z",
+        "kind": "model",
+        "title": "Model turn 4",
+        "detail": "Screenshot."
+      },
+      {
+        "seq": 22,
+        "at": "2026-09-27T15:32:35.951Z",
+        "kind": "tool",
+        "title": "browser_screenshot started",
+        "tool": "browser_screenshot",
+        "opState": "started",
+        "operationId": "op-bf1e961f1b8e4c30cb53380b",
+        "attemptId": "att-bda60c480c04c435f777"
+      },
+      {
+        "seq": 23,
+        "at": "2026-09-27T15:32:36.012Z",
+        "kind": "artifact",
+        "title": "Screenshot stored art-8277f63d2f16257014d3",
+        "detail": "about:blank (1280x800, sha256 3eab349ebf404dae5a2a20d041325042a032d46aeab4b9730d8f8962686fb9b0)",
+        "tool": "browser_screenshot",
+        "operationId": "op-bf1e961f1b8e4c30cb53380b",
+        "attemptId": "att-bda60c480c04c435f777",
+        "actor": "agent"
+      },
+      {
+        "seq": 24,
+        "at": "2026-09-27T15:32:36.012Z",
+        "kind": "tool",
+        "title": "browser_screenshot about:blank",
+        "detail": "stored as art-8277f63d2f16257014d3",
+        "tool": "browser_screenshot",
+        "opState": "completed",
+        "operationId": "op-bf1e961f1b8e4c30cb53380b",
+        "attemptId": "att-bda60c480c04c435f777"
+      },
+      {
+        "seq": 25,
+        "at": "2026-09-27T15:32:36.014Z",
+        "kind": "model",
+        "title": "Model turn 5",
+        "detail": "Submitting."
+      },
+      {
+        "seq": 26,
+        "at": "2026-09-27T15:32:36.014Z",
+        "kind": "tool",
+        "title": "submit_result",
+        "detail": "Acceptance diagnostic (C41): example.com and a slow page were opened and captured.\noutputs: (none)\nsources: https://example.com/, https://httpbin.org/delay/8",
+        "tool": "submit_result",
+        "opState": "completed"
+      },
+      {
+        "seq": 27,
+        "at": "2026-09-27T15:32:36.015Z",
+        "kind": "phase",
+        "title": "freeze",
+        "detail": "stopping the sandboxes and collecting outputs/ read-only"
+      },
+      {
+        "seq": 28,
+        "at": "2026-09-27T15:32:36.350Z",
+        "kind": "lifecycle",
+        "title": "browser sandbox destroyed (result submitted)",
+        "detail": "revoked; destroyed; remaining containers=0 volumes=0",
+        "opState": "completed",
+        "attemptId": "att-bda60c480c04c435f777"
+      },
+      {
+        "seq": 29,
+        "at": "2026-09-27T15:32:36.352Z",
+        "kind": "check",
+        "title": "failed: screenshot-evidence",
+        "detail": "1 screenshot(s) stored, none of an http(s) page (e.g. about:blank)"
+      },
+      {
+        "seq": 30,
+        "at": "2026-09-27T15:32:36.352Z",
+        "kind": "check",
+        "title": "passed: sources-cited",
+        "detail": "2 source(s) cited"
+      },
+      {
+        "seq": 31,
+        "at": "2026-09-27T15:32:36.353Z",
+        "kind": "check",
+        "title": "failed: sources-visited",
+        "detail": "never reached by this task's browser: https://httpbin.org/delay/8"
+      },
+      {
+        "seq": 32,
+        "at": "2026-09-27T15:32:36.353Z",
+        "kind": "check",
+        "title": "passed: sources-in-policy",
+        "detail": "every cited source is inside the allowed destinations"
+      },
+      {
+        "seq": 33,
+        "at": "2026-09-27T15:32:36.353Z",
+        "kind": "phase",
+        "title": "Outcome RESULT_PARTIAL",
+        "detail": "2 of 4 completion checks failed: screenshot-evidence, sources-visited"
+      }
+    ]
+  },
+  "checks": [
+    {
+      "ok": true,
+      "what": "create → 201 "
+    },
+    {
+      "ok": true,
+      "what": "the slow navigate (httpbin.org/delay/8) was dispatched (started event)"
+    },
+    {
+      "ok": true,
+      "what": "supervisor pid 52488 killed with SIGKILL at 2026-09-27T15:32:25.694Z, 1.5 s into the navigate"
+    },
+    {
+      "ok": true,
+      "what": "supervisor restarted via dev-up.sh --detach (exit 0, 814 ms) "
+    },
+    {
+      "ok": true,
+      "what": "right after the supervisor restart the old browser attempt is no longer live (unknown)"
+    },
+    {
+      "ok": true,
+      "what": "right after restart, no container of the task is running (airlock-browser-task-67e372e068173166-att-9bedfbd415f2c8c95ea3 Exited (0) Less than a second ago | airlock-egress-task-67e372e068173166-att-9bedfbd415f2c8c95ea3 Exited (0) Less than a second ago)"
+    },
+    {
+      "ok": true,
+      "what": "task reached a terminal status (done/RESULT_PARTIAL), not left running"
+    },
+    {
+      "ok": true,
+      "what": "cleanup confirmed (confirmed: supervisor confirmed teardown of 2 attempt(s))"
+    },
+    {
+      "ok": true,
+      "what": "the interrupted attempt att-9bedfbd415f2c8c95ea3 is destroyed at the supervisor (destroyed)"
+    },
+    {
+      "ok": true,
+      "what": "no live attempt of the task at the supervisor (att-9bedfbd415f2c8c95ea3:destroyed, att-bda60c480c04c435f777:destroyed)"
+    },
+    {
+      "ok": true,
+      "what": "no container of the task remains (none)"
+    },
+    {
+      "ok": true,
+      "what": "no network of the task remains (none)"
+    },
+    {
+      "ok": true,
+      "what": "the uncertain navigate op-0628b5000ba554807b580a63 never completed (trail: browser_navigate started[started] → browser_navigate outcome unknown[unknown])"
+    },
+    {
+      "ok": true,
+      "what": "operation op-0628b5000ba554807b580a63 was dispatched exactly once (started events: 1)"
+    },
+    {
+      "ok": true,
+      "what": "the controller recorded the navigate's outcome as unknown (\"browser_navigate outcome unknown\")"
+    },
+    {
+      "ok": true,
+      "what": "outcome RESULT_PARTIAL: screenshot-evidence failed (1 screenshot(s) stored, none of an http(s) page (e.g. about:blank))"
+    },
+    {
+      "ok": true,
+      "what": "no browser op completed on the old attempt after the kill (0)"
+    },
+    {
+      "ok": true,
+      "what": "browser ops after the kill ran only on fresh attempt(s): att-bda60c480c04c435f777"
+    }
+  ],
+  "dirtyTree": null
+}

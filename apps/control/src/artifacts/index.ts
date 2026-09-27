@@ -13,6 +13,7 @@ import {
   SCHEMA_VERSION,
   candidateDigestOf,
   canonicalJson,
+  compareCodePoints,
   type CandidateBundle,
   type CollectedFile,
   type FileEnvelope,
@@ -54,8 +55,28 @@ export function decodeBase64Strict(text: string): Uint8Array | null {
 // ---------------------------------------------------------------------------------------------
 
 export type EnvelopeValidation =
-  | { ok: true; files: CollectedFile[] }
-  | { ok: false; reasons: string[] };
+  /** `ignored`: collector rejections for paths outside the allowlist (agent scratch files); list them in the event. */
+  | { ok: true; files: CollectedFile[]; ignored: { path: string; reason: string }[] }
+  /** `inconclusive`: the envelope itself is malformed (a collector/protocol fault, not the candidate's). */
+  | { ok: false; reasons: string[]; inconclusive?: boolean };
+
+/**
+ * Optional-file rule (M9). `allowedReplacementPaths` are the only files a candidate may replace;
+ * the collector reports every allowed path as either a collected file or a `rejected` entry.
+ * - Any rejection of an allowed path other than "missing" (symlink, hard link, special file,
+ *   oversize, traversal, duplicate, conflicting, unreadable…) refuses the seal.
+ * - A "missing" allowed path is REQUIRED — and refuses the seal — when it exists in the base tree
+ *   (deleting a base file is not a v1 replacement) or when the base tree is unknown (no
+ *   `basePaths`, fail closed). An allowed path absent from the base tree is an optional slot: its
+ *   absence is fine.
+ * - A base-tree allowed path the collector neither returned nor rejected refuses the seal.
+ * - Rejections of paths outside the allowlist (scratch files) never refuse the seal; they are
+ *   returned in `ignored` so the caller can record them.
+ */
+export interface EnvelopeValidationOptions {
+  /** Paths present in the pristine base tree (e.g. `Object.keys(LoadedProfile.baseFiles)`). */
+  basePaths?: Iterable<string>;
+}
 
 const MAX_ENVELOPE_ENTRIES = 1024;
 
@@ -70,16 +91,18 @@ function isTraversal(path: string): boolean {
   return segs.some((s) => s === "" || s === "." || s === "..");
 }
 
-export function validateEnvelope(envelope: FileEnvelope, profile: ProfileManifest): EnvelopeValidation {
+export function validateEnvelope(envelope: FileEnvelope, profile: ProfileManifest, options: EnvelopeValidationOptions = {}): EnvelopeValidation {
   const reasons: string[] = [];
   const caps = profile.caps;
   const allowed = new Set(profile.allowedReplacementPaths);
 
   if (!envelope || typeof envelope !== "object" || !Array.isArray(envelope.files)) {
-    return { ok: false, reasons: ["envelope is not an object with a files array"] };
+    return { ok: false, reasons: ["envelope is not an object with a files array"], inconclusive: true };
   }
+  let malformed = false;
   if (envelope.schemaVersion !== SCHEMA_VERSION) {
     reasons.push(`envelope schemaVersion ${String(envelope.schemaVersion)} != ${SCHEMA_VERSION}`);
+    malformed = true;
   }
   if (envelope.files.length > MAX_ENVELOPE_ENTRIES) {
     return { ok: false, reasons: [`envelope has ${envelope.files.length} entries (> ${MAX_ENVELOPE_ENTRIES})`] };
@@ -158,13 +181,50 @@ export function validateEnvelope(envelope: FileEnvelope, profile: ProfileManifes
   if (total > caps.maxTotalBytes) {
     reasons.push(`total ${total} bytes exceeds cap ${caps.maxTotalBytes}`);
   }
+  const ignored: { path: string; reason: string }[] = [];
+  const reported = new Set(out.map((f) => f.path));
   if (!Array.isArray(envelope.rejected)) {
     reasons.push("envelope.rejected is not an array");
+    malformed = true;
+  } else {
+    if (envelope.rejected.length > MAX_ENVELOPE_ENTRIES) {
+      return { ok: false, reasons: [`envelope has ${envelope.rejected.length} rejected entries (> ${MAX_ENVELOPE_ENTRIES})`], inconclusive: true };
+    }
+    const allowedKeys = new Map([...allowed].map((p) => [dedupeKey(p), p] as const));
+    const basePaths = options.basePaths ? new Set(options.basePaths) : null;
+    for (const entry of envelope.rejected) {
+      if (!entry || typeof entry !== "object" || typeof entry.path !== "string" || typeof entry.reason !== "string") {
+        reasons.push("envelope.rejected has a malformed entry");
+        malformed = true;
+        continue;
+      }
+      const path = entry.path.slice(0, 512);
+      const reason = entry.reason.slice(0, 256);
+      // A rejection is about an allowed file when it names one exactly or by a case/normalization
+      // variant (a conflicting twin of the allowed path).
+      const target = allowed.has(path) ? path : allowedKeys.get(dedupeKey(path));
+      if (target === undefined) {
+        ignored.push({ path, reason });
+        continue;
+      }
+      reported.add(target);
+      if (reason === "missing" && target === path) {
+        if (basePaths && !basePaths.has(target)) continue; // optional slot, not in the base tree
+        reasons.push(`${target}: required file is missing from the candidate${basePaths ? " (present in the base tree)" : ""}`);
+        continue;
+      }
+      reasons.push(`${target}: rejected by the collector (${reason}${path !== target ? `; reported as ${JSON.stringify(path.slice(0, 80))}` : ""})`);
+    }
+    if (basePaths) {
+      for (const p of allowed) {
+        if (basePaths.has(p) && !reported.has(p)) reasons.push(`${p}: required file was neither collected nor rejected by the collector`);
+      }
+    }
   }
 
-  if (reasons.length > 0) return { ok: false, reasons };
-  out.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-  return { ok: true, files: out };
+  if (reasons.length > 0) return malformed ? { ok: false, reasons, inconclusive: true } : { ok: false, reasons };
+  out.sort((a, b) => compareCodePoints(a.path, b.path));
+  return { ok: true, files: out, ignored };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -174,7 +234,7 @@ export function validateEnvelope(envelope: FileEnvelope, profile: ProfileManifes
 export function buildManifest(profile: ProfileManifest, files: CollectedFile[]): SourceManifest {
   const replacements = files
     .map((f) => ({ path: f.path, byteLength: f.byteLength, sha256: f.sha256 }))
-    .sort((a, b) => a.path.localeCompare(b.path));
+    .sort((a, b) => compareCodePoints(a.path, b.path));
   return {
     schemaVersion: SCHEMA_VERSION,
     profileId: profile.id,
@@ -602,7 +662,7 @@ export async function exportBundle(input: ExportBundleInput): Promise<{ files: B
   // patch.diff: one unified diff per replacement, in manifest (sorted) order.
   const diffs: string[] = [];
   const notes: string[] = [];
-  for (const r of [...bundle.manifest.replacements].sort((a, b) => a.path.localeCompare(b.path))) {
+  for (const r of [...bundle.manifest.replacements].sort((a, b) => compareCodePoints(a.path, b.path))) {
     const f = byPath.get(r.path) as CollectedFile;
     const bytes = decodeBase64Strict(f.contentBase64) as Uint8Array;
     let candidateText: string;
@@ -639,7 +699,7 @@ export async function exportBundle(input: ExportBundleInput): Promise<{ files: B
   files.push({ path: "reproduction/README.txt", bytes: utf8(reproductionReadme(profile, bundle, verification)) });
   files.push({ path: "README.txt", bytes: utf8(topReadme(profile, bundle, verification, baseline, task, notes)) });
 
-  files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  files.sort((a, b) => compareCodePoints(a.path, b.path));
   return { files };
 }
 
@@ -700,6 +760,9 @@ function topReadme(
   const passedCases = verification.cases.filter((c) => c.passed).length;
   const rt = verification.runtimeProfile;
   const lines = [
+    ...(task.scriptedDriver !== undefined
+      ? [`DIAGNOSTIC (scripted, not a model): this candidate was written by the scripted driver "${task.scriptedDriver}", which replays a fixed script. No model repaired anything; it is not a model repair.`, ""]
+      : []),
     "Airlock export bundle",
     "=====================",
     "",
@@ -781,7 +844,7 @@ const MAX_ENTRIES = 0xffff;
 
 export function zipFiles(files: { path: string; bytes: Uint8Array }[]): Uint8Array {
   if (files.length > MAX_ENTRIES) throw new Error(`zipFiles: ${files.length} entries exceeds ${MAX_ENTRIES}`);
-  const entries = [...files].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  const entries = [...files].sort((a, b) => compareCodePoints(a.path, b.path));
   const seen = new Set<string>();
   const locals: Uint8Array[] = [];
   const centrals: Uint8Array[] = [];

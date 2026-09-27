@@ -2,7 +2,7 @@
  * Scripted model scripts for diagnostics and tests (`AIRLOCK_MODEL_DRIVER=scripted:<path>`).
  *
  * A script is a JSON file holding `ScriptedTurn[]` (or `{ "turns": ScriptedTurn[] }` with an
- * optional `_comment`). A `write_file` tool call may carry `contentFile` instead of `content`: a
+ * optional `_comment`). A `write_file` (repair) or `code_write` (general) tool call may carry `contentFile` instead of `content`: a
  * path relative to the script file whose bytes become the content, so a labelled diagnostic
  * candidate can live next to the script as a real file rather than a JSON string.
  *
@@ -11,6 +11,10 @@
  * Every task gets a fresh driver instance: a script replays from its first turn per task.
  *
  * A scripted run is labelled as such in every model event and is never a live repair.
+ *
+ * Placeholders `{{AIRLOCK_FIXTURES_ORIGIN}}` in any string argument are replaced with the configured
+ * fixtures origin (AIRLOCK_FIXTURES_ORIGIN; default DEFAULT_FIXTURES_ORIGIN), so a hosted-fixture
+ * diagnostic points at wherever the fixtures service runs.
  */
 import { readFile, readdir, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
@@ -19,6 +23,19 @@ import type { ScriptedTurn } from "./vultr-client.ts";
 
 const NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const MAX_CONTENT_FILE_BYTES = 1_048_576;
+/** Used for {{AIRLOCK_FIXTURES_ORIGIN}} when no fixtures origin is configured (tests serve it from a fake browser). */
+export const DEFAULT_FIXTURES_ORIGIN = "https://airlock-fixtures.example.com";
+
+export interface ScriptVars {
+  fixturesOrigin?: string | null;
+}
+
+function substitute(value: unknown, vars: ScriptVars): unknown {
+  if (typeof value === "string") return value.split("{{AIRLOCK_FIXTURES_ORIGIN}}").join(vars.fixturesOrigin ?? DEFAULT_FIXTURES_ORIGIN);
+  if (Array.isArray(value)) return value.map((v) => substitute(v, vars));
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, substitute(v, vars)]));
+  return value;
+}
 
 const ToolCallSchema = z.object({ name: z.string().max(64), args: z.unknown() });
 const TurnSchema = z.object({
@@ -40,7 +57,7 @@ export interface ScriptedCatalog {
 }
 
 /** Parse one script file, resolving `contentFile` references relative to the file. */
-export async function loadScriptedTurns(file: string): Promise<ScriptedTurn[]> {
+export async function loadScriptedTurns(file: string, vars: ScriptVars = {}): Promise<ScriptedTurn[]> {
   const raw: unknown = JSON.parse(await readFile(file, "utf8"));
   const parsed = ScriptSchema.parse(raw);
   const turns = Array.isArray(parsed) ? parsed : parsed.turns;
@@ -50,7 +67,7 @@ export async function loadScriptedTurns(file: string): Promise<ScriptedTurn[]> {
     const toolCalls: { name: string; args: unknown }[] = [];
     for (const call of turn.toolCalls ?? []) {
       let args = call.args ?? null;
-      if (call.name === "write_file" && args && typeof args === "object" && typeof (args as Record<string, unknown>).contentFile === "string") {
+      if ((call.name === "write_file" || call.name === "code_write") && args && typeof args === "object" && typeof (args as Record<string, unknown>).contentFile === "string") {
         const { contentFile, ...rest } = args as Record<string, unknown>;
         const ref = String(contentFile);
         if (isAbsolute(ref) || ref.includes("\0")) throw new Error(`${file}: contentFile must be a relative path`);
@@ -60,7 +77,7 @@ export async function loadScriptedTurns(file: string): Promise<ScriptedTurn[]> {
         if (info.size > MAX_CONTENT_FILE_BYTES) throw new Error(`${file}: contentFile ${ref} exceeds ${MAX_CONTENT_FILE_BYTES} bytes`);
         args = { ...rest, content: await readFile(target, "utf8") };
       }
-      toolCalls.push({ name: call.name, args });
+      toolCalls.push({ name: call.name, args: substitute(args, vars) });
     }
     out.push({ ...(turn.text !== undefined ? { text: turn.text } : {}), ...(turn.toolCalls ? { toolCalls } : {}) });
   }
@@ -68,17 +85,17 @@ export async function loadScriptedTurns(file: string): Promise<ScriptedTurn[]> {
 }
 
 /** Build the catalog for a script file or a directory of scripts. Validates every script up front. */
-export async function openScriptedCatalog(path: string): Promise<ScriptedCatalog> {
+export async function openScriptedCatalog(path: string, vars: ScriptVars = {}): Promise<ScriptedCatalog> {
   const info = await stat(path);
   if (info.isFile()) {
     const name = basename(path).replace(/\.json$/, "");
-    await loadScriptedTurns(path);
+    await loadScriptedTurns(path, vars);
     return {
       path,
       names: [name],
       async load(requested?: string) {
         if (requested !== undefined && requested !== name) throw new Error(`scripted driver "${requested}" is not available; the configured script is "${name}"`);
-        return { name, turns: await loadScriptedTurns(path) };
+        return { name, turns: await loadScriptedTurns(path, vars) };
       },
     };
   }
@@ -88,7 +105,7 @@ export async function openScriptedCatalog(path: string): Promise<ScriptedCatalog
   for (const entry of entries) {
     const name = entry.slice(0, -".json".length);
     if (!NAME.test(name)) continue;
-    await loadScriptedTurns(join(path, entry));
+    await loadScriptedTurns(join(path, entry), vars);
     names.push(name);
   }
   names.sort();
@@ -99,7 +116,7 @@ export async function openScriptedCatalog(path: string): Promise<ScriptedCatalog
     async load(requested?: string) {
       const name = requested ?? "default";
       if (!names.includes(name)) throw new Error(`scripted driver "${name}" not found under ${path}; available: ${names.join(", ")}`);
-      return { name, turns: await loadScriptedTurns(join(path, `${name}.json`)) };
+      return { name, turns: await loadScriptedTurns(join(path, `${name}.json`), vars) };
     },
   };
 }
