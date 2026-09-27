@@ -1,10 +1,33 @@
+/**
+ * Layout adapted from OpenBot `app/src/routes/sign.tsx` (pin 3c73cf00efba46122dfd0447485e2b61f1d6a2cd).
+ *
+ * MIT License
+ * Copyright (c) 2026 CopilotKit
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+ * associated documentation files (the "Software"), to deal in the Software without restriction,
+ * including without limitation the rights to use, copy, modify, merge, publish, distribute,
+ * sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions: The above copyright notice and this
+ * permission notice shall be included in all copies or substantial portions of the Software.
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
+ *
+ * Airlock modifications: the centred column, mark, heading and full-width outline controls are
+ * OpenBot's; the OAuth/SSO providers are replaced by Airlock's role password form (POST
+ * /api/session), a "continue as viewer" link and the current-role line; entrance motion is a CSS
+ * stagger instead of the motion library. No better-auth.
+ */
+import { IconShieldLock } from "@tabler/icons-react";
 import { useState, type FormEvent } from "react";
+import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
+import { Separator } from "../components/ui/separator";
 import { useSession } from "../hooks/session";
 import { describeError } from "../lib/api";
-import { navigate } from "../lib/router";
-import { Badge, ErrorBox, Section } from "../components/ui";
+import { hrefFor, navigate } from "../lib/router";
 
 const MAX_PASSWORD = 512;
+const ENTER = "animate-in fade-in-0 slide-in-from-bottom-2 duration-200 fill-mode-both motion-reduce:animate-none";
 
 export function LoginPage() {
   const session = useSession();
@@ -32,38 +55,62 @@ export function LoginPage() {
   };
 
   return (
-    <div className="page page-narrow">
-      <Section title="Sign in" aside={<Badge tone="neutral">current role: {session.role}</Badge>}>
-        <p className="muted">
-          The operator and judge passwords come from the control app environment. Without signing in you can read
-          every task as a viewer.
-        </p>
-        <form onSubmit={(e) => void submit(e)} className="form">
-          <label className="label" htmlFor="password">
-            Password
-          </label>
-          <input
-            id="password"
-            type="password"
-            autoComplete="current-password"
-            value={password}
-            maxLength={MAX_PASSWORD}
-            onChange={(e) => setPassword(e.target.value)}
-            disabled={busy}
-          />
-          <div className="btn-row">
-            <button type="submit" className="btn btn-primary" disabled={busy}>
-              {busy ? "Signing in…" : "Sign in"}
-            </button>
-            {session.role !== "viewer" ? (
-              <button type="button" className="btn" onClick={() => void session.logout()} disabled={busy}>
-                Sign out
-              </button>
-            ) : null}
+    <div className="flex h-dvh w-full flex-col items-center justify-center bg-background">
+      <div className="-mt-12 flex w-full max-w-82 flex-1 flex-col items-center justify-center p-4">
+        <div className={`flex items-center justify-center ${ENTER}`}>
+          <span className="flex size-14 items-center justify-center rounded-2xl bg-foreground text-background shadow-sm">
+            <IconShieldLock className="size-7" />
+          </span>
+        </div>
+        <h1 className={`mt-8 text-center text-2xl font-medium tracking-tight ${ENTER} delay-75`}>Sign in to Airlock</h1>
+        <div className={`mt-8 w-full ${ENTER} delay-150`}>
+          <form className="flex flex-col gap-2" onSubmit={(e) => void submit(e)}>
+            <Input
+              aria-label="Password"
+              type="password"
+              autoComplete="current-password"
+              autoFocus
+              placeholder="Operator or judge password"
+              className="h-10"
+              value={password}
+              maxLength={MAX_PASSWORD}
+              onChange={(e) => setPassword(e.target.value)}
+              disabled={busy}
+            />
+            <Button className="h-10 w-full tracking-tight" size="lg" type="submit" variant="outline" disabled={busy || password.length === 0}>
+              {busy ? "Signing in…" : "Continue"}
+            </Button>
+          </form>
+          {error ? (
+            <p className="mt-3 text-sm text-destructive" role="alert">
+              {error}
+            </p>
+          ) : null}
+          <div className="my-4 flex items-center gap-3">
+            <Separator className="flex-1" />
+            <span className="text-xs text-muted-foreground">or</span>
+            <Separator className="flex-1" />
           </div>
-        </form>
-        {error ? <ErrorBox message={error} /> : null}
-      </Section>
+          <Button className="h-10 w-full tracking-tight" size="lg" variant="ghost" render={<a href={hrefFor({ name: "home" })} />}>
+            Continue as viewer
+          </Button>
+          <p className="mt-6 text-center text-xs text-pretty text-muted-foreground">
+            Passwords come from the control app environment. Viewers can read every case; starting cases, hostile input and downloads
+            need the operator or judge role.
+          </p>
+          <p className="mt-2 text-center text-xs text-muted-foreground">
+            Current role: <span className="font-medium text-foreground">{session.loading ? "…" : session.role}</span>
+            {session.role !== "viewer" ? (
+              <>
+                {" · "}
+                <button type="button" className="underline underline-offset-4 hover:text-foreground" onClick={() => void session.logout()}>
+                  sign out
+                </button>
+              </>
+            ) : null}
+          </p>
+        </div>
+      </div>
     </div>
   );
 }
