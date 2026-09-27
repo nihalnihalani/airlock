@@ -60,6 +60,7 @@ const VARIANTS = {
 };
 
 // Measured under Kata on the VX1 host (guest 6.18.35): /dev/shm is a guest tmpfs without size=.
+VARIANTS.kataVx1Sized = null; // filled below from kataVx1 with Kata's measured shm size
 VARIANTS.kataVx1 = `73 46 0:35 / / ro,nodev,relatime master:22 - virtiofs none rw
 74 73 0:36 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw
 75 73 0:37 / /dev rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755
@@ -75,6 +76,8 @@ VARIANTS.kataVx1 = `73 46 0:35 / / ro,nodev,relatime master:22 - virtiofs none r
 86 73 0:33 /81f3e754-2e9eb70638428f8b-resolv.conf /etc/resolv.conf ro,relatime - virtiofs kataShared rw
 `;
 
+VARIANTS.kataVx1Sized = VARIANTS.kataVx1.replace("- tmpfs shm rw\n", "- tmpfs shm rw,size=984636k,nr_inodes=246159\n");
+
 function run(cmd, args) {
   const r = spawnSync(cmd, args, { encoding: "utf8", timeout: 30000 });
   const lines = r.stdout.trim().split("\n");
@@ -87,7 +90,9 @@ test("node probe.mjs classifies mounts identically to python probe.sh", () => {
     for (const [name, text] of Object.entries(VARIANTS)) {
       const file = join(dir, name);
       writeFileSync(file, text);
-      for (const [wb, shm, ...guest] of [["134217728", "67108864"], ["1048576", "1024"], ["134217728", "67108864", "--guest-vm"]]) {
+      const meminfo = join(dir, "meminfo");
+      writeFileSync(meminfo, "MemTotal:       1969272 kB\n");
+      for (const [wb, shm, ...guest] of [["134217728", "67108864"], ["1048576", "1024"], ["134217728", "67108864", "--guest-vm", "--meminfo", meminfo]]) {
         const args = ["--only-mounts", "--mountinfo", file, "--workspace-bytes", wb, "--shm-bytes", shm, ...guest];
         const py = run("bash", [PY_PROBE, ...args]);
         const js = run(process.execPath, [NODE_PROBE, ...args]);

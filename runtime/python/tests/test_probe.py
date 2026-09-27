@@ -197,8 +197,27 @@ def test_kata_vx1_guest_unsized_shm_needs_the_guest_vm_flag(runtime_dir: Path, t
     assert _mounts(runtime_dir, tmp_path, KATA_VX1_MOUNTINFO, "--guest-vm")["hostMounts"] == "BLOCKED"
 
 
+def _meminfo(tmp_path: Path, kib: int) -> str:
+    path = tmp_path / "meminfo"
+    path.write_text(f"MemTotal:       {kib} kB\nMemFree:        1000 kB\n")
+    return str(path)
+
+
+# With the supervisor's real limits (512 MiB, 64 PIDs) Kata sized the guest /dev/shm at 984636 KiB,
+# about half of the guest's RAM (measured on VX1). The bound there is the guest's MemTotal.
+def test_guest_vm_shm_sized_by_kata_within_guest_ram_is_blocked(runtime_dir: Path, tmp_path: Path):
+    sized = KATA_VX1_MOUNTINFO.replace("- tmpfs shm rw\n", "- tmpfs shm rw,size=984636k,nr_inodes=246159\n")
+    mem = _meminfo(tmp_path, 1969272)
+    assert _mounts(runtime_dir, tmp_path, sized, "--guest-vm", "--meminfo", mem)["hostMounts"] == "BLOCKED"
+    assert _mounts(runtime_dir, tmp_path, sized, "--meminfo", mem)["hostMounts"] == "REACHED"  # not a guest VM
+
+
 def test_guest_vm_flag_never_accepts_an_oversized_or_foreign_shm(runtime_dir: Path, tmp_path: Path):
+    mem = _meminfo(tmp_path, 1969272)
     big = KATA_VX1_MOUNTINFO.replace("- tmpfs shm rw\n", "- tmpfs shm rw,size=8388608k\n")
-    assert _mounts(runtime_dir, tmp_path, big, "--guest-vm")["hostMounts"] == "REACHED"
+    assert _mounts(runtime_dir, tmp_path, big, "--guest-vm", "--meminfo", mem)["hostMounts"] == "REACHED"
     bound = KATA_VX1_MOUNTINFO.replace("0:34 / /dev/shm", "0:34 /host/dir /dev/shm")
-    assert _mounts(runtime_dir, tmp_path, bound, "--guest-vm")["hostMounts"] == "REACHED"
+    assert _mounts(runtime_dir, tmp_path, bound, "--guest-vm", "--meminfo", mem)["hostMounts"] == "REACHED"
+    # An unreadable guest meminfo refuses a sized shm (fail closed).
+    sized = KATA_VX1_MOUNTINFO.replace("- tmpfs shm rw\n", "- tmpfs shm rw,size=984636k\n")
+    assert _mounts(runtime_dir, tmp_path, sized, "--guest-vm", "--meminfo", str(tmp_path / "missing"))["hostMounts"] == "REACHED"

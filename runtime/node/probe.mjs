@@ -18,7 +18,7 @@ import { connect } from "node:net";
 import { pathToFileURL } from "node:url";
 
 const argv = process.argv.slice(2);
-const ARGS = { workspaceBytes: 134217728, shmBytes: 67108864, mountinfo: "/proc/self/mountinfo", onlyMounts: false, guestVm: false };
+const ARGS = { workspaceBytes: 134217728, shmBytes: 67108864, mountinfo: "/proc/self/mountinfo", meminfo: "/proc/meminfo", onlyMounts: false, guestVm: false };
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   if (a === "--workspace-bytes" && i + 1 < argv.length) {
@@ -43,6 +43,7 @@ for (let i = 0; i < argv.length; i++) {
   // Set by the supervisor only when the inspected runtime boots a guest kernel (Kata): the guest's
   // /dev/shm is guest RAM, bounded by the VM's memory limit, and Kata mounts it without size=.
   else if (a === "--guest-vm") ARGS.guestVm = true;
+  else if (a === "--meminfo" && i + 1 < argv.length) ARGS.meminfo = argv[++i];
   // unknown arguments are ignored, like argparse.parse_known_args in probe.sh
 }
 
@@ -60,6 +61,17 @@ const PSEUDO_CHILDREN = {
   "/sys": ["sysfs", "cgroup", "cgroup2", "tmpfs"],
 };
 // Under /dev only these named mounts exist in a sandbox; /dev/shm is bounded by --shm-bytes.
+// The guest's MemTotal in bytes (meaningful only inside a VM guest); 0 when unreadable, which refuses.
+function guestMemBytes() {
+  try {
+    const text = readFileSync(ARGS.onlyMounts ? ARGS.meminfo : "/proc/meminfo", "utf8");
+    const m = /^MemTotal:\s+(\d+)\s+kB/m.exec(text);
+    return m ? Number(m[1]) * 1024 : 0;
+  } catch {
+    return 0;
+  }
+}
+
 const DEV_CHILDREN = { "/dev/pts": ["devpts"], "/dev/mqueue": ["mqueue"], "/dev/shm": ["tmpfs"] };
 const DEV_BYTES = 67108864;
 // Mount points that must be the ROOT of their filesystem (mountinfo root "/"): no subtree binds.
@@ -207,7 +219,7 @@ export function classifyMounts(lines, workspaceBytes) {
       else if (!DEV_CHILDREN[point].includes(fstype)) problems.push(`unexpected ${fstype} at ${what}`);
       else if (point === "/dev/shm") {
         const size = sizeBytes(superOpts);
-        if (size === null && ARGS.guestVm) { /* guest tmpfs inside the VM: bounded by its memory limit */ }
+        if (ARGS.guestVm && (size === null || size <= guestMemBytes())) { /* guest tmpfs inside the VM: bounded by the guest's own RAM */ }
         else if (size === null || size > ARGS.shmBytes) problems.push(`/dev/shm not bounded to ${ARGS.shmBytes} bytes: size=${pyStr(size)}`);
       }
     } else {

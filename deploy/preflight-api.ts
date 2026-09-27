@@ -66,7 +66,7 @@ check(typeof host?.runtimeImageId === "string" && host.runtimeImageId.startsWith
 const expected = host?.selectedRuntime as string;
 
 console.log("== author sandbox: create → inspect → probe → uname → destroy");
-const ref = { taskId: `preflight-${Date.now().toString(36)}`, attemptId: "a1", generation: 0 };
+const ref = { taskId: `preflight-${Date.now().toString(36)}`, attemptId: `a${Date.now().toString(36)}`, generation: 0 };
 const deadline = new Date(Date.now() + 120_000).toISOString();
 const created = await call("POST", "/attempts", { ref, profileId: "tabulate-365", role: "author", absoluteDeadline: deadline });
 check(created.status === 200 || created.status === 201, `POST /attempts → ${created.status}${created.status >= 300 ? " " + created.text.slice(0, 300) : ""}`);

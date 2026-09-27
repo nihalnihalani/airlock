@@ -41,6 +41,8 @@ parser.add_argument("--shm-bytes", type=int, default=67108864)
 # and Kata mounts it without a size option. Measured on VX1 (guest 6.18.35): "tmpfs shm rw", no size.
 parser.add_argument("--guest-vm", action="store_true")
 parser.add_argument("--mountinfo", default="/proc/self/mountinfo")
+# Test-only (honoured with --only-mounts, which can never pass): the guest meminfo to read.
+parser.add_argument("--meminfo", default="/proc/meminfo")
 parser.add_argument("--only-mounts", action="store_true")
 ARGS, _unknown = parser.parse_known_args(sys.argv[1:])
 
@@ -157,6 +159,19 @@ def _unescape(field):
     return field
 
 
+def _guest_mem_bytes():
+    """The guest's MemTotal (only meaningful inside a VM guest); 0 when unreadable, which refuses."""
+    try:
+        path = ARGS.meminfo if ARGS.only_mounts else "/proc/meminfo"
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if line.startswith("MemTotal:"):
+                    return int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return 0
+
+
 def _size_bytes(super_opts):
     for opt in super_opts.split(","):
         if opt.startswith("size="):
@@ -240,8 +255,8 @@ def classify_mounts(lines, workspace_bytes):
                 problems.append("unexpected %s at %s" % (fstype, what))
             elif point == "/dev/shm":
                 size = _size_bytes(super_opts)
-                if size is None and ARGS.guest_vm:
-                    pass  # guest tmpfs inside the VM: bounded by the VM's memory limit, not by size=
+                if ARGS.guest_vm and (size is None or size <= _guest_mem_bytes()):
+                    pass  # guest tmpfs inside the VM: bounded by the guest's own RAM (Kata sizes it to ~half)
                 elif size is None or size > ARGS.shm_bytes:
                     problems.append("/dev/shm not bounded to %d bytes: size=%s" % (ARGS.shm_bytes, size))
         else:
