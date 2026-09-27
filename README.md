@@ -19,7 +19,7 @@
 ![Hono](https://img.shields.io/badge/Hono-API-E36002?style=flat-square&logo=hono&logoColor=white)
 ![React](https://img.shields.io/badge/React-Vite-61DAFB?style=flat-square&logo=react&logoColor=black)
 ![Python](https://img.shields.io/badge/Python-3.12%20runtime-3776AB?style=flat-square&logo=python&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-186%20control%20%C2%B7%2064%20supervisor%20%C2%B7%2045%20web%20%C2%B7%2071%20runtime-16a34a?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-384%20control%20%C2%B7%20207%20supervisor%20%C2%B7%20126%20web%20%C2%B7%20135%20runtime%20%C2%B7%20114%20other-16a34a?style=flat-square)
 
 <br />
 <br />
@@ -30,7 +30,7 @@
 
 </div>
 
-Airlock takes an untrusted bug report for a supported library, reproduces the failure in a disposable sandbox on Vultr, attempts a minimal repair, and returns a patch with **externally measured** before/after behavior. The agent can edit the candidate; it can never edit the acceptance contract, grant itself privileges, publish its work, or decide that it passed. The result of a run is one of six terminal outcomes; "Passed these checks" means exactly that the frozen contract cases passed on a sealed candidate, measured by a comparator that never imports the candidate.
+Airlock is a web agent that does real work in disposable sandboxes on Vultr. It has two task kinds. **General tasks** run a goal under a controller-selected profile (`analysis`, `web-research`, `web-analysis`) with real headless Chromium behind a per-task egress proxy, offline Python and Node sandboxes, owner uploads, screenshots, human takeover, and approvals for supported form submissions only; the controller's completion checks, never the model, decide the result. **Repair** takes an untrusted bug report for a supported library, reproduces the failure in a disposable sandbox on Vultr, attempts a minimal repair, and returns a patch with **externally measured** before/after behavior. The agent can edit the candidate; it can never edit the acceptance contract, grant itself privileges, publish its work, or decide that it passed. The result of a run is one of six terminal outcomes; "Passed these checks" means exactly that the frozen contract cases passed on a sealed candidate, measured by a comparator that never imports the candidate.
 
 ## Hackathon fit
 
@@ -46,7 +46,14 @@ Built at **The Agent Arena Hackathon** (Vultr, NetBird, Cerebral Valley; San Fra
 
 ## Status
 
-- **Deployed on Vultr, `atl`:** control plane on `vhp-2c-4gb-amd` (VM A) behind Caddy TLS at **https://144-202-21-168.sslip.io**; supervisor on a **VX1** `vx1-g-4c-16g-240s` (VM B), bound to its VPC address only, with **Kata Containers** as the sandbox runtime (gVisor `runsc` installed as the floor). About $0.19/hour for both. Details, scripts and teardown: [`deploy/README.md`](deploy/README.md).
+**This branch (`fix/milestone-1-guarantees`) is not yet deployed.** It closes the gap audit ([research/42](research/42-AIRLOCK-GAP-AUDIT.md)) and adds doc 40's browser and general execution (stages 0–5); the per-finding ledger is [docs/implementation-status.md](docs/implementation-status.md) and the independent requirement-to-evidence matrix is [docs/acceptance-matrix.md](docs/acceptance-matrix.md).
+
+- **Verified locally on real Docker** (Colima, plain `runc`, labelled dev-unsafe; scripted diagnostic drivers, no live model): an independent acceptance run passed 20/20 local rows — fresh-CSV analysis whose outputs match their sha256 and change with the input, Chromium research with a real screenshot, repair pass and forged-log failure with byte-identical sealed exports, cross-owner isolation, cancel-after-teardown, takeover, stale-reference refusal, approval refusals (wrong digest, replay, expiry), hostile commands with a responsive control plane and no secrets in any sandbox, egress refusals, restart honesty and an empty host afterwards. Browser containment was also exercised against real public sites (allowed navigation, blocked hosts/metadata/private addresses, blocked form POSTs, bounded downloads).
+- **Blocked on Vultr access** (not claimed): Kata/gVisor measurements for the new browser and code roles, the durable per-attempt storage decision (D1), the host egress firewall on VX1, a fresh live-repair gate receipt (repair stays disabled in production until one is committed), the vision round trip, live-model general tasks, and the demo recording.
+
+The earlier deployment of `main` (before this branch) is described below; its measurements apply to that revision only.
+
+- **Deployed on Vultr, `atl` (main, before this branch):** control plane on `vhp-2c-4gb-amd` (VM A) behind Caddy TLS at **https://144-202-21-168.sslip.io**; supervisor on a **VX1** `vx1-g-4c-16g-240s` (VM B), bound to its VPC address only, with **Kata Containers** as the sandbox runtime (gVisor `runsc` installed as the floor). About $0.19/hour for both. Details, scripts and teardown: [`deploy/README.md`](deploy/README.md).
 - **Isolation, measured on VM B** (`deploy/preflight.sh`): `/dev/kvm` present; every sandbox runs a **guest kernel `6.18.35` under Kata** while the host runs `6.8.0-139-generic`; the supervisor's inspection records `runtime=kata`, `devUnsafe=false`; the isolation probe reports metadata, DNS, outbound TCP, Docker socket and host mounts all **BLOCKED**; `169.254.169.254` is unreachable from inside a sandbox; teardown `(no sandboxes)`. Port 4300 is not reachable from the internet.
 - **Smoke against the deployment:** diagnostic repair `CANDIDATE_PASSED_CHECKS`, forged "tests passed" log `CHECKS_FAILED`, a task cancelled mid-command `cancelled` with nothing left running, and a fork bomb absorbed by its Kata sandbox while another task kept running.
 - **Live repair against the deployment:** [python-tabulate #365](https://github.com/astanin/python-tabulate/issues/365) repaired by `glm-5.3` on Vultr Serverless Inference in **3 of 3 fresh runs**, each judged by the external comparator (12–15 model calls, 41–63 s per run). Locally on dev-unsafe `runc` it was also 3 of 3. All patches fix the root cause (use the header count when the table is empty). The gate is `bun scripts/live-gate.ts --n 3`. This is one known historical bug, not a general repair-success rate.
@@ -277,7 +284,9 @@ It does not mean the patch is safe, certified, correct in general, or free of ot
 
 ## Testing
 
-Four suites plus the smoke. Each was run for the results below on the same laptop as the quick start.
+Current counts on this branch (Colima for the real-Docker tests): control 384, supervisor 207 (all real-Docker integration tests ran), web 126, egress 35, fixtures 41, scripts 11, browser runner 27, Node probe parity 2, Python runtime and output collector 135 (+2 skipped on macOS). `bun run test` runs the owned Bun suites (it lists paths so upstream reference trees are not collected); `bun run test:python` and `bun run test:browser` run the others. The independent acceptance driver is `bun scripts/acceptance/local.ts` against a running `scripts/dev-up.sh` stack.
+
+The original four suites plus the smoke:
 
 ```sh
 # supervisor: unit tests with a fake Docker plus one real-docker integration test (skipped without Docker/image)
