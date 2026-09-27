@@ -146,6 +146,10 @@ describe("routes and roles", () => {
       expect(((await bad.json()) as { error: string }).error).toContain("invalid body");
       const unsupported = await ctx.app.request("/api/tasks", json({ profileId: "nope", issueText: "x" }, op));
       expect(unsupported.status).toBe(422);
+      // scriptedDriver is a diagnostics-only field: refused when no scripted catalog is configured.
+      const scripted = await ctx.app.request("/api/tasks", json({ profileId: "fx-1", issueText: "x", scriptedDriver: "diagnostic" }, op));
+      expect(scripted.status).toBe(422);
+      expect(((await scripted.json()) as { error: string }).error).toContain("scripted");
       const notJson = await ctx.app.request("/api/tasks", { method: "POST", headers: { "content-type": "application/json", cookie: op }, body: "{oops" });
       expect(notJson.status).toBe(400);
       expect((await ctx.app.request("/api/tasks/nope")).status).toBe(404);

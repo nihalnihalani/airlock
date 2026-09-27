@@ -3,28 +3,21 @@
  * client → model driver → repair handler → worker → HTTP API. Refuses to start on missing secrets
  * or an unreachable supervisor configuration; never logs secrets.
  */
-import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { z } from "zod";
+import type { Task } from "@airlock/contracts";
 import { createApp } from "./api.ts";
 import { ArtifactStore, buildManifest, exportBundle, validateEnvelope, zipFiles } from "./artifacts/index.ts";
 import { loadConfig, redactConfig, ConfigError } from "./config.ts";
 import { TaskEventBus } from "./events.ts";
 import { loadProfilesReport } from "./profiles.ts";
-import { createRepairHandler, type ModelDriver } from "./repair-handler.ts";
+import { createRepairHandler, type DriverSource } from "./repair-handler.ts";
+import { openScriptedCatalog } from "./scripted.ts";
 import { SessionService } from "./sessions.ts";
 import { createStore } from "./store/index.ts";
 import { HttpSupervisorClient } from "./supervisor-client.ts";
 import { compare } from "./verifier/index.ts";
 import { createScriptedDriver, createVultrDriver } from "./vultr-client.ts";
 import { TaskWorker, backgroundFailure } from "./worker/index.ts";
-
-const ScriptedTurnSchema = z.array(
-  z.object({
-    toolCalls: z.array(z.object({ name: z.string().max(64), args: z.unknown() })).max(16).optional(),
-    text: z.string().max(65536).optional(),
-  }),
-).max(500);
 
 async function main() {
   let config;
@@ -58,17 +51,20 @@ async function main() {
     console.warn({ timestamp: new Date().toISOString(), message: "supervisor not reachable at start; tasks will fail until it is", error: error instanceof Error ? error.message.slice(0, 200) : "unknown" });
   }
 
-  let driver: ModelDriver;
+  // One driver per task run: the scripted driver replays from its first turn for every task, and
+  // a task may name its script when the catalog is a directory. The live driver is stateless.
+  let driver: DriverSource;
+  let scriptedDrivers: string[] | null = null;
   if (config.driver.kind === "vultr") {
     driver = createVultrDriver({ apiKey: config.vultr.apiKey ?? "", baseUrl: config.vultr.baseUrl, model: config.vultr.model });
   } else {
-    const raw = JSON.parse(await readFile(config.driver.scriptPath, "utf8"));
-    const turns = ScriptedTurnSchema.parse(raw).map((t) => ({
-      ...(t.text !== undefined ? { text: t.text } : {}),
-      ...(t.toolCalls ? { toolCalls: t.toolCalls.map((c) => ({ name: c.name, args: c.args ?? null })) } : {}),
-    }));
-    driver = createScriptedDriver(turns);
-    console.warn(`model driver is SCRIPTED from ${config.driver.scriptPath}: diagnostics only, not a live repair`);
+    const catalog = await openScriptedCatalog(config.driver.scriptPath);
+    scriptedDrivers = catalog.names;
+    driver = async (task: Task) => {
+      const script = await catalog.load(task.scriptedDriver);
+      return createScriptedDriver(script.turns, { name: script.name });
+    };
+    console.warn(`model driver is SCRIPTED from ${config.driver.scriptPath} (${catalog.names.join(", ")}): diagnostics only, not a live repair`);
   }
 
   const bus = new TaskEventBus();
@@ -102,6 +98,7 @@ async function main() {
     zipFiles,
     exportGrantTtlMs: config.exportGrantTtlMs,
     hostileMinIntervalMs: config.hostileMinIntervalMs,
+    scriptedDrivers,
   });
 
   worker.start();

@@ -521,6 +521,11 @@ export const Task = z.object({
   phase: Phase,
   outcome: Outcome.optional(),
   error: z.string().optional(),
+  /**
+   * Diagnostics only: which scripted model script drives this task when the control plane runs
+   * with `AIRLOCK_MODEL_DRIVER=scripted:<directory>`. Never set on a live (vultr) run.
+   */
+  scriptedDriver: plainId.optional(),
   /** Current attempt identity; a newer attempt never inherits an older one's workspace. */
   attemptId: plainId.optional(),
   generation: z.number().int().nonnegative(),
@@ -598,6 +603,11 @@ export const Session = z.object({
 export const CreateTaskRequest = z.object({
   profileId: plainId,
   issueText: z.string().min(1).max(20000),
+  /**
+   * Diagnostics only: name of a script in the scripted-driver directory. Rejected (422) unless the
+   * control plane runs with `AIRLOCK_MODEL_DRIVER=scripted:<directory>` and the script exists.
+   */
+  scriptedDriver: plainId.optional(),
 });
 
 export const PreviewRequest = z.object({

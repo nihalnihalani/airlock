@@ -69,6 +69,8 @@ export interface ApiDeps {
   zipFiles: ZipFilesFn;
   exportGrantTtlMs: number;
   hostileMinIntervalMs: number;
+  /** Names a task may select with `scriptedDriver`; null (default) when the live driver is configured. */
+  scriptedDrivers?: string[] | null;
   now?: () => number;
   /** SSE poll interval (ms) as a safety net behind the bus. */
   ssePollMs?: number;
@@ -172,12 +174,17 @@ export function createApp(deps: ApiDeps) {
     const session = requireRole(c, "operator", "judge");
     const body = await readJson(c, CreateTaskRequest);
     if (!deps.profiles.has(body.profileId)) throw new AppError(`profile "${body.profileId}" is not supported`, 422);
+    if (body.scriptedDriver !== undefined) {
+      if (!deps.scriptedDrivers) throw new AppError("scriptedDriver is only accepted when the control plane runs a scripted model driver", 422);
+      if (!deps.scriptedDrivers.includes(body.scriptedDriver)) throw new AppError(`scripted driver "${body.scriptedDriver}" is not available; available: ${deps.scriptedDrivers.join(", ")}`, 422);
+    }
     const at = iso();
     const task: Task = {
       id: `task-${randomBytes(8).toString("hex")}`,
       owner: session.owner,
       profileId: body.profileId,
       issueText: body.issueText,
+      ...(body.scriptedDriver !== undefined ? { scriptedDriver: body.scriptedDriver } : {}),
       status: "queued",
       phase: "prepare",
       generation: 0,

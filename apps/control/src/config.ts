@@ -5,6 +5,7 @@
 import { existsSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 
+/** `scriptPath` is one script file or a directory of `<name>.json` scripts (see scripted.ts). */
 export type DriverMode = { kind: "vultr" } | { kind: "scripted"; scriptPath: string };
 
 export interface Config {
@@ -61,7 +62,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   if (driverRaw === "vultr") driver = { kind: "vultr" };
   else if (driverRaw.startsWith("scripted:")) {
     const scriptPath = resolve(driverRaw.slice("scripted:".length));
-    if (!existsSync(scriptPath) || !statSync(scriptPath).isFile()) throw new ConfigError(`AIRLOCK_MODEL_DRIVER script not found: ${scriptPath}`);
+    if (!existsSync(scriptPath) || !(statSync(scriptPath).isFile() || statSync(scriptPath).isDirectory()))
+      throw new ConfigError(`AIRLOCK_MODEL_DRIVER script file or directory not found: ${scriptPath}`);
     driver = { kind: "scripted", scriptPath };
   } else throw new ConfigError('AIRLOCK_MODEL_DRIVER must be "vultr" or "scripted:<path>"');
 

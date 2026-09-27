@@ -367,7 +367,7 @@ export function createVultrDriver(opts: VultrDriverOptions): ModelDriver {
 }
 
 /** Replays scripted turns in order; once exhausted, returns an empty text turn forever. */
-export function createScriptedDriver(script: ScriptedTurn[]): ModelDriver {
+export function createScriptedDriver(script: ScriptedTurn[], _options: { name?: string } = {}): ModelDriver {
   const turns = [...script];
   let cursor = 0;
   let counter = 0;

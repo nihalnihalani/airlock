@@ -78,10 +78,13 @@ export interface ArtifactStoreLike {
   getJson<T>(kind: string, id: string): Promise<T | null>;
 }
 
+/** A driver instance, or a factory called once per task run (scripted drivers are stateful). */
+export type DriverSource = ModelDriver | ((task: Task) => ModelDriver | Promise<ModelDriver>);
+
 export interface RepairDeps {
   profiles: Map<string, LoadedProfile>;
   supervisor: SupervisorClient;
-  driver: ModelDriver;
+  driver: DriverSource;
   artifacts: ArtifactStoreLike;
   store: Store;
   compare: CompareFn;
@@ -404,6 +407,7 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
       }
 
       async function modelLoop(attemptRef: AttemptRef, deadlineMs: number): Promise<{ end: "submitted" | "budget" | "deadline" | "unresolved"; reason: string }> {
+        const driver: ModelDriver = typeof deps.driver === "function" ? await deps.driver(task) : deps.driver;
         const reported = contract.cases.find((c) => c.kind === "reported");
         const system = systemPrompt(manifest);
         const messages: ChatMessage[] = [{ role: "user", content: taskMessage(task.issueText, reported) }];
@@ -417,7 +421,7 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
           await checkpoint({ budget: { ...task.budget, modelCallsUsed: task.budget.modelCallsUsed + 1 } });
           let turn: Awaited<ReturnType<ModelDriver["chat"]>>;
           try {
-            turn = await deps.driver.chat({ system, messages, tools: MODEL_TOOLS, signal: ctx.signal, ...(deps.maxTokens ? { maxTokens: deps.maxTokens } : {}) });
+            turn = await driver.chat({ system, messages, tools: MODEL_TOOLS, signal: ctx.signal, ...(deps.maxTokens ? { maxTokens: deps.maxTokens } : {}) });
             driverErrors = 0;
           } catch (error) {
             if (ctx.signal.aborted) throw new LostLeaseError();

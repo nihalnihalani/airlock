@@ -1,0 +1,45 @@
+{
+  "_comment": "DIAGNOSTIC fixture (CLAUDE.md section 4, vertical slice): a scripted model driver that reads the source, reproduces the failure with a run, writes the hand-written, labelled diagnostic candidate from ../diagnostic-candidate-tabulate-365 and submits. Not a live repair; every model event is labelled scripted.",
+  "turns": [
+    {
+      "text": "Reading the file named in the report to locate the failing line.",
+      "toolCalls": [{ "name": "read_file", "args": { "path": "tabulate/__init__.py" } }]
+    },
+    {
+      "text": "Reproducing the reported call before changing anything.",
+      "toolCalls": [
+        {
+          "name": "run",
+          "args": { "command": "python -c \"import tabulate; print(tabulate.tabulate([], headers=['a', 'b'], maxheadercolwidths=5))\"" }
+        }
+      ]
+    },
+    {
+      "text": "Applying the diagnostic candidate: an empty table has no first row to measure, so fall back to the header count.",
+      "toolCalls": [
+        {
+          "name": "write_file",
+          "args": { "path": "tabulate/__init__.py", "contentFile": "../diagnostic-candidate-tabulate-365/tabulate/__init__.py" }
+        }
+      ]
+    },
+    {
+      "text": "Checking the reported call again on the edited tree (advisory only; verification is external).",
+      "toolCalls": [
+        {
+          "name": "run",
+          "args": { "command": "python -c \"import tabulate; print(tabulate.tabulate([], headers=['a', 'b'], maxheadercolwidths=5))\"" }
+        }
+      ]
+    },
+    {
+      "text": "Submitting the candidate for external verification.",
+      "toolCalls": [
+        {
+          "name": "submit_candidate",
+          "args": { "summary": "Diagnostic candidate: guard num_cols for an empty list_of_lists by falling back to len(headers)." }
+        }
+      ]
+    }
+  ]
+}
