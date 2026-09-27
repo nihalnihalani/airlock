@@ -22,6 +22,9 @@
  * `Task.control` is the durable record of the state for the UI; this service writes it with a
  * field-level update (the worker's checkpoints never touch `control`). The in-memory channel is
  * the gate. A control plane restart ends the run; the next run starts with the agent in control.
+ * A stored non-agent holder that no channel of this process holds is from a previous process: it
+ * is reset to the agent at start (`recoverAtStart`) and on read (`reconcileStored`), so the API
+ * never reports a human holder the current process does not know about (C41 O1).
  */
 import { randomBytes } from "node:crypto";
 import type { BrowserAnyOp, BrowserOpResult, ControlState, Task } from "@airlock/contracts";
@@ -40,6 +43,9 @@ export interface BrowserExecutor {
   exec(request: BrowserAnyOp, opts: { actor: Actor; tool: string; create: boolean; humanOwner?: string; humanRole?: string }): Promise<BrowserExecOutcome>;
   hasLiveBrowser(): boolean;
 }
+
+/** The reason recorded when a stale holder from a previous control-plane process is reset. */
+export const RESTART_CONTROL_REASON = "control plane restarted; control returned to the agent";
 
 export class ControlError extends Error {
   constructor(
@@ -130,6 +136,34 @@ export class ControlService {
       }
       this.wake(ch);
     };
+  }
+
+  /**
+   * C41 O1: a stored holder other than the agent that no live channel of this process holds was
+   * written by a previous control-plane process (channels are in memory only; a detach in this
+   * process already resets it). Reset it to the agent with an event. The swap is conditioned on the
+   * stored holder and `since`, so a take that started in this process after the read is never
+   * clobbered. Returns the task as it is now stored.
+   */
+  async reconcileStored(owner: string, task: Task): Promise<Task> {
+    const stale = task.control;
+    if (!stale || stale.holder === "agent" || this.channels.has(task.id)) return task;
+    const control: ControlState = { holder: "agent", since: this.iso(), reason: RESTART_CONTROL_REASON };
+    const updated = await this.options.store.compareAndSwap<Task>(owner, "tasks", task.id, { id: task.id, control: { holder: stale.holder, since: stale.since } }, { control, updatedAt: this.iso() });
+    if (!updated) return (await this.options.store.get<Task>(owner, "tasks", task.id)) ?? task;
+    await this.recordEvent(owner, task.id, "Control returned to the agent", `${RESTART_CONTROL_REASON} (the previous holder, ${stale.holder}${stale.humanOwner ? ` ${stale.humanOwner}` : ""}, belonged to a control-plane process that no longer runs); the agent must observe the page before any ref-bound action`, { control, previous: { holder: stale.holder, since: stale.since } });
+    return updated;
+  }
+
+  /** C41 O1: at control-plane start, reset every stored non-agent holder (none is live yet). */
+  async recoverAtStart(): Promise<number> {
+    let reset = 0;
+    for (const { owner, value } of await this.options.store.scan<Task>("tasks")) {
+      if (!value.control || value.control.holder === "agent") continue;
+      const after = await this.reconcileStored(owner, value);
+      if (after.control?.reason === RESTART_CONTROL_REASON && after.control.holder === "agent") reset += 1;
+    }
+    return reset;
   }
 
   isAttached(taskId: string): boolean {
@@ -381,11 +415,15 @@ export class ControlService {
   }
 
   private async event(ch: Channel, title: string, detail: string, data: Record<string, unknown>) {
+    await this.recordEvent(ch.owner, ch.taskId, title, detail, data);
+  }
+
+  private async recordEvent(owner: string, taskId: string, title: string, detail: string, data: Record<string, unknown>) {
     try {
-      const event = await this.options.store.appendEvent(ch.owner, ch.taskId, { id: `evt-${randomBytes(8).toString("hex")}`, at: this.iso(), kind: "lifecycle", title, detail, data });
+      const event = await this.options.store.appendEvent(owner, taskId, { id: `evt-${randomBytes(8).toString("hex")}`, at: this.iso(), kind: "lifecycle", title, detail, data });
       this.options.bus?.publish(event);
     } catch (error) {
-      log.warn("control event not recorded", { taskId: ch.taskId, error });
+      log.warn("control event not recorded", { taskId, error });
     }
   }
 }

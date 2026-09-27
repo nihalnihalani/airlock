@@ -53,14 +53,14 @@ import { ControlService, type Actor, type BrowserExecOutcome } from "./browser-c
 import { APPROVAL_FIELD, adapterPath, approvalCodeFor, formPayloadDigest, normalizeFields, readReceipt, resolveFormUrl, type FormsConfig, type ReceiptRead } from "./forms-adapter.ts";
 import { PROPOSAL_TTL_MS, STORE_KIND_PROPOSALS, settleOpenProposals, transitionProposal, type ProposalEmit } from "./proposals.ts";
 import { decodeBase64Strict } from "./artifacts/index.ts";
-import { runCompletionChecks, type CollectedOutput } from "./completion-checks.ts";
+import { documentKey, runCompletionChecks, type CollectedOutput } from "./completion-checks.ts";
 import { GENERAL_TOOL_ARGS, CODE_FILE_EXTENSIONS, DOWNLOAD_NAME, generalSystemPrompt, generalTaskMessage, isGeneralToolName, toolSpecsFor } from "./general-tools.ts";
 import { STORE_KIND_OPERATIONS, createJournal, teardownAttempt, type Journal, type OperationRecord, type TeardownOutcome } from "./journal.ts";
 import { log } from "./log.ts";
 import { inspectPng } from "./png.ts";
 import type { ArtifactStoreLike } from "./repair-handler.ts";
 import type { Store } from "./store/index.ts";
-import { SupervisorError, SupervisorFenceError, SupervisorNotFoundError, type CallOptions, type SupervisorClient } from "./supervisor-client.ts";
+import { SupervisorError, SupervisorFenceError, SupervisorNotFoundError, supervisorOperationStatus, type CallOptions, type SupervisorClient } from "./supervisor-client.ts";
 import { TASK_PROFILES, hostAllowed, normalizeUrl, urlHost, type GeneralToolName, type TaskProfile } from "./task-profiles.ts";
 import { DEFAULT_MAX_TOKENS, type ChatMessage, type FinishReason, type ModelDriver } from "./vultr-client.ts";
 import { LostLeaseError, TeardownIncompleteError, type TaskContext, type TaskHandler } from "./worker/index.ts";
@@ -1631,10 +1631,10 @@ export function createGeneralHandler(deps: GeneralDeps): TaskHandler {
       const taskArtifacts = await deps.artifacts.listForTask(owner, task);
       // Evidence is the agent's own screenshots; live-view frames and a human holder's screenshots are kept but do not count.
       const screenshots = taskArtifacts.filter((a) => a.kind === "screenshot" && a.source?.tool !== "live_view" && a.source?.tool !== "human_screenshot");
-      const checks = runCompletionChecks({ profile, claimed, collected, ...(collectionProblem ? { collectionProblem } : {}), screenshots: screenshots.length, sources: submit.sources, visited, egressAllow });
+      const checks = runCompletionChecks({ profile, claimed, collected, ...(collectionProblem ? { collectionProblem } : {}), screenshots: screenshots.map((a) => ({ url: a.source?.url ?? null })), sources: submit.sources, visited, egressAllow });
       const sources = [...new Set(submit.sources)].slice(0, 50).map((url) => {
-        const n = normalizeUrl(url);
-        const shot = [...screenshots].reverse().find((s) => s.source?.url && normalizeUrl(s.source.url) === n);
+        const n = documentKey(url);
+        const shot = n ? [...screenshots].reverse().find((s) => s.source?.url && documentKey(s.source.url) === n) : undefined;
         return { url: url.slice(0, 2048), ...(shot ? { screenshotArtifactId: shot.id } : {}) };
       });
       let outcome: Outcome;
@@ -1730,6 +1730,7 @@ export function createGeneralHandler(deps: GeneralDeps): TaskHandler {
         (r) => r.owner === owner && (r.value.state === "intent" || r.value.state === "unknown") && !r.value.reconciledAt,
       );
       const found: string[] = [];
+      const supervisorStatuses: { operationId: string; kind: string; supervisor: string }[] = [];
       for (const { value: op } of outstanding.slice(0, 500)) {
         let reconciliation = "not replayed";
         if (op.attemptId && !known.has(op.attemptId)) {
@@ -1744,10 +1745,14 @@ export function createGeneralHandler(deps: GeneralDeps): TaskHandler {
             reconciliation = error instanceof SupervisorNotFoundError ? `attempt ${op.attemptId} is unknown to the supervisor` : `could not read attempt ${op.attemptId}: ${errorMessage(error).slice(0, 200)}`;
           }
         }
-        await deps.store.put(owner, STORE_KIND_OPERATIONS, { ...op, state: "unknown", reconciledAt: iso(), reconciliation });
-        found.push(`${op.kind} ${op.operationId} (${op.state}): ${reconciliation}`);
+        // C41 O2: the supervisor's own record of the operation. Never replayed either way; the old
+        // sandbox is discarded, so a completed result is not recorded.
+        const sup = await supervisorOperationStatus(deps.supervisor, op.operationId, ctx.signal);
+        await deps.store.put(owner, STORE_KIND_OPERATIONS, { ...op, state: "unknown", reconciledAt: iso(), reconciliation, supervisorStatus: sup.status, supervisorRecord: sup.text });
+        found.push(`${op.kind} ${op.operationId} (${op.state}): ${reconciliation}; ${sup.text}`);
+        supervisorStatuses.push({ operationId: op.operationId, kind: op.kind, supervisor: sup.status });
       }
-      if (found.length > 0) await ctx.event("lifecycle", "Reconciled outstanding supervisor operations", found.join("\n").slice(0, DETAIL_CAP), { operations: found.length });
+      if (found.length > 0) await ctx.event("lifecycle", "Reconciled outstanding supervisor operations", found.join("\n").slice(0, DETAIL_CAP), { operations: found.length, supervisor: supervisorStatuses.slice(0, 100) });
     }
   }
 }

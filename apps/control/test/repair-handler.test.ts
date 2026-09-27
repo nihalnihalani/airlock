@@ -1585,6 +1585,31 @@ describe("M8 reconciliation pages through every outstanding row", () => {
   });
 });
 
+describe("C41 O2: repair recovery reads the supervisor's operation record", () => {
+  test("a completed invoke is reported as completed at the supervisor (result discarded), an unknown one as no record; neither is replayed", async () => {
+    const at = new Date().toISOString();
+    const s = await runWith(scriptedDriverDouble(repairScript(FX_FIXED_SOURCE)), {
+      task: { phase: "verify", budget: { modelCallsUsed: 1, repairAttemptsUsed: 1 } },
+      before: async (sup, h) => {
+        for (const id of ["op-inv-done", "op-inv-none"])
+          await h.store.put(OWNER, STORE_KIND_OPERATIONS, { id, operationId: id, requestDigest: "d".repeat(64), kind: "invoke", taskId: "task-1", state: "intent", createdAt: at } satisfies OperationRecord);
+        sup.operationRecords.set("op-inv-done", { operationId: "op-inv-done", kind: "invoke", state: "completed", httpStatus: 200, resultRecorded: true, interruptedByRestart: false, taskId: "task-1", attemptId: null, generation: null, createdAt: at, updatedAt: at });
+      },
+    });
+    try {
+      const rows = new Map((await s.h.store.list<OperationRecord>(OWNER, STORE_KIND_OPERATIONS)).map((r) => [r.id, r]));
+      expect(rows.get("op-inv-done")).toMatchObject({ state: "unknown", reconciliation: INVOKE_RECONCILIATION, supervisorStatus: "completed" });
+      expect(rows.get("op-inv-none")).toMatchObject({ state: "unknown", supervisorStatus: "no-record", supervisorRecord: "supervisor has no record" });
+      const event = s.events.find((e) => e.title === "Reconciled outstanding supervisor operations")!;
+      expect(event.detail).toContain("op-inv-done (intent): not replayed; one-shot sandboxes are bounded by their own deadline; supervisor: completed (HTTP 200); result discarded, not replayed");
+      expect(event.detail).toContain("op-inv-none (intent): not replayed; one-shot sandboxes are bounded by their own deadline; supervisor has no record");
+      expect(s.supervisor.operations.some((o) => o.operationId.startsWith("op-inv-"))).toBe(false);
+    } finally {
+      await s.close();
+    }
+  });
+});
+
 describe("D4/D11 production refuses dev-unsafe measurements", () => {
   test("a dev-unsafe supervisor starts no sandbox in production: INCONCLUSIVE", async () => {
     const driver = scriptedDriverDouble(repairScript(FX_FIXED_SOURCE));

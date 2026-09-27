@@ -117,6 +117,51 @@ export interface SupervisorClient {
   egressLog(attemptId: string, signal?: AbortSignal): Promise<EgressLog>;
   /** Stop an analysis/node sandbox and collect `outputs/` read-only (`POST /attempts/:id/collect-outputs`). */
   collectOutputs(input: { ref: AttemptRef }, opts?: CallOptions): Promise<CollectOutputsResult>;
+  /**
+   * The supervisor journal's record of one operation (`GET /operations/:id`, M8): kind, state,
+   * recorded HTTP status, whether a result is recorded, whether a restart cut it off, and its
+   * binding. Never the result body. 404 (SupervisorNotFoundError): the supervisor has no record.
+   */
+  getOperation(operationId: string, signal?: AbortSignal): Promise<SupervisorOperationRecord>;
+}
+
+/** `GET /operations/:id` (apps/supervisor/src/operations.ts `OperationRecord`). */
+export const SupervisorOperationRecord = z.object({
+  operationId: z.string(),
+  kind: z.string(),
+  state: z.enum(["pending", "completed"]),
+  httpStatus: z.number().int().nullable(),
+  resultRecorded: z.boolean(),
+  interruptedByRestart: z.boolean(),
+  taskId: z.string().nullable(),
+  attemptId: z.string().nullable(),
+  generation: z.number().int().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type SupervisorOperationRecord = z.infer<typeof SupervisorOperationRecord>;
+
+/**
+ * C41 O2: what the supervisor's journal says about an operation the controller journaled but never
+ * saw acknowledged. Advisory only: the controller never replays it and never records its result
+ * (the sandbox it ran in is discarded). Returns the phrase recorded in the recovery event.
+ */
+export async function supervisorOperationStatus(
+  supervisor: Pick<SupervisorClient, "getOperation">,
+  operationId: string,
+  signal?: AbortSignal,
+): Promise<{ status: "completed" | "interrupted" | "pending" | "no-record" | "unknown"; text: string; record?: SupervisorOperationRecord }> {
+  try {
+    const record = await supervisor.getOperation(operationId, signal);
+    if (record.interruptedByRestart) return { status: "interrupted", text: "supervisor: interrupted by a supervisor restart (effect unknown)", record };
+    if (record.state === "completed")
+      return { status: "completed", text: `supervisor: completed${record.httpStatus !== null ? ` (HTTP ${record.httpStatus})` : ""}; result discarded, not replayed`, record };
+    return { status: "pending", text: "supervisor: still pending (no receipt; effect unknown)", record };
+  } catch (error) {
+    if (error instanceof SupervisorNotFoundError) return { status: "no-record", text: "supervisor has no record" };
+    const message = error instanceof Error ? error.message : String(error);
+    return { status: "unknown", text: `supervisor record unknown: ${message.slice(0, 160)}` };
+  }
 }
 
 export interface CreateAttemptInput {
@@ -255,6 +300,10 @@ export class HttpSupervisorClient implements SupervisorClient {
   async egressLog(attemptId: string, signal?: AbortSignal) {
     assertPlainId(attemptId);
     return this.get(`/attempts/${encodeURIComponent(attemptId)}/egress`, EgressLog, signal, true);
+  }
+  async getOperation(operationId: string, signal?: AbortSignal) {
+    assertPlainId(operationId);
+    return this.get(`/operations/${encodeURIComponent(operationId)}`, SupervisorOperationRecord, signal, true);
   }
   collectOutputs(input: { ref: AttemptRef }, opts?: CallOptions) {
     return this.mutate(`/attempts/${encodeURIComponent(input.ref.attemptId)}/collect-outputs`, input, CollectOutputsResult, DEFAULT_TIMEOUTS.collectOutputs, opts);

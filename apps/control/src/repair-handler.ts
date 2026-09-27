@@ -66,7 +66,7 @@ import { redactTeardown } from "./redact.ts";
 import { MODEL_TOOLS, systemPrompt, taskMessage, type ToolSpec } from "./prompts.ts";
 import { DEFAULT_MAX_TOKENS as DRIVER_DEFAULT_MAX_TOKENS } from "./vultr-client.ts";
 import type { Store } from "./store/index.ts";
-import { SupervisorError, SupervisorFenceError, SupervisorNotFoundError, type SupervisorClient } from "./supervisor-client.ts";
+import { SupervisorError, SupervisorFenceError, SupervisorNotFoundError, supervisorOperationStatus, type SupervisorClient } from "./supervisor-client.ts";
 import { aggregateInvocations, type CaseInvocation } from "./verifier/index.ts";
 import { LostLeaseError, TeardownIncompleteError, type TaskContext, type TaskHandler } from "./worker/index.ts";
 
@@ -190,7 +190,7 @@ const CHARS_PER_TOKEN = 3;
 const FEEDBACK_CAP = 4000;
 /** Outstanding journal rows are reconciled in pages of this size, until none is left. */
 const RECONCILE_PAGE = 100;
-export const INVOKE_RECONCILIATION = "no supervisor operation read endpoint; one-shot sandboxes are bounded by their own deadline";
+export const INVOKE_RECONCILIATION = "not replayed; one-shot sandboxes are bounded by their own deadline";
 const NUDGE_TEXT_ONLY = "If the fix is applied, call submit_candidate; otherwise continue or say why you cannot fix it.";
 const NUDGE_OUTPUT_LIMIT = "Your last turn hit the output limit before any action. Take the next action now with a tool call.";
 
@@ -593,7 +593,7 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
       }
 
       async function reconcilePage(rows: { value: OperationRecord }[], toTearDown: Map<string, AttemptRef>): Promise<void> {
-        const found: { operationId: string; kind: string; attemptId?: string; state: string; reconciliation: string }[] = [];
+        const found: { operationId: string; kind: string; attemptId?: string; state: string; reconciliation: string; supervisor: string; supervisorRecord: string }[] = [];
         for (const { value: op } of rows) {
           let reconciliation: string;
           if (op.attemptId) {
@@ -606,14 +606,17 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
               if (!(error instanceof SupervisorNotFoundError) && op.generation !== undefined) toTearDown.set(op.attemptId, { taskId: task.id, attemptId: op.attemptId, generation: op.generation });
             }
           } else {
-            // Not replayed; recorded as unknown (the supervisor has no operation read endpoint yet).
+            // Not replayed; recorded as unknown.
             reconciliation = INVOKE_RECONCILIATION;
           }
-          await deps.store.put(owner, STORE_KIND_OPERATIONS, { ...op, state: "unknown", reconciledAt: iso(), reconciliation });
-          found.push({ operationId: op.operationId, kind: op.kind, ...(op.attemptId ? { attemptId: op.attemptId } : {}), state: op.state, reconciliation });
+          // C41 O2: the supervisor's own record of the operation. Advisory only: never replayed, and
+          // a completed result is discarded with its sandbox.
+          const sup = await supervisorOperationStatus(deps.supervisor, op.operationId, ctx.signal);
+          await deps.store.put(owner, STORE_KIND_OPERATIONS, { ...op, state: "unknown", reconciledAt: iso(), reconciliation, supervisorStatus: sup.status, supervisorRecord: sup.text });
+          found.push({ operationId: op.operationId, kind: op.kind, ...(op.attemptId ? { attemptId: op.attemptId } : {}), state: op.state, reconciliation, supervisor: sup.status, supervisorRecord: sup.text });
         }
         if (found.length > 0)
-          await ctx.event("lifecycle", "Reconciled outstanding supervisor operations", found.map((f) => `${f.kind} ${f.operationId} (${f.state}): ${f.reconciliation}`).join("\n").slice(0, DETAIL_CAP), { operations: found });
+          await ctx.event("lifecycle", "Reconciled outstanding supervisor operations", found.map((f) => `${f.kind} ${f.operationId} (${f.state}): ${f.reconciliation}; ${f.supervisorRecord}`).join("\n").slice(0, DETAIL_CAP), { operations: found });
       }
 
       function baselineVerdict(record: VerificationRecord): { outcome: "REPRODUCED" | "NOT_REPRODUCED" | "INCONCLUSIVE"; reason: string } {

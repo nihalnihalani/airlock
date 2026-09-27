@@ -367,6 +367,74 @@ describe("exclusive control (C23/C24)", () => {
 });
 
 // ---------------------------------------------------------------------------------------------
+describe("stale control after a control-plane restart (C41 O1)", () => {
+  const stale = (holder: "human" | "transferring") => ({ holder, ...(holder === "human" ? { humanOwner: "operator" } : {}), since: new Date(Date.now() - 30_000).toISOString(), reason: "taken by operator" });
+  test("GET /control and GET /task never report a human holder this process does not know; human actions stay refused", async () => {
+    const ctx = await makeCtx(recordingDriver([]));
+    try {
+      // A previous process wrote holder "human" and died; this process has no channel for the task.
+      await ctx.h.store.compareAndSwap<Task>(OWNER, "tasks", ctx.task.id, { id: ctx.task.id }, { status: "running", control: stale("human") });
+      expect(ctx.control.isAttached(ctx.task.id)).toBe(false);
+      const res = await get(ctx, "/control");
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { control: Task["control"]; live: unknown };
+      expect(body.control).toMatchObject({ holder: "agent", reason: "control plane restarted; control returned to the agent" });
+      expect(body.control!.humanOwner).toBeUndefined();
+      expect(body.live).toBeNull();
+      const stored = await ctx.h.store.get<Task>(OWNER, "tasks", ctx.task.id);
+      expect(stored!.control!.holder).toBe("agent");
+      const events = await ctx.h.events(ctx.task.id);
+      expect(titled(events, "Control returned to the agent")).toHaveLength(1);
+      expect(titled(events, "Control returned to the agent")[0]!.detail).toContain("control plane restarted");
+      // A second read does not record another event.
+      expect(((await (await ctx.app.request(`/api/tasks/${ctx.task.id}`, { headers: { cookie: ctx.operator } })).json()) as { task: Task }).task.control!.holder).toBe("agent");
+      expect(titled(await ctx.h.events(ctx.task.id), "Control returned to the agent")).toHaveLength(1);
+      // Human actions are still refused (no run in this process).
+      expect((await post(ctx, "/control/action", { request: { op: "screenshot" } })).status).toBe(409);
+      expect((await post(ctx, "/control/take")).status).toBe(409);
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  test("GET /task resets a stale transferring holder too", async () => {
+    const ctx = await makeCtx(recordingDriver([]));
+    try {
+      await ctx.h.store.compareAndSwap<Task>(OWNER, "tasks", ctx.task.id, { id: ctx.task.id }, { status: "running", control: stale("transferring") });
+      const view = (await (await ctx.app.request(`/api/tasks/${ctx.task.id}`, { headers: { cookie: ctx.operator } })).json()) as { task: Task };
+      expect(view.task.control).toMatchObject({ holder: "agent", reason: "control plane restarted; control returned to the agent" });
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  test("recoverAtStart resets every stale non-agent holder and leaves agent-held tasks alone; a live channel's holder is never reset", async () => {
+    const holdModel = deferred();
+    const ctx = await makeCtx(recordingDriver([{ toolCalls: [{ name: "browser_navigate", args: { url: HERO_URL } }] }, { toolCalls: [{ name: "submit_result", args: { summary: "done", sources: [HERO_URL] } }] }], { before: async (call) => (call === 2 ? holdModel.promise : undefined) }));
+    try {
+      const other = await ctx.h.newTask({ profileId: "web-research", egressAllow: [HERO_HOST] });
+      await ctx.h.store.compareAndSwap<Task>(OWNER, "tasks", other.id, { id: other.id }, { status: "done", control: stale("transferring") });
+      const third = await ctx.h.newTask({ profileId: "web-research", egressAllow: [HERO_HOST] });
+      await ctx.h.store.compareAndSwap<Task>(OWNER, "tasks", third.id, { id: third.id }, { status: "done", control: { holder: "agent", since: new Date().toISOString() } });
+      expect(await ctx.control.recoverAtStart()).toBe(1);
+      expect((await ctx.h.store.get<Task>(OWNER, "tasks", other.id))!.control).toMatchObject({ holder: "agent", reason: "control plane restarted; control returned to the agent" });
+      expect(titled(await ctx.h.events(third.id), "Control returned to the agent")).toHaveLength(0);
+      // A holder that the current process granted is live, not stale.
+      ctx.h.worker.start();
+      await ctx.h.waitUntil(() => ctx.control.isAttached(ctx.task.id));
+      expect((await post(ctx, "/control/take")).status).toBe(200);
+      const body = (await (await get(ctx, "/control")).json()) as { control: Task["control"] };
+      expect(body.control!.holder).toBe("human");
+      expect(await ctx.control.recoverAtStart()).toBe(0);
+      expect(ctx.control.holderOf(ctx.task.id)).toBe("human");
+      expect((await post(ctx, "/control/release")).status).toBe(200);
+    } finally {
+      holdModel.resolve();
+      await ctx.close();
+    }
+  });
+});
+
 describe("live view (C22)", () => {
   test("refresh stores a frame through the supervisor, is rate limited, works while a person holds control, and frames are not evidence", async () => {
     let ctx!: Ctx;

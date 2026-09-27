@@ -39,6 +39,12 @@ export interface OperationRecord {
   /** Set by a recovering run: what the supervisor reported for this operation's attempt. */
   reconciledAt?: string;
   reconciliation?: string;
+  /**
+   * Set by a recovering run (C41 O2): what the supervisor's own journal (`GET /operations/:id`) says
+   * about this operation. Advisory: the operation is never replayed and its result never recorded.
+   */
+  supervisorStatus?: "completed" | "interrupted" | "pending" | "no-record" | "unknown";
+  supervisorRecord?: string;
 }
 
 /** Called right after the intent row is written and before the request is sent. */

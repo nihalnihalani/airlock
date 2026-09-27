@@ -29,7 +29,12 @@ export interface CheckInput {
   /** Null when no collection happened (no code sandbox, or it could not be collected); `reason` says why. */
   collected: { files: CollectedOutput[]; rejected: { path: string; reason: string }[] } | null;
   collectionProblem?: string;
-  screenshots: number;
+  /**
+   * The agent's own stored screenshots, with the page URL each one recorded. A screenshot counts as
+   * evidence only when it shows a cited source (same origin and path, query/hash ignored), so a
+   * screenshot of about:blank or of an unrelated page never satisfies the check (C41 O3).
+   */
+  screenshots: { url?: string | null | undefined }[];
   sources: string[];
   /** Normalised URLs this task's browser actually reached (navigate/observe results in its events). */
   visited: Set<string>;
@@ -87,6 +92,38 @@ export function checkSummarySchema(bytes: Uint8Array): { ok: boolean; detail: st
   return { ok: false, detail: 'summary.json has no non-empty "answer" field' };
 }
 
+/** Origin + path of an http(s) URL (trailing slash, query and hash ignored); null otherwise. */
+export function documentKey(raw: string): string | null {
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    const path = url.pathname.length > 1 && url.pathname.endsWith("/") ? url.pathname.slice(0, -1) : url.pathname;
+    return `${url.protocol}//${url.host.toLowerCase()}${path}`;
+  } catch {
+    return null;
+  }
+}
+
+/** The screenshot-evidence check: at least one screenshot whose recorded URL is a cited source. */
+export function checkScreenshotEvidence(screenshots: CheckInput["screenshots"], sources: string[], requireSource: boolean): { ok: boolean; detail: string } {
+  if (screenshots.length === 0) return { ok: false, detail: "no screenshot was stored" };
+  const pages = screenshots.map((s) => (typeof s.url === "string" ? documentKey(s.url) : null));
+  const web = pages.filter((k): k is string => k !== null);
+  if (web.length === 0) return { ok: false, detail: `${screenshots.length} screenshot(s) stored, none of an http(s) page (e.g. about:blank)` };
+  const cited = new Map<string, string>();
+  for (const src of sources) {
+    const k = documentKey(src);
+    if (k && !cited.has(k)) cited.set(k, src);
+  }
+  if (cited.size === 0) {
+    if (requireSource) return { ok: false, detail: `${screenshots.length} screenshot(s) stored, but no cited source to bind a screenshot to` };
+    return { ok: true, detail: `${web.length} screenshot(s) of an http(s) page stored` };
+  }
+  const matched = [...new Set(web.filter((k) => cited.has(k)))];
+  if (matched.length === 0) return { ok: false, detail: `${screenshots.length} screenshot(s) stored, none shows a cited source (same origin and path)` };
+  return { ok: true, detail: `${screenshots.length} screenshot(s) stored; cited source(s) shown: ${matched.map((k) => cited.get(k)).join(", ")}` };
+}
+
 const underOutputs = (claimed: string) => (claimed.startsWith("outputs/") ? claimed.slice("outputs/".length) : claimed);
 
 export function runCompletionChecks(input: CheckInput): Check[] {
@@ -128,8 +165,11 @@ export function runCompletionChecks(input: CheckInput): Check[] {
       checks.push({ name: "summary-schema", passed: s.ok, detail: detail(s.detail) });
     } else checks.push({ name: "summary-schema", passed: !required, detail: required ? "outputs/summary.json is required and was not claimed and collected" : "no summary.json (optional for this profile)" });
   }
-  if (want.has("screenshot-evidence")) checks.push({ name: "screenshot-evidence", passed: input.screenshots > 0, detail: input.screenshots > 0 ? `${input.screenshots} screenshot(s) stored` : "no screenshot was stored" });
   const sources = [...new Set(input.sources)];
+  if (want.has("screenshot-evidence")) {
+    const shot = checkScreenshotEvidence(input.screenshots, sources, want.has("sources-cited"));
+    checks.push({ name: "screenshot-evidence", passed: shot.ok, detail: detail(shot.detail) });
+  }
   if (want.has("sources-cited")) checks.push({ name: "sources-cited", passed: sources.length > 0, detail: sources.length > 0 ? `${sources.length} source(s) cited` : "no source URL was cited" });
   if (want.has("sources-visited")) {
     const unvisited = sources.filter((s) => {

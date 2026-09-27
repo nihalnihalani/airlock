@@ -635,7 +635,9 @@ export function createApp(deps: ApiDeps) {
     return c.json(tasks.sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
   });
   app.get("/api/tasks/:id", async (c) => {
-    const { owner, task } = await authorizeTask(c);
+    const { owner, task: stored } = await authorizeTask(c);
+    // C41 O1: never show a human holder from a previous control-plane process.
+    const task = deps.control ? await deps.control.reconcileStored(owner, stored) : stored;
     const view: TaskView = { task };
     const profile = deps.profiles.get(task.profileId);
     if (profile) view.cases = profile.contract.cases.map((cs) => ({ id: cs.id, kind: cs.kind, title: cs.title }));
@@ -781,6 +783,8 @@ export function createApp(deps: ApiDeps) {
   const authorizeBrowserTask = async (c: Context<Env>) => {
     const ctx = await authorizeTask(c);
     if (ctx.task.kind !== "general" || !taskProfiles.get(ctx.task.profileId)?.browser) throw new AppError("only general tasks with a browser support human control", 422);
+    // C41 O1: a stored human/transferring holder this process does not know about is stale.
+    if (deps.control) ctx.task = await deps.control.reconcileStored(ctx.owner, ctx.task);
     return ctx;
   };
   const requireRunning = (task: Task) => {

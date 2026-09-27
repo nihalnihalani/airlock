@@ -41,6 +41,7 @@ import {
   type FreezeResult,
   type HealthResponse,
   type SupervisorClient,
+  type SupervisorOperationRecord,
 } from "../../src/supervisor-client.ts";
 
 const sha = (bytes: Uint8Array | string) => createHash("sha256").update(bytes).digest("hex");
@@ -412,6 +413,16 @@ export class FakeSupervisor implements SupervisorClient {
       .sort((a, b) => (a.path < b.path ? -1 : 1))
       .map((f) => ({ path: f.path, byteLength: f.bytes.byteLength, sha256: sha(f.bytes), mediaType: mediaType(f.path), contentBase64: Buffer.from(f.bytes).toString("base64") }));
     return { stoppedAt: new Date().toISOString(), stopConfirmed: this.options.collectStopConfirmed !== false, envelope: { schemaVersion: 1, files, rejected } };
+  }
+
+  /** The supervisor journal's operation records (`GET /operations/:id`); absent → 404. */
+  readonly operationRecords = new Map<string, SupervisorOperationRecord>();
+  readonly operationReads: string[] = [];
+  async getOperation(operationId: string): Promise<SupervisorOperationRecord> {
+    this.operationReads.push(operationId);
+    const record = this.operationRecords.get(operationId);
+    if (!record) throw new SupervisorNotFoundError("Unknown operation.");
+    return record;
   }
 
   async getAttempt(attemptId: string): Promise<AttemptState> {

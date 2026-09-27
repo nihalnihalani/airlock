@@ -103,13 +103,34 @@ describe("completion checks", () => {
       profile: profile("web-analysis"),
       claimed: ["outputs/summary.json"],
       collected: { files: [{ path: "summary.json", bytes: enc('{"answer":"x"}'), mediaType: "application/json" }], rejected: [] },
-      screenshots: 0,
+      screenshots: [],
       sources: ["https://outside.example.net/"],
       visited: new Set(),
       egressAllow: ["stats.example.org"],
     });
     const failed = checks.filter((c) => !c.passed).map((c) => c.name);
     expect(failed.sort()).toEqual(["screenshot-evidence", "sources-in-policy", "sources-visited"]);
+  });
+  // C41 O3: a screenshot is evidence only when it shows a cited source.
+  const webResearch = (screenshots: { url?: string | null }[], sources = ["https://stats.example.org/table?year=2024"]) =>
+    runCompletionChecks({ profile: profile("web-research"), claimed: [], collected: null, screenshots, sources, visited: new Set(sources.map((s) => normalizeUrl(s)!)), egressAllow: ["stats.example.org"] });
+  const shotCheck = (checks: ReturnType<typeof runCompletionChecks>) => checks.find((c) => c.name === "screenshot-evidence")!;
+  test("an about:blank screenshot does not satisfy screenshot-evidence", () => {
+    const checks = webResearch([{ url: "about:blank" }, { url: null }]);
+    expect(shotCheck(checks).passed).toBe(false);
+    expect(shotCheck(checks).detail).toContain("about:blank");
+    expect(checks.filter((c) => !c.passed).map((c) => c.name)).toEqual(["screenshot-evidence"]);
+  });
+  test("a screenshot of an unrelated page, or another path on the source's origin, does not count", () => {
+    expect(shotCheck(webResearch([{ url: "https://stats.example.org/other" }])).passed).toBe(false);
+    expect(shotCheck(webResearch([{ url: "http://stats.example.org/table" }])).passed).toBe(false);
+    expect(shotCheck(webResearch([{ url: "https://example.com/table" }])).passed).toBe(false);
+  });
+  test("a screenshot of a cited source passes (query, hash and trailing slash ignored)", () => {
+    const checks = webResearch([{ url: "about:blank" }, { url: "https://STATS.example.org/table/?year=2023#top" }]);
+    expect(shotCheck(checks).passed).toBe(true);
+    expect(shotCheck(checks).detail).toContain("https://stats.example.org/table?year=2024");
+    expect(checks.every((c) => c.passed)).toBe(true);
   });
 });
 

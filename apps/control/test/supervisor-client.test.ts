@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { requestDigestOf } from "@airlock/contracts";
-import { HttpSupervisorClient, SupervisorFenceError, SupervisorNotFoundError, SupervisorUnavailableError, buildOperation } from "../src/supervisor-client.ts";
+import { HttpSupervisorClient, SupervisorFenceError, SupervisorNotFoundError, SupervisorUnavailableError, buildOperation, supervisorOperationStatus } from "../src/supervisor-client.ts";
 import { fakeHost } from "./helpers/fake-supervisor.ts";
 
 type Seen = { url: string; method: string; auth: string | null; body: unknown };
@@ -23,6 +23,19 @@ const ok = (body: unknown) => new Response(JSON.stringify(body), { status: 200, 
 const attemptState = { ref, role: "author", container: "c", status: "running", deadline: new Date().toISOString() };
 
 describe("supervisor client", () => {
+  test("C41 O2: getOperation reads GET /operations/:id; 404 → no record; recovery phrases", async () => {
+    const at = new Date().toISOString();
+    const rec = { operationId: "op-1", kind: "invoke", state: "completed", httpStatus: 200, resultRecorded: true, interruptedByRestart: false, taskId: "task-1", attemptId: null, generation: null, createdAt: at, updatedAt: at };
+    const { c, seen } = client((s) => (s.url.endsWith("/op-1") ? ok(rec) : s.url.endsWith("/op-2") ? ok({ ...rec, operationId: "op-2", interruptedByRestart: true }) : new Response(JSON.stringify({ error: "Unknown operation." }), { status: 404 })));
+    expect(await c.getOperation("op-1")).toEqual(rec as never);
+    expect(seen[0]).toMatchObject({ url: "http://sup.test:4300/operations/op-1", method: "GET", auth: `Bearer ${"t".repeat(20)}` });
+    await expect(c.getOperation("op-x")).rejects.toBeInstanceOf(SupervisorNotFoundError);
+    await expect(c.getOperation("../x")).rejects.toThrow();
+    expect(await supervisorOperationStatus(c, "op-1")).toMatchObject({ status: "completed", text: "supervisor: completed (HTTP 200); result discarded, not replayed" });
+    expect((await supervisorOperationStatus(c, "op-2")).status).toBe("interrupted");
+    expect(await supervisorOperationStatus(c, "op-x")).toEqual({ status: "no-record", text: "supervisor has no record" });
+  });
+
   test("mutating calls carry a bearer token and an Operation whose digest binds the body", async () => {
     const { c, seen } = client(() => ok(attemptState));
     await c.createAttempt({ ref, profileId: "fx-1", role: "author", absoluteDeadline: new Date().toISOString() });

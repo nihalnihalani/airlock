@@ -194,6 +194,12 @@ async function main() {
   if (config.webDist) log.info("serving web UI", { dir: config.webDist });
   else log.warn("no web UI directory (apps/web/dist); only /api is served. Build it with: bun run --cwd apps/web build");
 
+  // C41 O1: no run is live yet, so any stored human/transferring holder is from the previous process.
+  const controlReset = await control.recoverAtStart().catch((error) => {
+    log.warn("stale control reset at start failed; reads still reset it", { error });
+    return 0;
+  });
+  if (controlReset > 0) log.info("stale browser control returned to the agent at start", { tasks: controlReset });
   worker.start();
   cleanupSweeper.start();
   const server = Bun.serve({ port: config.port, hostname: config.bind, fetch: app.fetch, idleTimeout: 255 });

@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import type { BrowserOpResult, RunEvent, Task } from "@airlock/contracts";
 import { MAX_IDENTICAL_FAILURES, STORE_KIND_TASK_ATTEMPTS, STORE_KIND_GENERAL_USAGE, CODE_RUNNER, type GeneralUsage, type TaskAttemptRow } from "../src/general-handler.ts";
+import { STORE_KIND_OPERATIONS, type OperationRecord } from "../src/journal.ts";
 import { inspectPng } from "../src/png.ts";
 import { openScriptedCatalog } from "../src/scripted.ts";
 import { createScriptedDriver } from "../src/vultr-client.ts";
@@ -206,6 +207,58 @@ describe("general tasks: browser semantics", () => {
   });
 });
 
+describe("general tasks: screenshot evidence is bound to a cited source (C41 O3)", () => {
+  test("C41F: source visited, session lost, then only an about:blank screenshot → screenshot-evidence fails (RESULT_PARTIAL)", async () => {
+    const supervisor = supervisorFor({
+      browserOp: (attempt, request): BrowserOpResult | undefined => (request.op === "click" ? { response: null, status: "interrupted", durationMs: 50, generationBefore: attempt.browser!.generation } : undefined),
+    });
+    const driver = recordingDriver([
+      { toolCalls: [{ name: "browser_navigate", args: { url: HERO_URL } }] },
+      { toolCalls: [{ name: "browser_observe", args: {} }] },
+      (input) => ({ toolCalls: [{ name: "browser_click", args: { ref: "e1", generation: (JSON.parse(input.messages.at(-1)!.content) as { generation: number }).generation } }] }),
+      // The lost session is gone; the fresh session never navigates: its screenshot is about:blank.
+      { toolCalls: [{ name: "browser_screenshot", args: {} }] },
+      { toolCalls: [{ name: "submit_result", args: { summary: "done", outputs: [], sources: [HERO_URL] } }] },
+    ]);
+    const h = await makeGeneralHarness(fixture, supervisor, driver);
+    try {
+      const done = await run(h, { profileId: "web-research", egressAllow: [HERO_HOST] });
+      expect(supervisor.operations.filter((o) => o.kind === "createAttempt")).toHaveLength(2);
+      const artifacts = await h.artifacts.listForTask(OWNER, done);
+      expect(artifacts.filter((a) => a.kind === "screenshot").map((a) => a.source?.url)).toEqual(["about:blank"]);
+      expect(done.outcome).toBe("RESULT_PARTIAL");
+      const shot = done.result!.checks.find((c) => c.name === "screenshot-evidence")!;
+      expect(shot.passed).toBe(false);
+      expect(shot.detail).toContain("about:blank");
+      // The visit was recorded as a completed observation before the loss, so it still counts.
+      expect(done.result!.checks.find((c) => c.name === "sources-visited")!.passed).toBe(true);
+      expect(done.result!.sources).toEqual([{ url: HERO_URL }]);
+    } finally {
+      await h.close();
+    }
+  });
+
+  test("a cited source with a matching screenshot passes screenshot-evidence (RESULT_VERIFIED)", async () => {
+    const supervisor = supervisorFor();
+    const driver = recordingDriver([
+      { toolCalls: [{ name: "browser_screenshot", args: {} }] },
+      { toolCalls: [{ name: "browser_navigate", args: { url: HERO_URL } }] },
+      { toolCalls: [{ name: "browser_screenshot", args: {} }] },
+      { toolCalls: [{ name: "submit_result", args: { summary: "done", outputs: [], sources: [`${HERO_URL}#table`] } }] },
+    ]);
+    const h = await makeGeneralHarness(fixture, supervisor, driver);
+    try {
+      const done = await run(h, { profileId: "web-research", egressAllow: [HERO_HOST] });
+      expect(done.outcome).toBe("RESULT_VERIFIED");
+      const shot = done.result!.checks.find((c) => c.name === "screenshot-evidence")!;
+      expect(shot.passed).toBe(true);
+      expect(shot.detail).toContain(HERO_URL);
+    } finally {
+      await h.close();
+    }
+  });
+});
+
 describe("general tasks: outcomes", () => {
   test("a claimed output that was never written gives RESULT_PARTIAL; a rejected one is reported", async () => {
     const supervisor = supervisorFor({
@@ -378,6 +431,44 @@ describe("general tasks: cancellation and cleanup", () => {
       const rows = (await h.store.scanWhere<TaskAttemptRow>(STORE_KIND_TASK_ATTEMPTS, { taskId: task.id })).map((r) => r.value);
       expect(rows[0]!.state).toBe("destroyed");
       expect(done.cleanup?.status).toBe("confirmed");
+    } finally {
+      await h.close();
+    }
+  });
+});
+
+describe("general tasks: recovery reads the supervisor's operation record (C41 O2)", () => {
+  test("outstanding ops are reconciled with the supervisor's record (completed / interrupted / no record), never replayed, and the old sandbox is discarded", async () => {
+    const supervisor = supervisorFor();
+    const driver = recordingDriver([{ toolCalls: [{ name: "submit_result", args: { summary: "x", outputs: [], sources: [] } }] }]);
+    const h = await makeGeneralHarness(fixture, supervisor, driver);
+    try {
+      const task = await h.newTask({ profileId: "web-research", egressAllow: [HERO_HOST] });
+      const at = new Date().toISOString();
+      await h.store.put(OWNER, STORE_KIND_TASK_ATTEMPTS, { id: "att-old", taskId: task.id, role: "browser", generation: 1, state: "live", createdAt: at } satisfies TaskAttemptRow);
+      await h.store.put(OWNER, STORE_KIND_GENERAL_USAGE, { id: task.id, taskId: task.id, startedAtMs: Date.now(), browserOps: 1, codeRuns: 0, browserSessions: 1, browserInterruptions: 0, codeSandboxes: 0, unavailableToolCalls: 0 } satisfies GeneralUsage);
+      const op = (id: string) => ({ id, operationId: id, requestDigest: "d".repeat(64), kind: "browserOp" as const, taskId: task.id, attemptId: "att-old", generation: 1, state: "intent" as const, createdAt: at });
+      for (const id of ["op-done", "op-cut", "op-none"]) await h.store.put(OWNER, STORE_KIND_OPERATIONS, op(id) satisfies OperationRecord);
+      const record = (id: string, over: Record<string, unknown>) => ({ operationId: id, kind: "browser", state: "completed" as const, httpStatus: 200, resultRecorded: true, interruptedByRestart: false, taskId: task.id, attemptId: "att-old", generation: 1, createdAt: at, updatedAt: at, ...over });
+      supervisor.operationRecords.set("op-done", record("op-done", {}));
+      supervisor.operationRecords.set("op-cut", record("op-cut", { httpStatus: 500, interruptedByRestart: true }));
+      h.worker.start();
+      const done = await h.waitFor(task.id);
+      expect(supervisor.operationReads.sort()).toEqual(["op-cut", "op-done", "op-none"]);
+      const rows = new Map((await h.store.list<OperationRecord>(OWNER, STORE_KIND_OPERATIONS)).map((r) => [r.id, r]));
+      expect(rows.get("op-done")).toMatchObject({ state: "unknown", supervisorStatus: "completed" });
+      expect(rows.get("op-done")!.supervisorRecord).toContain("completed (HTTP 200); result discarded, not replayed");
+      expect(rows.get("op-cut")).toMatchObject({ state: "unknown", supervisorStatus: "interrupted" });
+      expect(rows.get("op-none")).toMatchObject({ state: "unknown", supervisorStatus: "no-record", supervisorRecord: "supervisor has no record" });
+      const event = (await h.events(done.id)).find((e) => e.title === "Reconciled outstanding supervisor operations")!;
+      expect(event.detail).toContain("op-done");
+      expect(event.detail).toContain("supervisor: completed");
+      expect(event.detail).toContain("interrupted by a supervisor restart");
+      expect(event.detail).toContain("supervisor has no record");
+      // Never replayed: no browser request carries an old operation id.
+      expect(supervisor.operations.some((o) => ["op-done", "op-cut", "op-none"].includes(o.operationId))).toBe(false);
+      expect(supervisor.browserRequests).toHaveLength(0);
+      expect((await h.store.scanWhere<TaskAttemptRow>(STORE_KIND_TASK_ATTEMPTS, { taskId: task.id }))[0]!.value.state).toBe("destroyed");
     } finally {
       await h.close();
     }
