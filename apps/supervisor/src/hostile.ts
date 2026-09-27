@@ -111,7 +111,7 @@ export async function hostileRun(core: Supervisor, body: HostileRunRequest, sent
       if (materialized.result.status !== "succeeded") {
         throw new SupervisorError("internal", `Materializing the source tree failed (${materialized.result.status}): ${materialized.result.stderr.slice(0, 300)}`);
       }
-      const probe = await runProbe(core.api, n.container, "/workspace", workspaceBytesOf(caps));
+      const probe = await runProbe(core.api, n.container, "/workspace", workspaceBytesOf(caps), undefined, provisioned.inspection.runtime === "kata");
       if (!probe.allBlocked) throw new SupervisorError("probe_failed", "Isolation probe not fully BLOCKED; hostile sandbox destroyed and run refused.");
 
       // Blast radius, before: scratch files in this sandbox's own workspace, and every other live attempt.

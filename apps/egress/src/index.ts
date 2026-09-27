@@ -5,8 +5,11 @@
  *   AIRLOCK_EGRESS_ALLOW   JSON array of hostnames / ".suffix" / public IP literals ([] = deny all)
  *   AIRLOCK_EGRESS_PORTS   JSON array of ports (default [443, 80])
  *   AIRLOCK_EGRESS_LISTEN  host:port to listen on (default 0.0.0.0:3128)
+ *   AIRLOCK_EGRESS_RESOLVERS  comma-separated upstream DNS server IPs; when set, names are resolved
+ *                          there instead of via resolv.conf (required under Kata, whose guest cannot
+ *                          reach Docker's embedded DNS)
  */
-import { createEgressProxy } from "./proxy.ts";
+import { createEgressProxy, upstreamResolver } from "./proxy.ts";
 import { parsePolicy } from "./policy.ts";
 
 const emit = (line: Record<string, unknown>) =>
@@ -27,7 +30,15 @@ if (!match) {
   process.exit(2);
 }
 
-const server = createEgressProxy({ policy });
+const resolversRaw = process.env.AIRLOCK_EGRESS_RESOLVERS?.trim();
+let resolver;
+try {
+  resolver = resolversRaw ? upstreamResolver(resolversRaw.split(",").map((s) => s.trim()).filter(Boolean)) : undefined;
+} catch (error) {
+  emit({ event: "config_error", message: error instanceof Error ? error.message : "bad AIRLOCK_EGRESS_RESOLVERS" });
+  process.exit(2);
+}
+const server = createEgressProxy({ policy, ...(resolver ? { resolver } : {}) });
 server.listen(Number(match[2]), match[1]!.replace(/^\[|\]$/g, ""), () => {
   emit({
     event: "listening",

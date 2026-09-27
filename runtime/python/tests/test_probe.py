@@ -161,3 +161,44 @@ def test_shm_bound_follows_the_supervisor_argument(runtime_dir: Path, tmp_path: 
 def test_no_subtree_exemption_remains(runtime_dir: Path):
     text = (runtime_dir / "probe.sh").read_text()
     assert "ALLOWED_MOUNT_ROOTS" not in text
+
+
+# Measured on the VX1 host under Kata (guest kernel 6.18.35), 27 Sep 2026: a real author sandbox's
+# mountinfo, as the supervisor creates it (read-only rootfs over virtio-fs, tmpfs workspace shared in).
+KATA_VX1_MOUNTINFO = """73 46 0:35 / / ro,nodev,relatime master:22 - virtiofs none rw
+74 73 0:36 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw
+75 73 0:37 / /dev rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755
+76 75 0:38 / /dev/pts rw,nosuid,noexec,relatime - devpts devpts rw,gid=5,mode=620,ptmxmode=666
+77 73 0:21 / /sys ro,nosuid,nodev,noexec,relatime - sysfs sysfs rw
+78 77 0:26 / /sys/fs/cgroup ro,nosuid,nodev,noexec,relatime - cgroup2 cgroup2 rw,nsdelegate,memory_recursiveprot
+79 75 0:32 / /dev/mqueue rw,nosuid,nodev,noexec,relatime - mqueue mqueue rw
+80 75 0:34 / /dev/shm rw,relatime master:21 - tmpfs shm rw
+81 73 0:39 / /tmp rw,nosuid,nodev,noexec,relatime - tmpfs tmpfs rw,size=65536k
+83 73 0:40 / /workspace rw,relatime - virtiofs none rw
+84 73 0:33 /81f3e754-e68b0c7cb9120239-hostname /etc/hostname ro,relatime - virtiofs kataShared rw
+85 73 0:33 /81f3e754-11d3f9074a20c122-hosts /etc/hosts ro,relatime - virtiofs kataShared rw
+86 73 0:33 /81f3e754-2e9eb70638428f8b-resolv.conf /etc/resolv.conf ro,relatime - virtiofs kataShared rw
+47 74 0:37 /null /proc/interrupts rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755
+48 74 0:37 /null /proc/keys rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755
+49 74 0:37 /null /proc/timer_list rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755
+50 74 0:36 /bus /proc/bus ro,relatime - proc proc rw
+51 74 0:36 /fs /proc/fs ro,relatime - proc proc rw
+52 74 0:36 /irq /proc/irq ro,relatime - proc proc rw
+53 74 0:36 /sys /proc/sys ro,relatime - proc proc rw
+"""
+
+
+def test_kata_vx1_guest_unsized_shm_needs_the_guest_vm_flag(runtime_dir: Path, tmp_path: Path):
+    # Without the supervisor's guest-VM flag the unsized /dev/shm is refused (fail closed) ...
+    refused = _mounts(runtime_dir, tmp_path, KATA_VX1_MOUNTINFO)
+    assert refused["hostMounts"] == "REACHED"
+    assert any("/dev/shm" in d for d in refused["details"]["hostMounts"])
+    # ... and with it (the supervisor inspected runtime=kata) the measured Kata layout is BLOCKED.
+    assert _mounts(runtime_dir, tmp_path, KATA_VX1_MOUNTINFO, "--guest-vm")["hostMounts"] == "BLOCKED"
+
+
+def test_guest_vm_flag_never_accepts_an_oversized_or_foreign_shm(runtime_dir: Path, tmp_path: Path):
+    big = KATA_VX1_MOUNTINFO.replace("- tmpfs shm rw\n", "- tmpfs shm rw,size=8388608k\n")
+    assert _mounts(runtime_dir, tmp_path, big, "--guest-vm")["hostMounts"] == "REACHED"
+    bound = KATA_VX1_MOUNTINFO.replace("0:34 / /dev/shm", "0:34 /host/dir /dev/shm")
+    assert _mounts(runtime_dir, tmp_path, bound, "--guest-vm")["hostMounts"] == "REACHED"

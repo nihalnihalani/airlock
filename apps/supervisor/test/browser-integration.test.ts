@@ -88,7 +88,7 @@ describe("real docker browser plane (runc, dev-unsafe)", () => {
           egressMemoryBytes: 128 * 1024 ** 2,
           egressPidsLimit: 64,
           egressCpus: 0.5,
-          attemptTimeoutMs: 10 * 60_000, mutationOrigins: [] as string[],
+          attemptTimeoutMs: 10 * 60_000, mutationOrigins: [] as string[], egressResolvers: [] as string[],
         },
       };
       const host = await checkHost(api, config);
@@ -224,7 +224,7 @@ describe("real docker browser plane (runc, dev-unsafe)", () => {
           image: BROWSER_IMAGE, imageId: browserImage!.id, egressImage: EGRESS_IMAGE, egressImageId: egressImage!.id, seccompPath,
           seccompJson: JSON.stringify(JSON.parse(readFileSync(seccompPath, "utf8"))),
           memoryBytes: Number(process.env.AIRLOCK_IT_BROWSER_MEMORY_BYTES ?? 1024 ** 3), pidsLimit: 256, shmBytes: 256 * 1024 ** 2, tmpBytes: 512 * 1024 ** 2, cpus: 1,
-          egressMemoryBytes: 128 * 1024 ** 2, egressPidsLimit: 64, egressCpus: 0.5, attemptTimeoutMs: 10 * 60_000, mutationOrigins: [] as string[],
+          egressMemoryBytes: 128 * 1024 ** 2, egressPidsLimit: 64, egressCpus: 0.5, attemptTimeoutMs: 10 * 60_000, mutationOrigins: [] as string[], egressResolvers: [] as string[],
         },
       };
       const journal = new Journal(config.journalPath);

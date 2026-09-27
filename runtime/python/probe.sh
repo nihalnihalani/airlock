@@ -36,6 +36,10 @@ import urllib.request
 parser = argparse.ArgumentParser(add_help=False)
 parser.add_argument("--workspace-bytes", type=int, default=134217728)
 parser.add_argument("--shm-bytes", type=int, default=67108864)
+# Set by the supervisor only when the effective runtime it inspected boots a guest kernel (Kata):
+# the guest's /dev/shm is a guest tmpfs whose pages are guest RAM, bounded by the VM's memory limit,
+# and Kata mounts it without a size option. Measured on VX1 (guest 6.18.35): "tmpfs shm rw", no size.
+parser.add_argument("--guest-vm", action="store_true")
 parser.add_argument("--mountinfo", default="/proc/self/mountinfo")
 parser.add_argument("--only-mounts", action="store_true")
 ARGS, _unknown = parser.parse_known_args(sys.argv[1:])
@@ -236,7 +240,9 @@ def classify_mounts(lines, workspace_bytes):
                 problems.append("unexpected %s at %s" % (fstype, what))
             elif point == "/dev/shm":
                 size = _size_bytes(super_opts)
-                if size is None or size > ARGS.shm_bytes:
+                if size is None and ARGS.guest_vm:
+                    pass  # guest tmpfs inside the VM: bounded by the VM's memory limit, not by size=
+                elif size is None or size > ARGS.shm_bytes:
                     problems.append("/dev/shm not bounded to %d bytes: size=%s" % (ARGS.shm_bytes, size))
         else:
             parent = next((p for p in PSEUDO_CHILDREN if _under(point, p)), None)

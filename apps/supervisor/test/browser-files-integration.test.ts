@@ -77,6 +77,7 @@ async function withAttempt(
       memoryBytes: Number(process.env.AIRLOCK_IT_BROWSER_MEMORY_BYTES ?? 1024 ** 3), pidsLimit: 256, shmBytes: 256 * 1024 ** 2, tmpBytes: 512 * 1024 ** 2, cpus: 1,
       egressMemoryBytes: 128 * 1024 ** 2, egressPidsLimit: 64, egressCpus: 0.5, attemptTimeoutMs: 10 * 60_000,
       mutationOrigins,
+      egressResolvers: [] as string[],
     },
   };
   const journal = new Journal(config.journalPath);

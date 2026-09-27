@@ -57,12 +57,17 @@ export function parseProbeOutput(stdout: string, probedAt: string): IsolationPro
  * `workspaceBytes` is the size the owned workspace tmpfs must not exceed; the probe treats a larger
  * or unbounded tmpfs at /workspace or /candidate as a host-backed mount (REACHED).
  */
-export async function runProbe(api: DockerApi, container: string, workingDir: string, workspaceBytes: number, signal?: AbortSignal): Promise<IsolationProbe> {
+/**
+ * `guestVm`: the effective runtime inspected for this container boots its own guest kernel (Kata).
+ * Only then does the probe accept an unsized /dev/shm, which is guest RAM bounded by the VM's memory
+ * limit. Never derived from the container's own claims.
+ */
+export async function runProbe(api: DockerApi, container: string, workingDir: string, workspaceBytes: number, signal?: AbortSignal, guestVm = false): Promise<IsolationProbe> {
   const probedAt = new Date().toISOString();
   const outcome = await runExec(
     api,
     container,
-    { cmd: timedCommand(["/bin/bash", "--noprofile", "--norc", PROBE_PATH, "--workspace-bytes", String(workspaceBytes), "--shm-bytes", String(SHM_BYTES)], PROBE_TIMEOUT_SECONDS), user: SANDBOX_USER, workingDir },
+    { cmd: timedCommand(["/bin/bash", "--noprofile", "--norc", PROBE_PATH, "--workspace-bytes", String(workspaceBytes), "--shm-bytes", String(SHM_BYTES), ...(guestVm ? ["--guest-vm"] : [])], PROBE_TIMEOUT_SECONDS), user: SANDBOX_USER, workingDir },
     { timeoutMs: (PROBE_TIMEOUT_SECONDS + 7) * 1000, outputBytes: 16_384, ...(signal ? { signal } : {}) },
   );
   if (outcome.result.status !== "succeeded") return parseProbeOutput("", probedAt);

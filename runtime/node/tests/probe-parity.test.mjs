@@ -59,6 +59,22 @@ const VARIANTS = {
   badSize: BASE.replace("size=131072k,mode=755,uid", "size=12x,mode=755,uid"),
 };
 
+// Measured under Kata on the VX1 host (guest 6.18.35): /dev/shm is a guest tmpfs without size=.
+VARIANTS.kataVx1 = `73 46 0:35 / / ro,nodev,relatime master:22 - virtiofs none rw
+74 73 0:36 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw
+75 73 0:37 / /dev rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755
+76 75 0:38 / /dev/pts rw,nosuid,noexec,relatime - devpts devpts rw,gid=5,mode=620,ptmxmode=666
+77 73 0:21 / /sys ro,nosuid,nodev,noexec,relatime - sysfs sysfs rw
+78 77 0:26 / /sys/fs/cgroup ro,nosuid,nodev,noexec,relatime - cgroup2 cgroup2 rw,nsdelegate,memory_recursiveprot
+79 75 0:32 / /dev/mqueue rw,nosuid,nodev,noexec,relatime - mqueue mqueue rw
+80 75 0:34 / /dev/shm rw,relatime master:21 - tmpfs shm rw
+81 73 0:39 / /tmp rw,nosuid,nodev,noexec,relatime - tmpfs tmpfs rw,size=65536k
+83 73 0:40 / /workspace rw,relatime - virtiofs none rw
+84 73 0:33 /81f3e754-e68b0c7cb9120239-hostname /etc/hostname ro,relatime - virtiofs kataShared rw
+85 73 0:33 /81f3e754-11d3f9074a20c122-hosts /etc/hosts ro,relatime - virtiofs kataShared rw
+86 73 0:33 /81f3e754-2e9eb70638428f8b-resolv.conf /etc/resolv.conf ro,relatime - virtiofs kataShared rw
+`;
+
 function run(cmd, args) {
   const r = spawnSync(cmd, args, { encoding: "utf8", timeout: 30000 });
   const lines = r.stdout.trim().split("\n");
@@ -71,8 +87,8 @@ test("node probe.mjs classifies mounts identically to python probe.sh", () => {
     for (const [name, text] of Object.entries(VARIANTS)) {
       const file = join(dir, name);
       writeFileSync(file, text);
-      for (const [wb, shm] of [["134217728", "67108864"], ["1048576", "1024"]]) {
-        const args = ["--only-mounts", "--mountinfo", file, "--workspace-bytes", wb, "--shm-bytes", shm];
+      for (const [wb, shm, ...guest] of [["134217728", "67108864"], ["1048576", "1024"], ["134217728", "67108864", "--guest-vm"]]) {
+        const args = ["--only-mounts", "--mountinfo", file, "--workspace-bytes", wb, "--shm-bytes", shm, ...guest];
         const py = run("bash", [PY_PROBE, ...args]);
         const js = run(process.execPath, [NODE_PROBE, ...args]);
         assert.deepEqual(Object.keys(js.out), Object.keys(py.out), `${name}: key order`);

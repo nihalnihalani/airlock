@@ -11,13 +11,15 @@
  */
 
 import { connect, createServer, type Server, type Socket } from "node:net";
-import { lookup } from "node:dns/promises";
+import { Resolver as DnsResolver, lookup } from "node:dns/promises";
+import { isIP } from "node:net";
 import {
   PolicyError,
   resolveDestination,
   type DenyReason,
   type Destination,
   type EgressPolicy,
+  type ResolvedAddress,
   type Resolver,
 } from "./policy.ts";
 
@@ -58,6 +60,26 @@ export const systemResolver: Resolver = async (hostname) => {
   const entries = await lookup(hostname, { all: true, verbatim: true });
   return entries.map((entry) => ({ address: entry.address, family: entry.family === 6 ? 6 : 4 }));
 };
+
+/**
+ * A resolver that queries explicit upstream servers instead of the container's resolv.conf. Under
+ * Kata the guest cannot reach Docker's embedded DNS (127.0.0.11) on a user-defined network, so the
+ * supervisor passes the upstream servers (AIRLOCK_EGRESS_RESOLVERS). A and AAAA are both asked;
+ * every returned address is still validated before any connection (resolveDestination).
+ */
+export function upstreamResolver(servers: string[]): Resolver {
+  if (servers.length === 0 || servers.some((s) => isIP(s) === 0)) throw new Error("AIRLOCK_EGRESS_RESOLVERS must be a comma-separated list of IP addresses");
+  const dns = new DnsResolver({ timeout: 2_000, tries: 2 });
+  dns.setServers(servers);
+  return async (hostname) => {
+    const [v4, v6] = await Promise.allSettled([dns.resolve4(hostname), dns.resolve6(hostname)]);
+    const out: ResolvedAddress[] = [];
+    if (v4.status === "fulfilled") for (const address of v4.value) out.push({ address, family: 4 });
+    if (v6.status === "fulfilled") for (const address of v6.value) out.push({ address, family: 6 });
+    if (out.length === 0) throw v4.status === "rejected" ? v4.reason : new Error(`no addresses for ${hostname}`);
+    return out;
+  };
+}
 
 const systemDialer: Dialer = (destination) =>
   connect({ host: destination.address, port: destination.port, family: destination.family });

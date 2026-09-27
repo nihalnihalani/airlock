@@ -18,7 +18,7 @@ import { connect } from "node:net";
 import { pathToFileURL } from "node:url";
 
 const argv = process.argv.slice(2);
-const ARGS = { workspaceBytes: 134217728, shmBytes: 67108864, mountinfo: "/proc/self/mountinfo", onlyMounts: false };
+const ARGS = { workspaceBytes: 134217728, shmBytes: 67108864, mountinfo: "/proc/self/mountinfo", onlyMounts: false, guestVm: false };
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   if (a === "--workspace-bytes" && i + 1 < argv.length) {
@@ -40,6 +40,9 @@ for (let i = 0; i < argv.length; i++) {
   } else if (a === "--mountinfo" && i + 1 < argv.length) ARGS.mountinfo = argv[++i];
   else if (a.startsWith("--mountinfo=")) ARGS.mountinfo = a.slice(12);
   else if (a === "--only-mounts") ARGS.onlyMounts = true;
+  // Set by the supervisor only when the inspected runtime boots a guest kernel (Kata): the guest's
+  // /dev/shm is guest RAM, bounded by the VM's memory limit, and Kata mounts it without size=.
+  else if (a === "--guest-vm") ARGS.guestVm = true;
   // unknown arguments are ignored, like argparse.parse_known_args in probe.sh
 }
 
@@ -204,7 +207,8 @@ export function classifyMounts(lines, workspaceBytes) {
       else if (!DEV_CHILDREN[point].includes(fstype)) problems.push(`unexpected ${fstype} at ${what}`);
       else if (point === "/dev/shm") {
         const size = sizeBytes(superOpts);
-        if (size === null || size > ARGS.shmBytes) problems.push(`/dev/shm not bounded to ${ARGS.shmBytes} bytes: size=${pyStr(size)}`);
+        if (size === null && ARGS.guestVm) { /* guest tmpfs inside the VM: bounded by its memory limit */ }
+        else if (size === null || size > ARGS.shmBytes) problems.push(`/dev/shm not bounded to ${ARGS.shmBytes} bytes: size=${pyStr(size)}`);
       }
     } else {
       const parent = Object.keys(PSEUDO_CHILDREN).find((p) => under(point, p)) ?? null;

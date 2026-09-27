@@ -35,7 +35,7 @@ const PLANE: BrowserPlaneConfig = {
   egressMemoryBytes: 128 * 1024 ** 2,
   egressPidsLimit: 64,
   egressCpus: 0.5,
-  attemptTimeoutMs: 30 * 60_000, mutationOrigins: [] as string[],
+  attemptTimeoutMs: 30 * 60_000, mutationOrigins: [] as string[], egressResolvers: [] as string[],
 };
 
 const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");

@@ -84,7 +84,8 @@ if ! grep -q '^AIRLOCK_FORMS_SECRET=' "$SECRETS"; then
   (umask 077 && echo "AIRLOCK_FORMS_SECRET=$(openssl rand -hex 32)" >> "$SECRETS")
 fi
 chmod 0600 "$SECRETS"
-read_kv() { grep -E "^$2=" "$1" | head -n1 | cut -d= -f2- | tr -d '"'"'"' \r'; }
+# Value of KEY in an env file: an unquoted value ends at an inline " # comment"; quotes and spaces are stripped.
+read_kv() { grep -E "^$2=" "$1" | head -n1 | cut -d= -f2- | sed -e 's/[[:space:]]\{1,\}#.*$//' | tr -d '"'"'"' \r'; }
 SUPERVISOR_TOKEN="$(read_kv "$SECRETS" SUPERVISOR_TOKEN)"
 OPERATOR_PASSWORD="$(read_kv "$SECRETS" AIRLOCK_OPERATOR_PASSWORD)"
 JUDGE_PASSWORD="$(read_kv "$SECRETS" AIRLOCK_JUDGE_PASSWORD)"
@@ -99,9 +100,9 @@ if [[ "$DRIVER" == "vultr" && -z "$INFERENCE_KEY" ]]; then
 fi
 
 # --- 2. sync the tree ----------------------------------------------------------------------------------------------
-RSYNC_EXCLUDES=(--exclude node_modules --exclude data --exclude '.env' --exclude '.env.*' --exclude 'apps/web/dist' --exclude dist
+RSYNC_EXCLUDES=(--exclude node_modules --exclude /data --exclude '.env' --exclude '.env.*' --exclude 'apps/web/dist' --exclude dist
   --exclude research --exclude '.git' --exclude '.claude' --exclude '.omc' --exclude '__pycache__' --exclude '*.sqlite'
-  --exclude '.pytest_cache' --exclude '*.log' --exclude '.DS_Store')
+  --exclude '.pytest_cache' --exclude '*.log' --exclude '.DS_Store' --exclude 'videos' --exclude 'docs/demo' --exclude 'docs/assets')
 sync_tree() { # ip service-user
   log "rsync tree -> root@$1:/opt/airlock/app"
   "${SSH[@]}" "root@$1" "install -d -m 0755 /opt/airlock/app"
@@ -179,6 +180,7 @@ AIRLOCK_EGRESS_IMAGE=airlock-egress:dev
 AIRLOCK_EGRESS_IMAGE_ID=$EGRESS_IMAGE_ID
 AIRLOCK_BROWSER_SECCOMP=/opt/airlock/app/runtime/browser/seccomp/chromium.json
 AIRLOCK_BROWSER_MUTATION_ORIGINS='["https://forms.$PUBLIC_HOST"]'
+AIRLOCK_EGRESS_RESOLVERS=${AIRLOCK_EGRESS_RESOLVERS:-108.61.10.10,1.1.1.1}
 AIRLOCK_BROWSER_MEMORY_BYTES=${AIRLOCK_BROWSER_MEMORY_BYTES:-}
 AIRLOCK_BROWSER_PIDS=${AIRLOCK_BROWSER_PIDS:-}
 AIRLOCK_BROWSER_SHM_BYTES=${AIRLOCK_BROWSER_SHM_BYTES:-}

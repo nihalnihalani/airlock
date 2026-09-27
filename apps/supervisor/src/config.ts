@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 /**
  * Supervisor configuration, read once from the environment.
  *
@@ -110,6 +111,12 @@ export interface BrowserPlaneConfig {
    * destination. Passed to the runner, which refuses every other mutation (research/40 Stage 5).
    */
   mutationOrigins: string[];
+  /**
+   * Upstream DNS servers for the egress proxy (AIRLOCK_EGRESS_RESOLVERS, comma-separated IPs).
+   * Required under Kata: its guests cannot reach Docker's embedded DNS on a user-defined network.
+   * Empty: the proxy uses its resolv.conf (runc/runsc).
+   */
+  egressResolvers: string[];
 }
 
 export interface CapacityBudget {
@@ -394,9 +401,11 @@ function loadBrowserPlane(
   for (const value of Object.values(values)) if (typeof value === "string") return { ok: false, reason: value };
   const mutationOrigins = parseMutationOrigins(env.AIRLOCK_BROWSER_MUTATION_ORIGINS);
   if (typeof mutationOrigins === "string") return { ok: false, reason: mutationOrigins };
+  const egressResolvers = (env.AIRLOCK_EGRESS_RESOLVERS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  if (egressResolvers.length > 4 || egressResolvers.some((ip) => isIP(ip) === 0)) return { ok: false, reason: "AIRLOCK_EGRESS_RESOLVERS must be up to 4 comma-separated IP addresses." };
   return {
     ok: true,
-    value: { image, imageId, egressImage, egressImageId, seccompPath, seccompJson, ...(values as { [K in keyof typeof values]: number }), mutationOrigins },
+    value: { image, imageId, egressImage, egressImageId, seccompPath, seccompJson, ...(values as { [K in keyof typeof values]: number }), mutationOrigins, egressResolvers },
   };
 }
 

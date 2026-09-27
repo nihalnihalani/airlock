@@ -60,6 +60,7 @@ import {
   BROWSER_PROFILE_ID,
   BROWSER_USER,
   BROWSER_WORKDIR,
+  EGRESS_PORT,
   type EgressEvidence,
   type ExpectedContainer,
   type ParsedReply,
@@ -791,7 +792,7 @@ export class Supervisor {
               await fail("internal", `Materializing the pristine source tree failed (${materialized.result.status}): ${materialized.result.stderr.slice(0, 400)}`);
             }
           }
-          const probe = await runProbe(this.api, names.container, "/workspace", workspaceBytesOf(profile.caps), signal);
+          const probe = await runProbe(this.api, names.container, "/workspace", workspaceBytesOf(profile.caps), signal, provisioned?.inspection.runtime === "kata");
           this.log.debug("isolation probe", { attemptId: names.attemptId, container: names.container, allBlocked: probe.allBlocked, metadataEndpoint: probe.metadataEndpoint, dns: probe.dns, outboundTcp: probe.outboundTcp, dockerSocket: probe.dockerSocket, hostMounts: probe.hostMounts });
           if (!probe.allBlocked) {
             await fail("probe_failed", `Isolation probe not fully BLOCKED (${probeSummary(probe)}); sandbox destroyed and run refused.`, probe);
@@ -1565,6 +1566,15 @@ export class Supervisor {
       await this.api.connectNetwork(expected.internal.name, expected.egress.name);
       await this.api.startContainer(expected.egress.name);
       await this.waitEgressListening(expected.egress.name, allow);
+      // The browser reaches the proxy by its address on the internal network, not by container name:
+      // under Kata the guest cannot reach Docker's embedded DNS (127.0.0.11), so names do not
+      // resolve there (measured on VX1). The address comes from the supervisor's own inspection.
+      const egressDetail = await this.api.inspectContainer(expected.egress.name);
+      const egressIp = (egressDetail?.networks?.[expected.internal.name] as { IPAddress?: unknown } | undefined)?.IPAddress;
+      if (typeof egressIp !== "string" || !/^(10|172|192)\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(egressIp)) {
+        throw new BrowserRefused("inspection_failed", `The egress proxy has no private IPv4 address on ${expected.internal.name}; refusing to start the browser.`);
+      }
+      expected.browser.airlockEnv.AIRLOCK_PROXY = `http://${egressIp}:${EGRESS_PORT}`;
       await this.api.createContainer(containerCreateSpec(expected.browser));
       await this.api.startContainer(expected.browser.name);
       await this.waitBrowserHealthy(expected.browser.name);

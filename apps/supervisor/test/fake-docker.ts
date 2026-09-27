@@ -329,7 +329,7 @@ export class FakeDocker implements DockerApi {
         ...(s.hostConfig.shmSize !== undefined ? { ShmSize: s.hostConfig.shmSize } : {}),
       },
       mounts: s.hostConfig.mounts.map((m) => ({ type: "volume", name: m.source, source: "", destination: m.target, rw: !m.readOnly })),
-      networks: s.hostConfig.networkMode === "none" ? { none: {} } : Object.fromEntries([...c.networks].map((n) => [n, {}])),
+      networks: s.hostConfig.networkMode === "none" ? { none: {} } : Object.fromEntries([...c.networks].map((n, i) => [n, { IPAddress: `172.30.${[...this.networks.keys()].indexOf(n) + 1}.${i + 2}` }])),
     };
     return this.tamper ? this.tamper(detail) : detail;
   }

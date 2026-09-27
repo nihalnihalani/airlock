@@ -44,7 +44,7 @@ const PLANE: BrowserPlaneConfig = {
   egressMemoryBytes: 128 * 1024 ** 2,
   egressPidsLimit: 64,
   egressCpus: 0.5,
-  attemptTimeoutMs: 30 * 60_000, mutationOrigins: [] as string[],
+  attemptTimeoutMs: 30 * 60_000, mutationOrigins: [] as string[], egressResolvers: [] as string[],
 };
 
 function make(docker: FakeDocker, options: { journal?: Journal; dir?: string; capacity?: Partial<ReturnType<typeof testConfig>["capacity"]>; browser?: BrowserPlaneConfig | undefined } = {}) {
@@ -120,7 +120,8 @@ describe("browser attempt creation", () => {
     expect(browser.hostConfig.shmSize).toBe(PLANE.shmBytes);
     expect(browser.hostConfig.tmpfs["/tmp"]).toContain(`size=${PLANE.tmpBytes}`);
     expect(browser.hostConfig.tmpfs["/run/airlock"]).toContain("mode=0700,uid=1001");
-    expect(browser.env).toEqual([`AIRLOCK_PROXY=http://${EGRESS}:3128`, "AIRLOCK_BROWSER_MUTATION_ORIGINS=[]"]);
+    // The proxy is addressed by the IP the supervisor inspected on the internal network (Kata guests cannot resolve container names).
+    expect(browser.env).toEqual([expect.stringMatching(/^AIRLOCK_PROXY=http:\/\/172\.30\.\d+\.\d+:3128$/), "AIRLOCK_BROWSER_MUTATION_ORIGINS=[]"]);
     expect([...docker.containers.get(BROWSER)!.networks]).toEqual([BNET]);
     const egress = docker.containers.get(EGRESS)!.spec;
     expect(egress.hostConfig.securityOpt).toEqual(["no-new-privileges"]);

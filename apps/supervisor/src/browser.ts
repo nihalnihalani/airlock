@@ -134,6 +134,7 @@ export function expectedPair(
         AIRLOCK_EGRESS_ALLOW: JSON.stringify(allow),
         AIRLOCK_EGRESS_PORTS: EGRESS_PORTS_JSON,
         AIRLOCK_EGRESS_LISTEN: `0.0.0.0:${EGRESS_PORT}`,
+        ...(plane.egressResolvers.length > 0 ? { AIRLOCK_EGRESS_RESOLVERS: plane.egressResolvers.join(",") } : {}),
       },
       networkMode: names.egressNetwork,
       networks: [names.egressNetwork, names.internalNetwork].sort(),
