@@ -1,0 +1,17 @@
+{
+  "_comment": "SLOW fixture: a scripted model driver that starts a long sandbox command so a cancellation can arrive while a command is executing. Used by scripts/smoke.ts to prove that cancel has an execution effect (CLAUDE.md section 3 invariant 5). Never submits.",
+  "turns": [
+    {
+      "text": "Starting a long-running command in the sandbox.",
+      "toolCalls": [{ "name": "run", "args": { "command": "sleep 25; echo done" } }]
+    },
+    {
+      "text": "Still working.",
+      "toolCalls": [{ "name": "run", "args": { "command": "sleep 25; echo done" } }]
+    },
+    {
+      "text": "Still working.",
+      "toolCalls": [{ "name": "run", "args": { "command": "sleep 25; echo done" } }]
+    }
+  ]
+}

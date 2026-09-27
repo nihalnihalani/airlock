@@ -8,9 +8,9 @@ import { createScriptedDriver } from "../src/vultr-client.ts";
 const fixtures = new URL("./fixtures/scripted/", import.meta.url).pathname;
 
 describe("scripted catalog", () => {
-  test("directory lists both fixtures; contentFile is inlined; a fresh driver replays per task", async () => {
+  test("directory lists the fixtures; contentFile is inlined; a fresh driver replays per task", async () => {
     const catalog = await openScriptedCatalog(fixtures);
-    expect(catalog.names).toEqual(["diagnostic", "forged-log"]);
+    expect(catalog.names).toEqual(["diagnostic", "forged-log", "slow"]);
     const diagnostic = await catalog.load("diagnostic");
     const write = diagnostic.turns.flatMap((t) => t.toolCalls ?? []).find((c) => c.name === "write_file");
     const args = write?.args as { path: string; content?: string; contentFile?: string };
