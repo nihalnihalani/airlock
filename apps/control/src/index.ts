@@ -6,19 +6,22 @@
 import { join } from "node:path";
 import type { Task } from "@airlock/contracts";
 import { createApp } from "./api.ts";
+import { RepairAvailabilityService, describeDiagnostics, type DiagnosticScript } from "./availability.ts";
 import { ArtifactStore, buildManifest, exportBundle, validateEnvelope, zipFiles } from "./artifacts/index.ts";
-import { loadConfig, redactConfig, ConfigError } from "./config.ts";
+import { inferenceFetch, loadConfig, redactConfig, ConfigError } from "./config.ts";
 import { TaskEventBus } from "./events.ts";
 import { log } from "./log.ts";
 import { loadProfilesReport } from "./profiles.ts";
 import { createRepairHandler, type DriverSource } from "./repair-handler.ts";
-import { openScriptedCatalog } from "./scripted.ts";
+import { openScriptedCatalog, type ScriptedCatalog } from "./scripted.ts";
 import { SessionService } from "./sessions.ts";
 import { createStore } from "./store/index.ts";
 import { HttpSupervisorClient } from "./supervisor-client.ts";
 import { compare } from "./verifier/index.ts";
-import { createScriptedDriver, createVultrDriver } from "./vultr-client.ts";
+import { createScriptedDriver, createVultrDriver, type ModelDriver } from "./vultr-client.ts";
 import { TaskWorker, backgroundFailure } from "./worker/index.ts";
+
+const WORKER_LEASE_MS = 60_000;
 
 async function main() {
   let config;
@@ -46,27 +49,50 @@ async function main() {
   const supervisor = new HttpSupervisorClient({ baseUrl: config.supervisorUrl, token: config.supervisorToken });
   try {
     const health = await supervisor.health();
-    log.info("supervisor reachable", { url: config.supervisorUrl, status: health.status, docker: health.docker, runtime: health.host.selectedRuntime, devUnsafe: health.host.devUnsafe });
-    if (health.host.devUnsafe) log.warn("supervisor reports devUnsafe=true (plain runc): local development only, never a deployment");
+    const host = await supervisor.host();
+    log.info("supervisor reachable", { url: config.supervisorUrl, ok: health.ok, runtime: host.selectedRuntime, devUnsafe: host.devUnsafe, instanceId: host.instanceId ?? null });
+    if (host.devUnsafe) log.warn("supervisor reports devUnsafe=true (plain runc): local development only, never a deployment");
   } catch (error) {
     log.warn("supervisor not reachable at start; tasks will fail until it is", { url: config.supervisorUrl, error });
   }
 
-  // One driver per task run: the scripted driver replays from its first turn for every task, and
-  // a task may name its script when the catalog is a directory. The live driver is stateless.
-  let driver: DriverSource;
-  let scriptedDrivers: string[] | null = null;
-  if (config.driver.kind === "vultr") {
-    driver = createVultrDriver({ apiKey: config.vultr.apiKey ?? "", baseUrl: config.vultr.baseUrl, model: config.vultr.model });
-  } else {
-    const catalog = await openScriptedCatalog(config.driver.scriptPath);
-    scriptedDrivers = catalog.names;
-    driver = async (task: Task) => {
+  // The driver is chosen per task: a task that names a script (a labelled diagnostic) runs that
+  // script from its first turn, whatever the configured driver; every other task runs the
+  // configured driver. The live driver is stateless and never follows a redirect.
+  const liveDriver: ModelDriver | null =
+    config.driver.kind === "vultr"
+      ? createVultrDriver({ apiKey: config.vultr.apiKey ?? "", baseUrl: config.vultr.baseUrl, model: config.vultr.model, fetch: inferenceFetch(config.vultr.baseUrl) })
+      : null;
+  const driverCatalog: ScriptedCatalog | null = config.driver.kind === "scripted" ? await openScriptedCatalog(config.driver.scriptPath) : null;
+  const diagnosticCatalog: ScriptedCatalog | null = config.diagnosticScriptsDir ? await openScriptedCatalog(config.diagnosticScriptsDir) : null;
+  const catalogFor = (name: string): ScriptedCatalog | null =>
+    diagnosticCatalog?.names.includes(name) ? diagnosticCatalog : driverCatalog?.names.includes(name) ? driverCatalog : null;
+  const scriptedDrivers = [...new Set([...(diagnosticCatalog?.names ?? []), ...(driverCatalog?.names ?? [])])].sort();
+  const diagnostics: DiagnosticScript[] = [
+    ...(diagnosticCatalog ? await describeDiagnostics(diagnosticCatalog.path, diagnosticCatalog.names) : []),
+    ...(driverCatalog ? await describeDiagnostics(driverCatalog.path, driverCatalog.names.filter((n) => !diagnosticCatalog?.names.includes(n))) : []),
+  ].sort((a, b) => a.name.localeCompare(b.name));
+  const defaultScriptedDriver = driverCatalog ? (driverCatalog.names.length === 1 ? driverCatalog.names[0]! : driverCatalog.names.includes("default") ? "default" : null) : null;
+  const driver: DriverSource = async (task: Task) => {
+    if (task.scriptedDriver !== undefined) {
+      const catalog = catalogFor(task.scriptedDriver);
+      if (!catalog) throw new Error(`diagnostic script "${task.scriptedDriver}" is not available on this control plane`);
       const script = await catalog.load(task.scriptedDriver);
       return createScriptedDriver(script.turns, { name: script.name });
-    };
-    log.warn("model driver is SCRIPTED: diagnostics only, not a live repair", { scriptPath: config.driver.scriptPath, scripts: catalog.names });
-  }
+    }
+    if (liveDriver) return liveDriver;
+    const script = await driverCatalog!.load();
+    return createScriptedDriver(script.turns, { name: script.name });
+  };
+  if (driverCatalog) log.warn("model driver is SCRIPTED: diagnostics only, not a live repair", { scriptPath: driverCatalog.path, scripts: driverCatalog.names });
+  if (diagnosticCatalog) log.info("diagnostic scripts available to operators and judges (labelled, never a model repair)", { dir: diagnosticCatalog.path, scripts: diagnosticCatalog.names });
+  const availability = new RepairAvailabilityService({
+    driver: config.driver.kind,
+    model: config.driver.kind === "vultr" ? config.vultr.model : null,
+    evidenceDir: config.liveGateEvidenceDir,
+    repoRoot: config.repoRoot,
+    controlInstanceId: config.instanceId,
+  });
 
   const bus = new TaskEventBus();
   const handler = createRepairHandler({
@@ -79,10 +105,13 @@ async function main() {
     validateEnvelope,
     buildManifest,
     runtimeDir: config.runtimeDir,
+    // Execution authorization renewed while the worker lease is held (M1): two heartbeats of a
+    // 60 s lease, never past the attempt deadline.
+    authorizationMs: Math.round((WORKER_LEASE_MS * 2) / 3),
     maxTokens: config.modelMaxTokens,
     ...(config.modelReasoningEffort ? { reasoningEffort: config.modelReasoningEffort } : {}),
   });
-  const worker = new TaskWorker(store, handler, { bus, leaseMs: 60_000, pollMs: 1000, concurrency: 2 });
+  const worker = new TaskWorker(store, handler, { bus, leaseMs: WORKER_LEASE_MS, pollMs: 1000, concurrency: 2 });
   const sessions = new SessionService(store, {
     operatorPassword: config.operatorPassword,
     judgePassword: config.judgePassword,
@@ -101,8 +130,13 @@ async function main() {
     zipFiles,
     exportGrantTtlMs: config.exportGrantTtlMs,
     hostileMinIntervalMs: config.hostileMinIntervalMs,
+    hostileGlobalMinIntervalMs: config.hostileGlobalMinIntervalMs,
     previewMinIntervalMs: config.previewMinIntervalMs,
-    scriptedDrivers,
+    runtimeDir: config.runtimeDir,
+    scriptedDrivers: scriptedDrivers.length ? scriptedDrivers : null,
+    diagnostics,
+    defaultScriptedDriver,
+    availability,
     webDist: config.webDist,
     trustedProxies: config.trustedProxies,
   });

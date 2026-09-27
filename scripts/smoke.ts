@@ -7,15 +7,19 @@
  *   bun scripts/smoke.ts
  *
  * Env: AIRLOCK_CONTROL_URL (default http://127.0.0.1:3000), SUPERVISOR_URL (default
- * http://127.0.0.1:4300), SUPERVISOR_TOKEN and AIRLOCK_OPERATOR_PASSWORD (default: read from
- * data/dev.env), DOCKER_HOST (default: Colima socket).
+ * http://127.0.0.1:4300), SUPERVISOR_TOKEN, AIRLOCK_OPERATOR_PASSWORD and AIRLOCK_JUDGE_PASSWORD
+ * (default: read from data/dev.env), DOCKER_HOST (default: Colima socket).
  *
  * What it proves, in order:
  *   1. diagnostic scripted repair → CANDIDATE_PASSED_CHECKS; the five checkpoints are present
  *   2. preview on the sealed candidate renders the header-only table for the reported input
  *   3. export zip carries patch.diff that applies cleanly to profiles/tabulate-365/base
- *   4. hostile `rm -rf / --no-preserve-root` dies inside its sandbox; the host survives; teardown clean
- *   5. forged-log scripted "repair" (unchanged code, forged success log) → CHECKS_FAILED
+ *   0. public surface: /api/health, security headers, repair availability (scripted → unavailable),
+ *      /api/host needs a session, the diagnostics catalog
+ *   4. hostile (judge only) `rm -rf / --no-preserve-root` dies inside its sandbox; the host and the
+ *      control plane survive; teardown clean
+ *   5. forged-log scripted "repair" (allowed file written unchanged in behaviour, a "312 passed" log
+ *      printed) → CHECKS_FAILED by the external comparator
  *   6. fork bomb in a hostile sandbox while task 3's command runs (task 3 unaffected, supervisor healthy);
  *      then cancel mid-command → status cancelled; no owned attempt or container remains
  *
@@ -25,11 +29,13 @@
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { createHash } from "node:crypto";
 import {
   AttemptState,
   BlastRadiusCard,
   CaseContract,
   PreviewResult,
+  RepairAvailability,
   RunEvent,
   Task,
   TaskView,
@@ -39,7 +45,7 @@ import { z } from "zod";
 
 const ROOT = resolve(import.meta.dir, "..");
 const CONTROL = (process.env.AIRLOCK_CONTROL_URL ?? "http://127.0.0.1:3000").replace(/\/+$/, "");
-const SUPERVISOR = (process.env.SUPERVISOR_URL ?? "http://127.0.0.1:4300").replace(/\/+$/, "");
+
 const PROFILE = "tabulate-365";
 const TASK_TIMEOUT_MS = 6 * 60_000;
 
@@ -68,11 +74,22 @@ function devEnv(): Record<string, string> {
   } catch {
     // no dev.env; rely on the environment
   }
+  try {
+    // Written by dev-up.sh: the URLs and token the running stack uses after .env overrides.
+    for (const line of readFileSync(join(ROOT, "data/run/stack.env"), "utf8").split("\n")) {
+      const m = /^([A-Z_]+)=(.*)$/.exec(line.trim());
+      if (m) out[m[1]!] = m[2]!;
+    }
+  } catch {
+    // no running dev stack record
+  }
   return out;
 }
 const DEV = devEnv();
 const OPERATOR_PASSWORD = process.env.AIRLOCK_OPERATOR_PASSWORD ?? DEV.AIRLOCK_OPERATOR_PASSWORD ?? "";
+const JUDGE_PASSWORD = process.env.AIRLOCK_JUDGE_PASSWORD ?? DEV.AIRLOCK_JUDGE_PASSWORD ?? "";
 const SUPERVISOR_TOKEN = process.env.SUPERVISOR_TOKEN ?? DEV.SUPERVISOR_TOKEN ?? "";
+const SUPERVISOR = (process.env.SUPERVISOR_URL ?? DEV.SUPERVISOR_URL ?? "http://127.0.0.1:4300").replace(/\/+$/, "");
 const DOCKER_HOST = process.env.DOCKER_HOST ?? `unix://${process.env.HOME}/.colima/default/docker.sock`;
 
 let failures = 0;
@@ -90,11 +107,19 @@ function step(title: string) {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 let cookie = "";
-async function api<T>(schema: z.ZodType<T>, path: string, init: { method?: string; body?: unknown; raw?: boolean } = {}): Promise<T> {
+/** The hostile panel is judge-only: its calls carry this session instead. */
+let judgeCookie = "";
+async function login(password: string): Promise<string> {
+  const res = await fetch(`${CONTROL}/api/session`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password }) });
+  if (res.status !== 200) throw new Error(`POST /api/session → ${res.status}`);
+  return (res.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+}
+async function api<T>(schema: z.ZodType<T>, path: string, init: { method?: string; body?: unknown; raw?: boolean; as?: "judge" } = {}): Promise<T> {
+  const session = init.as === "judge" ? judgeCookie : cookie;
   const res = await fetch(`${CONTROL}${path}`, {
     method: init.method ?? "GET",
-    headers: { accept: "application/json", ...(init.body !== undefined ? { "content-type": "application/json" } : {}), ...(cookie ? { cookie } : {}) },
-    body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
+    headers: { accept: "application/json", ...(init.body !== undefined ? { "content-type": "application/json" } : {}), ...(session ? { cookie: session } : {}) },
+    body: init.body !== undefined ? JSON.stringify(init.body) : null,
   });
   const text = await res.text();
   if (!res.ok) throw new Error(`${init.method ?? "GET"} ${path} → ${res.status}: ${text.slice(0, 300)}`);
@@ -166,13 +191,33 @@ async function main() {
   const contract = CaseContract.parse(JSON.parse(readFileSync(join(ROOT, "profiles", PROFILE, "contract.json"), "utf8")));
   const reported = contract.cases.find((c) => c.kind === "reported")!;
 
-  step("login as operator");
+  step("public surface (signed out)");
+  const healthRes = await fetch(`${CONTROL}/api/health`);
+  ok(healthRes.status === 200 && JSON.stringify(await healthRes.json()) === JSON.stringify({ ok: true }), "GET /api/health → {ok:true} and nothing else");
+  const csp = healthRes.headers.get("content-security-policy") ?? "";
+  ok(csp.includes("script-src 'self'") && csp.includes("frame-ancestors 'none'"), `Content-Security-Policy on API responses (${csp.slice(0, 60)}…)`);
+  ok(healthRes.headers.get("x-content-type-options") === "nosniff" && healthRes.headers.get("referrer-policy") === "no-referrer", "nosniff and no-referrer on API responses");
+  const page = await fetch(`${CONTROL}/`);
+  if (page.status === 200) ok((page.headers.get("content-security-policy") ?? "") === csp, "the web UI is served under the same policy");
+  ok((await fetch(`${CONTROL}/api/host`)).status === 401, "GET /api/host without a session → 401");
+  const availability = await api(RepairAvailability, "/api/repair-availability");
+  console.log(`    repair availability: available=${availability.available} driver=${availability.driver} reason=${availability.reason}`);
+  ok(availability.driver !== "scripted" || (!availability.available && availability.reason.includes("diagnostics")), "a scripted driver never reports live repair as available");
+
+  step("login as operator and judge");
   ok(OPERATOR_PASSWORD, "operator password available (data/dev.env or AIRLOCK_OPERATOR_PASSWORD)");
-  const loginRes = await fetch(`${CONTROL}/api/session`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: OPERATOR_PASSWORD }) });
-  ok(loginRes.status === 200, `POST /api/session → ${loginRes.status}`);
-  cookie = (loginRes.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+  ok(JUDGE_PASSWORD, "judge password available (data/dev.env or AIRLOCK_JUDGE_PASSWORD)");
+  cookie = await login(OPERATOR_PASSWORD);
+  judgeCookie = await login(JUDGE_PASSWORD);
   const who = await api(z.object({ role: z.string() }), "/api/session");
   ok(who.role === "operator", `session role is operator (${who.role})`);
+  const judgeWho = await api(z.object({ role: z.string() }), "/api/session", { as: "judge" });
+  ok(judgeWho.role === "judge", `second session role is judge (${judgeWho.role})`);
+  const hostCheck = await fetch(`${CONTROL}/api/host`, { headers: { cookie } });
+  ok(hostCheck.status === 200, `GET /api/host with a session → ${hostCheck.status}`);
+  const diagnostics = await api(z.object({ scripts: z.array(z.object({ name: z.string(), title: z.string(), description: z.string() })) }), "/api/diagnostics");
+  const names = diagnostics.scripts.map((d) => d.name);
+  ok(["diagnostic", "forged-log", "slow"].every((n) => names.includes(n)), `diagnostics catalog offers ${names.join(", ")}`);
   const profiles = await api(z.array(z.object({ id: z.string(), referenceCommitMaintainerOnly: z.unknown().optional() })), "/api/profiles");
   ok(profiles.some((p) => p.id === PROFILE), `profile ${PROFILE} is offered`);
   ok(profiles.every((p) => p.referenceCommitMaintainerOnly === undefined), "maintainer reference commit is not exposed");
@@ -182,6 +227,7 @@ async function main() {
   const t1 = await runTask("diagnostic", "diagnostic");
   ok(t1.task.status === "done", `status done (${t1.task.status})`);
   ok(t1.task.outcome === ("CANDIDATE_PASSED_CHECKS" satisfies Outcome), `outcome CANDIDATE_PASSED_CHECKS (${t1.task.outcome})`);
+  ok(t1.task.scriptedDriver === "diagnostic", `task is labelled a diagnostic (scriptedDriver=${t1.task.scriptedDriver})`);
   ok(t1.view.baseline?.passed === true, "baseline record: reported failure reproduced");
   ok(t1.view.verification?.passed === true, `verification record: ${t1.view.verification?.completedCases}/${t1.view.verification?.requiredCases} cases`);
   ok(t1.view.cases?.length === contract.cases.length, `TaskView carries ${t1.view.cases?.length} contract case titles (seam 2)`);
@@ -223,10 +269,11 @@ async function main() {
 
   // ---- 3. export ----------------------------------------------------------------------------------
   step("export bundle");
-  const grant = await api(z.object({ grantId: z.string(), url: z.string(), expiresAt: z.string() }), `/api/tasks/${t1.task.id}/export`, { method: "POST", body: {} });
+  const grant = await api(z.object({ grantId: z.string(), url: z.string(), expiresAt: z.string(), zipDigest: z.string().regex(/^[a-f0-9]{64}$/) }), `/api/tasks/${t1.task.id}/export`, { method: "POST", body: {} });
   const zipRes = await fetch(`${CONTROL}${grant.url}`, { headers: { cookie } });
   ok(zipRes.status === 200 && (zipRes.headers.get("content-type") ?? "").includes("zip"), `GET ${grant.url} → ${zipRes.status} ${zipRes.headers.get("content-type")}`);
   const zipBytes = new Uint8Array(await zipRes.arrayBuffer());
+  ok(createHash("sha256").update(zipBytes).digest("hex") === grant.zipDigest && zipRes.headers.get("x-airlock-zip-sha256") === grant.zipDigest, "downloaded zip hashes to the grant's zipDigest");
   const work = mkdtempSync(join(tmpdir(), "airlock-smoke-"));
   writeFileSync(join(work, "export.zip"), zipBytes);
   const unzip = Bun.spawnSync(["unzip", "-o", "-q", "export.zip", "-d", "x"], { cwd: work });
@@ -240,8 +287,10 @@ async function main() {
   ok(again.grantId === grant.grantId, "repeated export returns the same grant");
 
   // ---- 4. hostile ---------------------------------------------------------------------------------
-  step("hostile panel: rm -rf / --no-preserve-root");
-  const card = await api(BlastRadiusCard, "/api/hostile", { method: "POST", body: { command: "rm -rf / --no-preserve-root" } });
+  step("hostile panel (judge): rm -rf / --no-preserve-root");
+  const asOperator = await fetch(`${CONTROL}/api/hostile`, { method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify({ command: "true" }) });
+  ok(asOperator.status === 403, `the operator role cannot run the hostile panel (${asOperator.status})`);
+  const card = await api(BlastRadiusCard, "/api/hostile", { method: "POST", body: { command: "rm -rf / --no-preserve-root" }, as: "judge" });
   const lastHostileAt = Date.now();
   console.log(`    died:     container=${card.died.container} runtime=${card.died.runtime} reason=${card.died.reason}`);
   console.log(`    exec:     ${card.exec.status} exit=${card.exec.exitCode} ${card.exec.durationMs}ms stderr(tail)=${JSON.stringify(card.exec.stderr.slice(-160))}`);
@@ -249,17 +298,25 @@ async function main() {
   ok(card.died.container.length > 0 && card.died.reason.length > 0, "died: the sandbox is named and its end is explained");
   ok(card.survived.supervisorHealthy && card.survived.hostSentinelUnchanged, "survived: supervisor healthy and host sentinel unchanged");
   ok(card.teardown.clean && card.teardown.containersRemaining.length === 0, "teardown clean: (no sandboxes)");
-  const health = await fetch(`${CONTROL}/api/host`);
+  const cp = card.survived.controlPlane;
+  console.log(`    control plane: healthyBefore=${cp?.healthyBefore} healthyAfter=${cp?.healthyAfter}`);
+  ok(cp?.healthyBefore === true && cp.healthyAfter === true, "survived: control plane healthy before and after (store + worker heartbeat)");
+  const relogin = await fetch(`${CONTROL}/api/hostile`, { method: "POST", headers: { "content-type": "application/json", cookie: await login(JUDGE_PASSWORD) }, body: JSON.stringify({ command: "true" }) });
+  ok(relogin.status === 429, `a fresh judge login from the same client is still rate limited (${relogin.status})`);
+  const health = await fetch(`${CONTROL}/api/health`);
   ok(health.status === 200, `control plane still answers after the hostile run (${health.status})`);
 
   // ---- 5. forged log ----------------------------------------------------------------------------
-  step("task 2: forged-log scripted 'repair' → CHECKS_FAILED");
-  const t2 = await runTask("forged-log", "forged log, unchanged code");
+  step("task 2: forged-log scripted 'repair' → CHECKS_FAILED by the comparator");
+  const t2 = await runTask("forged-log", "forged log, behaviour unchanged");
   ok(t2.task.status === "done", `status done (${t2.task.status})`);
   ok(t2.task.outcome === "CHECKS_FAILED", `outcome CHECKS_FAILED (${t2.task.outcome})`);
+  ok(!!t2.task.candidateDigest && t2.view.verification?.candidateDigest === t2.task.candidateDigest, "a candidate was sealed and externally verified (the write was accepted, not refused)");
   ok(t2.view.verification?.passed === false, "verification record: not passed");
-  const forgedRefused = t2.events.find((e) => e.kind === "tool" && e.title === "write_file refused");
-  ok(forgedRefused, "the forged tests-passed.log write was refused (not an allowed replacement path)");
+  const failedCases = (t2.view.verification?.cases ?? []).filter((cs) => !cs.passed);
+  ok(failedCases.some((cs) => cs.caseId === reported.id), `the comparator failed the reported case (${failedCases.map((cs) => cs.caseId).join(", ")})`);
+  const claimed = t2.events.some((e) => e.kind === "exec" && /312 passed/.test(JSON.stringify(e.data ?? {})));
+  console.log(`    in-sandbox "312 passed" claim observed in the run log: ${claimed} (carries no authority)`);
   const t2Preview = await fetch(`${CONTROL}/api/tasks/${t2.task.id}/preview`, { method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify({ candidateDigest: t2.task.candidateDigest, input: reported.input }) });
   ok(t2Preview.status === 409, `preview on a failed candidate is refused (${t2Preview.status})`);
 
@@ -273,10 +330,10 @@ async function main() {
     runsSeen++;
     if (runsSeen === 1) {
       await sleep(1500); // the run has been dispatched into the sandbox by now
-      // /api/hostile is limited to one run per 10 s per session; task 3's command runs for 25 s.
+      // /api/hostile is limited to one run per 10 s per client; task 3's command runs for 25 s.
       await sleep(Math.max(0, 10_500 - (Date.now() - lastHostileAt)));
       // CLAUDE.md §4: one task over its limits is terminated while another task and the control plane stay healthy.
-      bomb = await api(BlastRadiusCard, "/api/hostile", { method: "POST", body: { command: ":(){ :|:& };:; sleep 3; echo alive" } });
+      bomb = await api(BlastRadiusCard, "/api/hostile", { method: "POST", body: { command: ":(){ :|:& };:; sleep 3; echo alive" }, as: "judge" });
       console.log(`    fork bomb: exec ${bomb.exec.status} exit=${bomb.exec.exitCode}; survived: supervisorHealthy=${bomb.survived.supervisorHealthy} otherAttemptsRunning=${bomb.survived.otherAttemptsRunning}; teardown clean=${bomb.teardown.clean}`);
     } else if (runsSeen === 2 && !cancelled) {
       await sleep(1500);

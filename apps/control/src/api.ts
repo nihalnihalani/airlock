@@ -1,8 +1,10 @@
 /**
  * Control API (web → control). Cookie sessions, role checks on every route, SSE with
- * Last-Event-ID replay from the store, preview/export bound to the sealed candidate digest, and
- * the judge-only hostile panel. Errors are JSON `{error}`. `referenceCommitMaintainerOnly` never
- * leaves this process.
+ * Last-Event-ID replay from the store, preview/export bound to the sealed candidate digest and to
+ * the runtime image, adapter and contract it was verified under, repair availability from
+ * committed live-gate evidence, and the judge-only hostile panel. Errors are JSON `{error}`.
+ * `referenceCommitMaintainerOnly` never leaves this process. Every response carries a
+ * Content-Security-Policy and nosniff/no-referrer headers.
  *
  * Task-route foundations follow OpenMuse `apps/server/src/engine/routes.ts` (MIT,
  * 205cc386b75aae1a862f3fdd43104b570c8d0911) in shape only; the routes, roles and ownership checks
@@ -19,11 +21,13 @@ import {
   canonicalJson,
   sha256,
   type AdapterRequest,
+  type BlastRadiusCard,
   type CandidateBundle,
   type ExportGrant,
   type ExportSeal,
   type HostCheck,
   type ProfileManifest,
+  type RepairAvailability,
   type Role,
   type RunEvent,
   type SourceManifest,
@@ -31,14 +35,15 @@ import {
   type TaskView,
   type VerificationRecord,
 } from "@airlock/contracts";
+import type { AvailabilityService, DiagnosticScript } from "./availability.ts";
 import type { TaskEventBus } from "./events.ts";
 import { log } from "./log.ts";
 import type { LoadedProfile } from "./profiles.ts";
 import { ExportIntegrityError } from "./artifacts/index.ts";
-import { ARTIFACT_KIND_BUNDLE, STORE_KIND_VERIFICATIONS, type ArtifactStoreLike } from "./repair-handler.ts";
+import { ARTIFACT_KIND_BUNDLE, STORE_KIND_VERIFICATIONS, computeAdapterDigest, type ArtifactStoreLike } from "./repair-handler.ts";
 import { LoginRateLimited, SESSION_COOKIE, readCookie, type SessionRecord, type SessionService } from "./sessions.ts";
 import type { Store } from "./store/index.ts";
-import { SupervisorError, SupervisorFenceError, SupervisorUnavailableError, type SupervisorClient } from "./supervisor-client.ts";
+import { SupervisorCapacityError, SupervisorError, SupervisorFenceError, SupervisorUnavailableError, type SupervisorClient } from "./supervisor-client.ts";
 import type { TaskWorker } from "./worker/index.ts";
 
 export class AppError extends Error {
@@ -68,16 +73,30 @@ export interface ApiDeps {
   profiles: Map<string, LoadedProfile>;
   supervisor: SupervisorClient;
   artifacts: ArtifactStoreLike;
-  worker: Pick<TaskWorker, "abort">;
+  /** `abort` for cancel; `running` (when present) makes the worker's heartbeat part of control-plane health. */
+  worker: Pick<TaskWorker, "abort"> & Partial<Pick<TaskWorker, "running">>;
   bus: TaskEventBus;
   exportBundle: ExportBundleFn;
   zipFiles: ZipFilesFn;
   exportGrantTtlMs: number;
+  /** Minimum interval between hostile runs per client key (not per session: a re-login is the same client). */
   hostileMinIntervalMs: number;
-  /** Per-session minimum interval between preview invocations (each one is a sandbox run on VM B). */
+  /** Minimum interval between any two hostile runs, from any client (default 3 s). */
+  hostileGlobalMinIntervalMs?: number;
+  /** Minimum interval between preview invocations per session and per client key (each one is a sandbox run on VM B). */
   previewMinIntervalMs?: number;
-  /** Names a task may select with `scriptedDriver`; null (default) when the live driver is configured. */
+  /** Directory holding runtime/python/adapter.py: preview/export recompute the adapter digest from it. */
+  runtimeDir: string;
+  /** Names a task may select with `scriptedDriver` (labelled diagnostics); null/absent: none. */
   scriptedDrivers?: string[] | null;
+  /** Title/description of each launchable diagnostic script, for `GET /api/diagnostics`. */
+  diagnostics?: DiagnosticScript[] | null;
+  /** Scripted-driver mode: the script a task runs when it names none (recorded on the task as its label). */
+  defaultScriptedDriver?: string | null;
+  /** Live repair evidence gate; absent: tasks are created without a repair-availability check. */
+  availability?: AvailabilityService;
+  /** The worker heartbeat record older than this marks the control plane unhealthy (default 15 s). */
+  workerStaleMs?: number;
   /** Built web UI directory served for every non-/api GET (SPA fallback to index.html). */
   webDist?: string | null;
   /**
@@ -100,6 +119,14 @@ export const STORE_KIND_GRANTS = "export-grants";
 /** Artifact-store kind of the sealed export records (ExportSeal); the zip bytes are a blob. */
 export const ARTIFACT_KIND_EXPORT = "export";
 const MAX_JSON_BODY = 256 * 1024;
+/**
+ * The built UI needs no inline script; Radix injects a <style> element at runtime (scroll lock),
+ * so styles alone allow 'unsafe-inline'. Everything else is same-origin only.
+ */
+export const CONTENT_SECURITY_POLICY = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; font-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
+const DRIFT_REFUSAL = "configuration changed since verification";
+/** Worker heartbeat record (written by TaskWorker.tick on every poll). */
+const WORKER_STATUS = { owner: "system", kind: "worker-status", id: "tasks" } as const;
 const TERMINAL = new Set<Task["status"]>(["cancelled", "done", "failed"]);
 
 export function createApp(deps: ApiDeps) {
@@ -107,6 +134,9 @@ export function createApp(deps: ApiDeps) {
   const iso = () => new Date(now()).toISOString();
   const app = new Hono<Env>();
   const hostileLast = new Map<string, number>();
+  let hostileGlobalLast = 0;
+  let hostileInFlight = false;
+  const hostileGlobalMinIntervalMs = deps.hostileGlobalMinIntervalMs ?? 3000;
   const previewLast = new Map<string, number>();
   const previewMinIntervalMs = deps.previewMinIntervalMs ?? 2000;
 
@@ -119,6 +149,7 @@ export function createApp(deps: ApiDeps) {
       return c.json({ error: `sealed candidate no longer matches its manifest; export refused (${error.message.slice(0, 200)})` }, 409);
     }
     if (error instanceof SupervisorUnavailableError) return c.json({ error: "supervisor unavailable" }, 503);
+    if (error instanceof SupervisorCapacityError) return c.json({ error: "execution host at capacity; try again shortly" }, 429);
     if (error instanceof SupervisorFenceError) return c.json({ error: error.message.slice(0, 300) }, 409);
     if (error instanceof SupervisorError) return c.json({ error: error.message.slice(0, 300) }, 502);
     log.error("request failed", { method: c.req.method, path: c.req.path, error: error instanceof Error ? error : "request failed" });
@@ -139,6 +170,7 @@ export function createApp(deps: ApiDeps) {
     try {
       await next();
     } finally {
+      setSecurityHeaders(c);
       if (log.enabled("debug")) {
         const requestBytes = Number(c.req.header("content-length") ?? "0") || 0;
         const responseBytes = Number(c.res.headers.get("content-length") ?? "0") || 0;
@@ -250,7 +282,24 @@ export function createApp(deps: ApiDeps) {
 
   // ---- profiles, host ---------------------------------------------------------------------------
   app.get("/api/profiles", (c) => c.json([...deps.profiles.values()].map((p) => publicManifest(p.manifest))));
-  app.get("/api/host", async (c) => c.json(await deps.supervisor.host()));
+  // Liveness only: no host facts, no task data.
+  app.get("/api/health", (c) => c.json({ ok: true }));
+  app.get("/api/host", async (c) => {
+    requireRole(c, "operator", "judge");
+    return c.json(await deps.supervisor.host());
+  });
+  // No task data: whether live repair is currently backed by evidence, and why not.
+  app.get("/api/repair-availability", async (c) => {
+    const requested = c.req.query("profileId");
+    const profile = requested ? deps.profiles.get(requested) : [...deps.profiles.values()][0];
+    if (!profile) throw new AppError("no such profile", 404);
+    return c.json(await repairAvailability(profile));
+  });
+  app.get("/api/diagnostics", (c) => {
+    requireRole(c, "operator", "judge");
+    const scripts = deps.diagnostics ?? (deps.scriptedDrivers ?? []).map((name) => ({ name, title: name, description: "" }));
+    return c.json({ scripts: scripts.filter((s) => (deps.scriptedDrivers ?? []).includes(s.name)) });
+  });
 
   // ---- tasks ----------------------------------------------------------------------------------------
   app.post("/api/tasks", async (c) => {
@@ -258,8 +307,21 @@ export function createApp(deps: ApiDeps) {
     const body = await readJson(c, CreateTaskRequest);
     if (!deps.profiles.has(body.profileId)) throw new AppError(`profile "${body.profileId}" is not supported`, 422);
     if (body.scriptedDriver !== undefined) {
-      if (!deps.scriptedDrivers) throw new AppError("scriptedDriver is only accepted when the control plane runs a scripted model driver", 422);
+      if (!deps.scriptedDrivers || deps.scriptedDrivers.length === 0) throw new AppError("scriptedDriver is only accepted when the control plane has a diagnostic script catalog (AIRLOCK_DIAGNOSTIC_SCRIPTS_DIR or a scripted model driver)", 422);
       if (!deps.scriptedDrivers.includes(body.scriptedDriver)) throw new AppError(`scripted driver "${body.scriptedDriver}" is not available; available: ${deps.scriptedDrivers.join(", ")}`, 422);
+    }
+    // A labelled diagnostic never counts as a model repair; a scripted-driver control plane labels
+    // every task with the script it will run.
+    const scriptedDriver = body.scriptedDriver ?? deps.defaultScriptedDriver ?? undefined;
+    // Live repair runs only while committed live-gate evidence backs it. An operator running the
+    // gate itself (`liveGate: true`) is exempt: that run is how the evidence is produced.
+    const liveGate = body.liveGate === true;
+    if (liveGate && session.role !== "operator") throw new AppError("liveGate runs require the operator role", 403);
+    if (liveGate && scriptedDriver !== undefined) throw new AppError("a live-gate run cannot use a scripted driver", 422);
+    let repairDisabledReason: string | undefined;
+    if (scriptedDriver === undefined && !liveGate && deps.availability?.driver === "vultr") {
+      const availability = await repairAvailability(deps.profiles.get(body.profileId)!);
+      if (!availability.available) repairDisabledReason = `live repair unavailable: ${availability.reason}`.slice(0, 1024);
     }
     const at = iso();
     const task: Task = {
@@ -267,7 +329,9 @@ export function createApp(deps: ApiDeps) {
       owner: session.owner,
       profileId: body.profileId,
       issueText: body.issueText,
-      ...(body.scriptedDriver !== undefined ? { scriptedDriver: body.scriptedDriver } : {}),
+      ...(scriptedDriver !== undefined ? { scriptedDriver } : {}),
+      ...(repairDisabledReason !== undefined ? { repairDisabledReason } : {}),
+      ...(liveGate ? { liveGate: true } : {}),
       status: "queued",
       phase: "prepare",
       generation: 0,
@@ -280,7 +344,14 @@ export function createApp(deps: ApiDeps) {
     };
     const inserted = await deps.store.insertIfAbsent(session.owner, STORE_KIND_TASKS, task);
     if (!inserted) throw new AppError("task id collision; retry", 409);
-    await deps.store.appendEvent(session.owner, task.id, { id: `evt-${randomBytes(8).toString("hex")}`, at, kind: "lifecycle", title: "Task created", detail: `profile ${task.profileId}` });
+    await deps.store.appendEvent(session.owner, task.id, {
+      id: `evt-${randomBytes(8).toString("hex")}`,
+      at,
+      kind: "lifecycle",
+      title: "Task created",
+      detail: `profile ${task.profileId}${scriptedDriver !== undefined ? `; diagnostic (scripted:${scriptedDriver}), not a model repair` : ""}${liveGate ? "; live-gate attempt" : ""}${repairDisabledReason ? `; ${repairDisabledReason} (reproduction and baseline only)` : ""}`,
+      data: { ...(scriptedDriver !== undefined ? { diagnostic: true, scriptedDriver } : {}), ...(liveGate ? { liveGate: true } : {}), ...(repairDisabledReason ? { repairDisabledReason } : {}) },
+    });
     return c.json(task, 201);
   });
   app.get("/api/tasks", async (c) => {
@@ -443,17 +514,25 @@ export function createApp(deps: ApiDeps) {
     if (bundle.candidateDigest !== task.candidateDigest) throw new AppError("stored bundle digest mismatch", 409);
     const profile = deps.profiles.get(task.profileId);
     if (!profile) throw new AppError("profile no longer loaded", 409);
+    // CLAUDE.md §3.3: preview uses exactly the runtime image, adapter and contract it was verified under.
+    await refuseDrift(verification, profile, "preview refused");
     const request: AdapterRequest = { schemaVersion: 1, cases: [{ id: "preview", input: body.input }] };
     const deadlineMs = Math.min(profile.manifest.caps.attemptTimeoutMs, profile.manifest.caps.commandTimeoutMs * 3);
-    // Only a preview that actually dispatches a sandbox run counts against the session's interval.
-    const lastPreview = previewLast.get(session.id) ?? 0;
-    if (now() - lastPreview < previewMinIntervalMs) throw new AppError(`previews are limited to one per ${Math.ceil(previewMinIntervalMs / 1000)} s per session`, 429);
-    previewLast.set(session.id, now());
+    // Only a preview that actually dispatches a sandbox run counts against the interval, which is
+    // kept per session AND per client key: logging in again does not buy a fresh budget.
+    const keys = [`session:${session.id}`, `client:${clientKey(c)}`];
+    if (keys.some((k) => now() - (previewLast.get(k) ?? 0) < previewMinIntervalMs)) throw new AppError(`previews are limited to one per ${Math.ceil(previewMinIntervalMs / 1000)} s per session and client`, 429);
     if (previewLast.size > 1000) previewLast.clear();
+    for (const k of keys) previewLast.set(k, now());
     const result = await deps.supervisor.invoke(
       { taskId: task.id, profileId: task.profileId, role: "preview", bundle, request, absoluteDeadline: new Date(now() + deadlineMs).toISOString() },
       { timeoutMs: deadlineMs + 30_000 },
     );
+    // The supervisor's own inspection of the preview sandbox must name the verified image and runtime.
+    if (result.inspection.imageDigest !== verification.runtimeImageDigest || result.inspection.runtime !== verification.runtimeProfile.inspection.runtime) {
+      log.warn("preview refused: sandbox runtime differs from verification", { taskId: task.id, verifiedImage: verification.runtimeImageDigest, previewImage: result.inspection.imageDigest, verifiedRuntime: verification.runtimeProfile.inspection.runtime, previewRuntime: result.inspection.runtime });
+      throw new AppError(`${DRIFT_REFUSAL} (preview sandbox ran image ${result.inspection.imageDigest.slice(0, 80)} on ${result.inspection.runtime}; verified ${verification.runtimeImageDigest.slice(0, 80)} on ${verification.runtimeProfile.inspection.runtime}); preview refused`, 409);
+    }
     const observation = result.observations.find((o) => o.caseId === "preview");
     return c.json({ candidateDigest: task.candidateDigest, ...(observation ? { observation } : {}), exec: result.exec, inspection: result.inspection });
   });
@@ -533,6 +612,12 @@ export function createApp(deps: ApiDeps) {
     if (!verification.passed || verification.completedCases !== verification.requiredCases) throw new AppError("candidate did not pass checks; export refused", 409);
     if (!baseline || baseline.role !== "baseline" || baseline.taskId !== task.id || !baseline.passed) throw new AppError("baseline did not reproduce the reported failure under the frozen contract; export refused", 409);
     if (baseline.contractDigest !== verification.contractDigest || baseline.adapterDigest !== verification.adapterDigest) throw new AppError("baseline and candidate were measured under different contracts or adapters; export refused", 409);
+    if (baseline.runtimeImageDigest !== verification.runtimeImageDigest) throw new AppError("baseline and candidate were measured on different runtime images; export refused", 409);
+    // Drift refuses a new grant AND the download of an already-sealed zip: evidence measured under a
+    // configuration that is no longer the running one is not handed out as current.
+    const profile = deps.profiles.get(task.profileId);
+    if (!profile) throw new AppError("profile no longer loaded", 409);
+    await refuseDrift(verification, profile, "export refused");
     return { verification, baseline, verificationRecordDigest: await sha256(canonicalJson(verification)), baselineRecordDigest: await sha256(canonicalJson(baseline)) };
   }
 
@@ -588,23 +673,108 @@ export function createApp(deps: ApiDeps) {
   }
 
   // ---- hostile panel --------------------------------------------------------------------------------
+  // Judge role only (37 §hostile panel). Limited per client key, not per session (a re-login is
+  // the same client), plus a global interval and one run at a time across every client.
   app.post("/api/hostile", async (c) => {
-    const session = requireRole(c, "operator", "judge");
+    requireRole(c, "judge");
     const body = await readJson(c, z.object({ command: z.string().min(1).max(4096), profileId: z.string().max(64).optional() }));
-    const last = hostileLast.get(session.id) ?? 0;
-    if (now() - last < deps.hostileMinIntervalMs) throw new AppError(`hostile runs are limited to one per ${Math.ceil(deps.hostileMinIntervalMs / 1000)} s per session`, 429);
-    hostileLast.set(session.id, now());
-    if (hostileLast.size > 1000) hostileLast.clear();
     const profileId = body.profileId ?? [...deps.profiles.keys()][0];
     if (!profileId || !deps.profiles.has(profileId)) throw new AppError("no such profile", 422);
-    const card = await deps.supervisor.hostile({ profileId, command: body.command });
-    return c.json(card);
+    const key = clientKey(c);
+    if (hostileInFlight) throw new AppError("a hostile run is already in progress; try again when it finishes", 429);
+    if (now() - (hostileLast.get(key) ?? 0) < deps.hostileMinIntervalMs) throw new AppError(`hostile runs are limited to one per ${Math.ceil(deps.hostileMinIntervalMs / 1000)} s per client`, 429);
+    if (now() - hostileGlobalLast < hostileGlobalMinIntervalMs) throw new AppError(`hostile runs are limited to one per ${Math.ceil(hostileGlobalMinIntervalMs / 1000)} s overall`, 429);
+    if (hostileLast.size > 1000) hostileLast.clear();
+    hostileLast.set(key, now());
+    hostileGlobalLast = now();
+    hostileInFlight = true;
+    try {
+      const healthyBefore = await controlPlaneHealthy();
+      const card: BlastRadiusCard = await deps.supervisor.hostile({ profileId, command: body.command });
+      const healthyAfter = await controlPlaneHealthy();
+      card.survived.controlPlane = { healthyBefore, healthyAfter, checkedAt: iso() };
+      return c.json(card);
+    } finally {
+      hostileInFlight = false;
+    }
   });
+
+  /** Store answers a query, and (for a running worker) its heartbeat record is fresh. */
+  async function controlPlaneHealthy(): Promise<boolean> {
+    try {
+      const status = await deps.store.get<{ lastTickAt?: string }>(WORKER_STATUS.owner, WORKER_STATUS.kind, WORKER_STATUS.id);
+      if (deps.worker.running === undefined) return true;
+      if (!deps.worker.running) return false;
+      const at = Date.parse(status?.lastTickAt ?? "");
+      return Number.isFinite(at) && now() - at <= (deps.workerStaleMs ?? 15_000);
+    } catch (error) {
+      log.warn("control-plane health check failed", { error: error instanceof Error ? error : "health check failed" });
+      return false;
+    }
+  }
+
+  async function repairAvailability(profile: LoadedProfile): Promise<RepairAvailability> {
+    if (!deps.availability) return { available: false, reason: "repair availability is not configured on this control plane", driver: "unknown" };
+    let host: HostCheck | null = null;
+    try {
+      host = await deps.supervisor.host();
+    } catch (error) {
+      log.warn("repair availability: supervisor host check failed", { error: error instanceof Error ? error : "host check failed" });
+    }
+    return deps.availability.evaluate(profile, host);
+  }
+
+  /**
+   * 409 unless the verification record's adapter digest, contract digest and runtime still match
+   * what would run now: the adapter digest recomputed from disk, the loaded contract, and the
+   * supervisor's current host check (selected runtime and, when it reports one in the same form,
+   * the enforced runtime image id).
+   */
+  async function refuseDrift(verification: VerificationRecord, profile: LoadedProfile, action: string): Promise<void> {
+    const drift: string[] = [];
+    let adapterDigest: string;
+    try {
+      adapterDigest = await computeAdapterDigest(deps.runtimeDir, profile);
+    } catch (error) {
+      throw new AppError(`${DRIFT_REFUSAL} (adapter unreadable: ${error instanceof Error ? error.message.slice(0, 200) : "unknown"}); ${action}`, 409);
+    }
+    if (adapterDigest !== verification.adapterDigest) drift.push(`adapter ${adapterDigest.slice(0, 12)} ≠ verified ${verification.adapterDigest.slice(0, 12)}`);
+    if (profile.contractDigest !== verification.contractDigest) drift.push(`contract ${profile.contractDigest.slice(0, 12)} ≠ verified ${verification.contractDigest.slice(0, 12)}`);
+    const host = await deps.supervisor.host();
+    const verifiedRuntime = verification.runtimeProfile.inspection.runtime;
+    if (host.selectedRuntime !== verifiedRuntime) drift.push(`runtime ${host.selectedRuntime} ≠ verified ${verifiedRuntime}`);
+    // HostCheck.runtimeImageId is an image id (`sha256:<id>`); the record carries the inspected
+    // image's repo digest when it has one (`name@sha256:…`), else its id. Compare like with like;
+    // the preview sandbox's own inspection is compared after the run either way.
+    const verifiedImage = verification.runtimeImageDigest;
+    if (host.runtimeImageId && !verifiedImage.includes("@") && host.runtimeImageId !== verifiedImage) drift.push(`runtime image ${host.runtimeImageId.slice(0, 80)} ≠ verified ${verifiedImage.slice(0, 80)}`);
+    if (drift.length) {
+      log.warn("refused: configuration drift since verification", { taskId: verification.taskId, action, drift });
+      throw new AppError(`${DRIFT_REFUSAL} (${drift.join("; ")}); ${action}`, 409);
+    }
+  }
 
   // ---- web UI (last, so every /api route above takes precedence) ------------------------------
   if (deps.webDist) mountStatic(app, deps.webDist);
 
   return app;
+}
+
+/** Applied to every response, API, static and SSE alike (a streaming response keeps its body). */
+function setSecurityHeaders(c: Context<Env>) {
+  const apply = (headers: Headers) => {
+    headers.set("content-security-policy", CONTENT_SECURITY_POLICY);
+    headers.set("x-content-type-options", "nosniff");
+    headers.set("referrer-policy", "no-referrer");
+  };
+  try {
+    apply(c.res.headers);
+  } catch {
+    // Immutable headers (a passed-through fetch Response): re-wrap without touching the body.
+    const res = new Response(c.res.body, c.res);
+    apply(res.headers);
+    c.res = res;
+  }
 }
 
 const STATIC_TYPES: Record<string, string> = {

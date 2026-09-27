@@ -19,7 +19,12 @@ bunx tsc --noEmit -p tsconfig.json  # from apps/control
 | `SUPERVISOR_URL` | no | `http://127.0.0.1:4300` | Supervisor base URL (VPC address in a deployment). |
 | `AIRLOCK_MODEL_DRIVER` | no | `vultr` | `vultr` for live inference, or `scripted:<path>` to a JSON script file or a directory of `<name>.json` scripts for diagnostics and tests (see `src/scripted.ts`). Every task gets a fresh driver; with a directory a task may pick its script with `CreateTaskRequest.scriptedDriver` (422 in `vultr` mode). A scripted run is labelled `scripted:<name>` on every model event and is never a live repair. |
 | `VULTR_INFERENCE_API_KEY` | with `vultr` | — | Never logged, never in an event, never in a sandbox. |
-| `VULTR_INFERENCE_BASE_URL` | no | `https://api.vultrinference.com/v1` | Must be https. |
+| `VULTR_INFERENCE_BASE_URL` | no | `https://api.vultrinference.com/v1` | Pinned: any other value is refused at start-up, unless `AIRLOCK_ALLOW_TEST_INFERENCE_URL=1` (https only, logged as not Vultr), and never with `AIRLOCK_PRODUCTION=1`. The live driver's transport never follows a redirect (`redirect: "error"`) and refuses any URL outside this base. Tests inject a fake driver or transport instead. |
+| `AIRLOCK_ALLOW_TEST_INFERENCE_URL` | no | unset | `1` permits a non-Vultr https inference URL for testing. Refused in production. |
+| `AIRLOCK_PRODUCTION` | no | unset | `1` marks a deployment: test-only overrides are refused. |
+| `AIRLOCK_DIAGNOSTIC_SCRIPTS_DIR` | no | unset (dev-up: `apps/control/test/fixtures/scripted`) | Directory of labelled diagnostic scripts (`<name>.json`, optional `title`/`description`) that an operator or judge may launch with `scriptedDriver` **whatever the model driver**. Such tasks carry `task.scriptedDriver`, are labelled diagnostic in their events, and never count as model repairs. |
+| `AIRLOCK_LIVE_GATE_EVIDENCE_DIR` | no | `<repo>/docs/evidence/live-gate` | Committed `LiveGateReceipt` files. See *Repair availability*. |
+| `AIRLOCK_INSTANCE_ID` | no | unset | Vultr instance id of this VM, reported by `GET /api/repair-availability` beside the execution host's. |
 | `AIRLOCK_MODEL` | with `vultr` | — | Model name chosen by the measured tool-call probe. |
 | `AIRLOCK_MODEL_MAX_TOKENS` | no | `16384` | `max_tokens` per model turn (256–131072). Reasoning tokens count against it: glm-5.3 spent a whole 4096-token turn thinking in the first live gate, so the default is generous. |
 | `AIRLOCK_MODEL_REASONING_EFFORT` | no | unset | Sent as `reasoning_effort` only when set (e.g. `low`, `medium`, `high`); Vultr accepted it on 2026-09-26. |
@@ -31,7 +36,7 @@ bunx tsc --noEmit -p tsconfig.json  # from apps/control
 | `AIRLOCK_WEB_DIST` | no | `<repo>/apps/web/dist` | Built web UI served at `/` (SPA fallback to `index.html`); `/api/*` always takes precedence. Unset and missing → only `/api` is served (logged). `none` disables. |
 | `AIRLOCK_INSECURE_COOKIES` | no | unset | `1` drops the cookie `Secure` flag for plain-http local development only. |
 | `AIRLOCK_TRUST_PROXY` | no | unset | Set it when a reverse proxy fronts this process. `1` trusts a proxy on this host (loopback peer); otherwise a comma-separated list of the proxies' IP addresses as seen as socket peers. Only a request whose socket peer is a listed proxy has its `X-Forwarded-For` (rightmost hop) / `X-Real-IP` honoured by the login rate limit; a request from any other peer, or from an unknown peer, is keyed on its own peer address whatever headers it carries. Unset, every client behind a proxy collapses to the proxy's address, i.e. one shared 10/min login bucket. Bind or firewall port 3000 so that only the proxy reaches it. |
-| `AIRLOCK_SESSION_TTL_MS`, `AIRLOCK_EXPORT_GRANT_TTL_MS`, `AIRLOCK_HOSTILE_MIN_INTERVAL_MS`, `AIRLOCK_PREVIEW_MIN_INTERVAL_MS` | no | 12 h, 24 h, 10 s, 2 s | Lifetimes and the per-session hostile-run and preview rate limits. |
+| `AIRLOCK_SESSION_TTL_MS`, `AIRLOCK_EXPORT_GRANT_TTL_MS`, `AIRLOCK_HOSTILE_MIN_INTERVAL_MS`, `AIRLOCK_HOSTILE_GLOBAL_MIN_INTERVAL_MS`, `AIRLOCK_PREVIEW_MIN_INTERVAL_MS` | no | 12 h, 24 h, 10 s, 3 s, 2 s | Lifetimes; the hostile-run limit per client key (the login limiter's key, so a re-login does not reset it) and between any two runs (plus one run at a time); the preview limit per session and per client key. |
 | `AIRLOCK_LOG_LEVEL` | no | `info` | `error`, `warn`, `info` or `debug`. One JSON object per line (`{ts, level, app: "control", msg, ...}`) on stdout (warn/error on stderr). `debug` adds every HTTP request/response (method, path, status, duration, role, body sizes; never a body), worker lease claims/releases, phase transitions, every model call (model, host, finish_reason, prompt/completion/reasoning tokens, tool names, duration), every supervisor-client call (operation id, endpoint, status, duration, fence errors), SSE subscribe/replay/close and export grant creation. Field names that look like credentials are redacted; the supervisor token, inference key, passwords, session tokens and cookies are never logged. `./run.sh` defaults it to `debug`. |
 
 Start-up refuses on a missing token, a missing key for the vultr driver, an unreadable profiles
@@ -51,26 +56,48 @@ and is the diff base for export. The adapter digest is
 ## Routes (`/api`)
 
 Cookie `airlock_session` (HttpOnly, SameSite=Strict, sha256 of the token stored). Roles:
-`operator`, `judge`, and `viewer` (signed out: profiles, host check and login only; no task data).
+`operator`, `judge`, and `viewer` (signed out: health, profiles, repair availability and login
+only; no task data, no host check).
 A role is never an owner: every login is its own principal (`<role>-<random>`), so two judges who
 share the judge password cannot read each other's cases; after logout or expiry that principal's
 cases stay readable to the operator only. A task that is not the caller's reads as 404. Sessions
 written before this rule (owner equal to the role) are refused. Errors are JSON `{error}`.
-`referenceCommitMaintainerOnly` is stripped from every response.
+`referenceCommitMaintainerOnly` is stripped from every response. Every response (API, errors,
+SSE, export download, the static UI) carries `Content-Security-Policy: default-src 'self'; script-src
+'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; font-src 'self';
+object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`,
+`X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`. The built UI has no inline
+script; `'unsafe-inline'` for styles covers the `<style>` element Radix injects at runtime.
 
 | Route | Role | Notes |
 |---|---|---|
 | `POST /api/session {password}` → `{role}` | any | Login; rate limited per client (10/min), keyed on the socket peer address, or on the proxy's `X-Forwarded-For` hop when the peer is a proxy listed in `AIRLOCK_TRUST_PROXY`; a client-supplied header never opens a fresh budget, including on a direct connection that bypasses the proxy. `DELETE` logs out; `GET` returns the current role. |
+| `GET /api/health` → `{ok:true}` | any | Liveness only; nothing else. |
 | `GET /api/profiles` | any | `ProfileManifest[]` without the maintainer commit. |
-| `GET /api/host` | any | Supervisor `HostCheck`. |
-| `POST /api/tasks` `CreateTaskRequest` → `Task` (201) | operator, judge | Profile must be loaded (422 otherwise). |
+| `GET /api/host` | operator, judge | Supervisor `HostCheck`. |
+| `GET /api/repair-availability[?profileId=]` → `RepairAvailability` | any | Whether live repair is backed by evidence now, with the precise reason, the receipt summary, and `instances {control, execution}`. Default profile: the first loaded. Re-evaluated per request. |
+| `GET /api/diagnostics` → `{scripts:[{name,title,description}]}` | operator, judge | The labelled diagnostic scripts a task may name with `scriptedDriver`. |
+| `POST /api/tasks` `CreateTaskRequest` → `Task` (201) | operator, judge | Profile must be loaded (422 otherwise). `scriptedDriver` must name a script in the diagnostics catalog (422 otherwise). With the live driver and repair unavailable, the task gets `repairDisabledReason` (reproduction and baseline only). A scripted-driver control plane labels every task with the script it runs. `liveGate: true` (operator only, never with a script; recorded on the task) exempts the task from the repair-disabled state: it is how `scripts/live-gate.ts` produces the evidence. |
 | `GET /api/tasks`, `GET /api/tasks/:id` | owner or operator | List (a judge gets its own session's tasks, the operator all) / `TaskView` (task, baseline and candidate records, sealed manifest, host). |
 | `GET /api/tasks/:id/events` | owner or operator | SSE of `RunEvent` (`id` = seq, `event` = kind), replayed after `Last-Event-ID` (or `?after=`), plus `task` snapshots and a final `end`. Carries every model turn and each `run` command's stdout/stderr (bounded). The session is re-checked before every delivery; a stream closes when its session is logged out or expires. |
 | `POST /api/tasks/:id/cancel` → `Task` | owner or operator | queued with no attempt → cancelled; queued that still names an attempt (requeued after a lost lease), or running → cancelling (the worker's cancel pass revokes and confirms teardown); terminal → 409. |
-| `POST /api/tasks/:id/preview` `PreviewRequest` → `PreviewResult` | owner or operator | Refused (409) unless `candidateDigest` equals the task's sealed digest, the verification record passed, and the stored bundle still carries that digest. Runs a fresh `preview` invocation on the sealed bundle; writes nothing. One per 2 s per session (429). |
-| `POST /api/tasks/:id/export` → `{grantId,url,expiresAt,zipDigest}` | owner or operator | Only for `CANDIDATE_PASSED_CHECKS` with a passing candidate record for the sealed digest and a passing baseline record under the same contract and adapter (409 otherwise). The first export seals the zip once (`ExportSeal`: zip sha256, verification and baseline record digests, events through a fixed seq; grant events excluded) and stores it content-addressed. The immutable `ExportGrant` binds the verification record digest and the sealed zip digest; repeated calls return the same unexpired grant. |
-| `GET /api/exports/:grantId` | the granting owner | Re-checks eligibility, then serves the sealed zip byte for byte (re-hashed on read; `x-airlock-zip-sha256`): `patch.diff`, `manifest.json`, `verification.json`, `baseline.json`, `task.json` (the task record with lease fields removed: owner, issue text, budget, `scriptedDriver` on diagnostic runs), `events.jsonl` (the run event log through the seal, including every model turn's text and every command run), `reproduction/`, `README.txt`. Repeatable, identical across grants and restarts; 410 when expired or when the grant predates sealed exports. |
-| `POST /api/hostile {command, profileId?}` → `BlastRadiusCard` | judge, operator | One per 10 s per session. |
+| `POST /api/tasks/:id/preview` `PreviewRequest` → `PreviewResult` | owner or operator | Refused (409) unless `candidateDigest` equals the task's sealed digest, the verification record passed, and the stored bundle still carries that digest. Refused (409, "configuration changed since verification; preview refused") when the adapter digest recomputed from disk, the loaded contract digest, the supervisor's selected runtime, or its enforced runtime image id (when comparable) differs from the verification record; checked again after the run against the preview sandbox's own inspection (image digest and runtime). Runs a fresh `preview` invocation on the sealed bundle; writes nothing. One per 2 s per session and per client (429). |
+| `POST /api/tasks/:id/export` → `{grantId,url,expiresAt,zipDigest}` | owner or operator | Only for `CANDIDATE_PASSED_CHECKS` with a passing candidate record for the sealed digest and a passing baseline record under the same contract, adapter and runtime image, and no configuration drift since verification (same checks as preview; 409 otherwise). The first export seals the zip once (`ExportSeal`: zip sha256, verification and baseline record digests, events through a fixed seq; grant events excluded) and stores it content-addressed. The immutable `ExportGrant` binds the verification record digest and the sealed zip digest; repeated calls return the same unexpired grant. |
+| `GET /api/exports/:grantId` | the granting owner | Re-checks eligibility, including drift (a sealed zip is not served while the running configuration differs from the verified one; restoring it makes the grant usable again), then serves the sealed zip byte for byte (re-hashed on read; `x-airlock-zip-sha256`): `patch.diff`, `manifest.json`, `verification.json`, `baseline.json`, `task.json` (the task record with lease fields removed: owner, issue text, budget, `scriptedDriver` on diagnostic runs), `events.jsonl` (the run event log through the seal, including every model turn's text and every command run), `reproduction/`, `README.txt`. Repeatable, identical across grants and restarts; 410 when expired or when the grant predates sealed exports. |
+| `POST /api/hostile {command, profileId?}` → `BlastRadiusCard` | judge | One per 10 s per client key, one per 3 s overall, one at a time (429). The control plane fills `survived.controlPlane {healthyBefore, healthyAfter, checkedAt}`: a store query plus the worker heartbeat record being fresh (≤ 15 s), checked right before and after the supervisor call. |
+
+## Repair availability
+
+`src/availability.ts` reads `AIRLOCK_LIVE_GATE_EVIDENCE_DIR/*.json`, validates each file as a
+contracts `LiveGateReceipt` plus internal consistency (passed equals the passing attempts, total
+equals the attempts listed, every model host `api.vultrinference.com`), and caches by mtime and
+size. Only the newest valid receipt counts. Live repair is available when the driver is `vultr` and
+that receipt matches the profile id and contract digest, the configured model (ignoring
+`-normalize`), the supervisor's selected runtime (never dev-unsafe; the runtime image id too when
+both report one), with ≥ 2 passed of ≥ 3. Otherwise the reason says which of these failed. The
+scripted driver is always unavailable: "scripted diagnostics driver: runs are diagnostics, not model
+repairs" (its tasks still run, labelled diagnostic). Receipts come from `bun scripts/live-gate.ts`
+(default issue: the tracked `profiles/tabulate-365/issue.md`).
 
 ## Phases and outcomes
 
@@ -125,6 +152,10 @@ the cancel pass run. Any failure destroys the attempt; incomplete teardown stays
 - `scripted:<path>` — `createScriptedDriver` replays a JSON `[{ "text"?, "toolCalls"?: [{name,args}] }]`
   file. Used by the vertical-slice diagnostic and by tests; never a claim of a live repair.
 
+The driver is chosen per task (`index.ts`): a task with `scriptedDriver` runs that script from the
+diagnostics catalog (or the scripted driver's own directory), whatever the configured driver; every
+other task runs the configured driver.
+
 ## Tests
 
 `bun test` uses an in-memory PGlite store, an in-memory fake supervisor and thin doubles for the
@@ -132,5 +163,10 @@ verifier/artifacts modules. Covered: happy path, unchanged-tree submit, forged "
 log, NOT_REPRODUCED, INCONCLUSIVE, STOPPED_LIMIT, REPRODUCED_UNRESOLVED, cancel mid-repair with
 destroy, sandbox refusal, freeze without confirmed stop, stale-attempt discard, event bounds, SSE
 replay, preview refusals (digest mismatch, unverified, tampered bundle), immutable and repeatable
-export grants, hostile rate limit, session roles, supervisor-client operation replay and fence
+export grants, preview/export refusal on adapter, contract, runtime and runtime-image drift (before
+and after the run), judge-only hostile with per-client and global limits across re-login and the
+control-plane health on the card, `/api/health` and `/api/host` access, repair availability from
+fixture receipts (matching and mismatched model/runtime/contract/profile, dev-unsafe, 1 of 3, newest
+wins, invalid receipts ignored), the diagnostics catalog, the CSP on API/error/static/SSE/zip
+responses, the pinned inference URL and no-redirect transport, session roles, supervisor-client operation replay and fence
 errors, profile digest verification, worker lease/cancel semantics.

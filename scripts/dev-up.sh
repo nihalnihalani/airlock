@@ -14,6 +14,8 @@
 # Model driver: scripted by default (AIRLOCK_MODEL_DRIVER=scripted:apps/control/test/fixtures/scripted),
 # i.e. the labelled diagnostic candidate and the forged-log script; never a live repair. Set
 # VULTR_INFERENCE_API_KEY, AIRLOCK_MODEL and AIRLOCK_MODEL_DRIVER=vultr (in .env) for live inference.
+# The same scripts stay launchable as labelled diagnostics under the live driver
+# (AIRLOCK_DIAGNOSTIC_SCRIPTS_DIR, default apps/control/test/fixtures/scripted; "none" disables).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -66,6 +68,7 @@ export SUPERVISOR_PORT="${SUPERVISOR_PORT:-4300}"
 export CONTROL_PORT="${CONTROL_PORT:-3000}"
 export SUPERVISOR_URL="http://127.0.0.1:$SUPERVISOR_PORT"
 export AIRLOCK_MODEL_DRIVER="${AIRLOCK_MODEL_DRIVER:-scripted:$ROOT/apps/control/test/fixtures/scripted}"
+export AIRLOCK_DIAGNOSTIC_SCRIPTS_DIR="${AIRLOCK_DIAGNOSTIC_SCRIPTS_DIR-$ROOT/apps/control/test/fixtures/scripted}"
 export AIRLOCK_INSECURE_COOKIES=1
 export AIRLOCK_DATA_DIR_CONTROL="${AIRLOCK_DATA_DIR_CONTROL:-$DATA/control}"
 export AIRLOCK_DATA_DIR_SUPERVISOR="${AIRLOCK_DATA_DIR_SUPERVISOR:-$DATA/supervisor}"
@@ -104,17 +107,19 @@ esac
 
 # --- idempotent start -----------------------------------------------------------------------------
 alive() { [[ -f "$1" ]] && kill -0 "$(cat "$1")" 2>/dev/null; }
-wait_http() { # url, seconds
-  local i
-  for ((i = 0; i < $2 * 2; i++)); do
-    if curl -fsS -o /dev/null "$1" 2>/dev/null; then return 0; fi
+wait_http() { # url, seconds, [curl args...]
+  local i url="$1" secs="$2"
+  shift 2
+  for ((i = 0; i < secs * 2; i++)); do
+    if curl -fsS -o /dev/null "$@" "$url" 2>/dev/null; then return 0; fi
     sleep 0.5
   done
   return 1
 }
 
 STARTED=()
-if alive "$RUN/supervisor.pid" && curl -fsS -o /dev/null "$SUPERVISOR_URL/health"; then
+SUPERVISOR_AUTH=(-H "authorization: Bearer $SUPERVISOR_TOKEN")
+if alive "$RUN/supervisor.pid" && curl -fsS -o /dev/null "${SUPERVISOR_AUTH[@]}" "$SUPERVISOR_URL/health"; then
   echo "supervisor already running (pid $(cat "$RUN/supervisor.pid"))"
 else
   rm -f "$RUN/supervisor.pid"
@@ -123,13 +128,13 @@ else
     exec bun src/index.ts >>"$SUPERVISOR_LOG" 2>&1 ) &
   echo $! > "$RUN/supervisor.pid"
   STARTED+=(supervisor)
-  if ! wait_http "$SUPERVISOR_URL/health" 30; then
+  if ! wait_http "$SUPERVISOR_URL/health" 30 "${SUPERVISOR_AUTH[@]}"; then
     echo "supervisor did not become healthy; last log lines:" >&2; tail -20 "$SUPERVISOR_LOG" >&2; exit 1
   fi
 fi
 
 CONTROL_URL="http://127.0.0.1:$CONTROL_PORT"
-if alive "$RUN/control.pid" && curl -fsS -o /dev/null "$CONTROL_URL/api/session"; then
+if alive "$RUN/control.pid" && curl -fsS -o /dev/null "$CONTROL_URL/api/health"; then
   echo "control already running (pid $(cat "$RUN/control.pid"))"
 else
   rm -f "$RUN/control.pid"
@@ -138,22 +143,25 @@ else
     exec bun src/index.ts >>"$CONTROL_LOG" 2>&1 ) &
   echo $! > "$RUN/control.pid"
   STARTED+=(control)
-  if ! wait_http "$CONTROL_URL/api/session" 60; then
+  if ! wait_http "$CONTROL_URL/api/health" 60; then
     echo "control did not become ready; last log lines:" >&2; tail -20 "$CONTROL_LOG" >&2; exit 1
   fi
 fi
 
-HOST_JSON="$(curl -fsS "$SUPERVISOR_URL/health")"
+HOST_JSON="$(curl -fsS "${SUPERVISOR_AUTH[@]}" "$SUPERVISOR_URL/host")"
+# What this stack actually runs with (after .env overrides), for smoke.ts and live-gate.ts.
+(umask 077 && printf 'SUPERVISOR_URL=%s\nSUPERVISOR_TOKEN=%s\nAIRLOCK_CONTROL_URL=%s\n' "$SUPERVISOR_URL" "$SUPERVISOR_TOKEN" "$CONTROL_URL" > "$RUN/stack.env")
 echo
 echo "Airlock dev stack (dev-unsafe: plain runc, local only)"
-echo "  supervisor  $SUPERVISOR_URL/health   -> $(bun -e 'const h=JSON.parse(process.argv[1]);console.log(`${h.status} runtime=${h.host.selectedRuntime} devUnsafe=${h.host.devUnsafe} kvm=${h.host.kvmPresent}`)' "$HOST_JSON")"
-echo "  control     $CONTROL_URL/api/session"
+echo "  supervisor  $SUPERVISOR_URL/host     -> $(bun -e 'const h=JSON.parse(process.argv[1]);console.log(`runtime=${h.selectedRuntime} devUnsafe=${h.devUnsafe} kvm=${h.kvmPresent} image=${h.runtimeImageId ?? "unpinned"}`)' "$HOST_JSON")"
+echo "  control     $CONTROL_URL/api/health"
 if [[ -z "$AIRLOCK_WEB_DIST" || "$AIRLOCK_WEB_DIST" == "none" ]]; then
   echo "  web UI      disabled (AIRLOCK_WEB_DIST=none); operator password in $DEV_ENV"
 else
-  echo "  web UI      $CONTROL_URL/   (operator password in $DEV_ENV)"
+  echo "  web UI      $CONTROL_URL/   (operator and judge passwords in $DEV_ENV)"
 fi
 echo "  model       $AIRLOCK_MODEL_DRIVER"
+echo "  diagnostics ${AIRLOCK_DIAGNOSTIC_SCRIPTS_DIR:-none}"
 echo "  logs        $SUPERVISOR_LOG  $CONTROL_LOG  (AIRLOCK_LOG_LEVEL=${AIRLOCK_LOG_LEVEL:-info}; ./run.sh merges them)"
 echo "  smoke       bun scripts/smoke.ts"
 echo

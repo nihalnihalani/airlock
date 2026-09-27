@@ -23,6 +23,19 @@ export interface Config {
   judgePassword: string | null;
   driver: DriverMode;
   vultr: { apiKey: string | null; baseUrl: string; model: string };
+  /** AIRLOCK_PRODUCTION=1: a deployment. Test-only overrides (e.g. the inference base URL) are refused. */
+  production: boolean;
+  /** Committed live-gate receipts (AIRLOCK_LIVE_GATE_EVIDENCE_DIR, default <repo>/docs/evidence/live-gate). */
+  liveGateEvidenceDir: string;
+  /** Repository root, for reporting evidence paths relative to it. */
+  repoRoot: string;
+  /** Vultr instance id of this control-plane VM (AIRLOCK_INSTANCE_ID), shown on repair availability. */
+  instanceId: string | null;
+  /**
+   * Directory of labelled diagnostic scripts an operator or judge may launch whatever the model
+   * driver (AIRLOCK_DIAGNOSTIC_SCRIPTS_DIR). Null: none, except the scripted driver's own catalog.
+   */
+  diagnosticScriptsDir: string | null;
   /** max_tokens per model turn (AIRLOCK_MODEL_MAX_TOKENS, default 16384; reasoning counts against it). */
   modelMaxTokens: number;
   /** Sent as reasoning_effort only when set (AIRLOCK_MODEL_REASONING_EFFORT). */
@@ -40,6 +53,8 @@ export interface Config {
   sessionTtlMs: number;
   exportGrantTtlMs: number;
   hostileMinIntervalMs: number;
+  /** Minimum interval between any two hostile runs, whoever starts them. */
+  hostileGlobalMinIntervalMs: number;
   previewMinIntervalMs: number;
 }
 
@@ -50,7 +65,8 @@ export class ConfigError extends Error {
   }
 }
 
-const DEFAULT_VULTR_BASE = "https://api.vultrinference.com/v1";
+/** The only inference endpoint a deployment talks to (CLAUDE.md §3.10). */
+export const PINNED_VULTR_BASE = "https://api.vultrinference.com/v1";
 export const DEFAULT_MODEL_MAX_TOKENS = 16384;
 const MAX_MODEL_MAX_TOKENS = 131072;
 
@@ -90,8 +106,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     if (!apiKey) throw new ConfigError("VULTR_INFERENCE_API_KEY is required for the vultr driver");
     if (!model) throw new ConfigError("AIRLOCK_MODEL is required for the vultr driver");
   }
-  const baseUrl = env.VULTR_INFERENCE_BASE_URL?.trim() || DEFAULT_VULTR_BASE;
-  if (!/^https:\/\//.test(baseUrl)) throw new ConfigError("VULTR_INFERENCE_BASE_URL must be https");
+  const production = env.AIRLOCK_PRODUCTION === "1";
+  const baseUrl = parseInferenceBaseUrl(env.VULTR_INFERENCE_BASE_URL, { production, allowTestUrl: env.AIRLOCK_ALLOW_TEST_INFERENCE_URL === "1" });
   const modelMaxTokens = intEnv(env, "AIRLOCK_MODEL_MAX_TOKENS", DEFAULT_MODEL_MAX_TOKENS, 256, MAX_MODEL_MAX_TOKENS);
   const modelReasoningEffort = parseReasoningEffort(env.AIRLOCK_MODEL_REASONING_EFFORT);
 
@@ -117,6 +133,16 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     else if (webDistRaw) throw new ConfigError(`AIRLOCK_WEB_DIST has no index.html: ${candidate} (build with: bun run --cwd apps/web build)`);
   }
 
+  const liveGateEvidenceDir = resolve(env.AIRLOCK_LIVE_GATE_EVIDENCE_DIR?.trim() || resolve(repoRoot, "docs/evidence/live-gate"));
+  const diagnosticRaw = env.AIRLOCK_DIAGNOSTIC_SCRIPTS_DIR?.trim() ?? "";
+  let diagnosticScriptsDir: string | null = null;
+  if (diagnosticRaw !== "" && diagnosticRaw !== "none") {
+    diagnosticScriptsDir = resolve(diagnosticRaw);
+    requireDir(diagnosticScriptsDir, "AIRLOCK_DIAGNOSTIC_SCRIPTS_DIR");
+  }
+  const instanceId = env.AIRLOCK_INSTANCE_ID?.trim() || null;
+  if (instanceId !== null && !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(instanceId)) throw new ConfigError("AIRLOCK_INSTANCE_ID must be a plain identifier (letters, digits, . _ : -; at most 128)");
+
   return {
     port: intEnv(env, "PORT", 3000, 1, 65535),
     bind: env.CONTROL_BIND?.trim() || "0.0.0.0",
@@ -130,6 +156,11 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     judgePassword,
     driver,
     vultr: { apiKey, baseUrl, model },
+    production,
+    liveGateEvidenceDir,
+    repoRoot: resolve(repoRoot),
+    instanceId,
+    diagnosticScriptsDir,
     modelMaxTokens,
     modelReasoningEffort,
     secureCookies: env.AIRLOCK_INSECURE_COOKIES !== "1",
@@ -137,8 +168,31 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     sessionTtlMs: intEnv(env, "AIRLOCK_SESSION_TTL_MS", 12 * 60 * 60 * 1000, 60_000, 30 * 24 * 60 * 60 * 1000),
     exportGrantTtlMs: intEnv(env, "AIRLOCK_EXPORT_GRANT_TTL_MS", 24 * 60 * 60 * 1000, 60_000, 30 * 24 * 60 * 60 * 1000),
     hostileMinIntervalMs: intEnv(env, "AIRLOCK_HOSTILE_MIN_INTERVAL_MS", 10_000, 0, 3_600_000),
+    hostileGlobalMinIntervalMs: intEnv(env, "AIRLOCK_HOSTILE_GLOBAL_MIN_INTERVAL_MS", 3_000, 0, 3_600_000),
     previewMinIntervalMs: intEnv(env, "AIRLOCK_PREVIEW_MIN_INTERVAL_MS", 2_000, 0, 3_600_000),
   };
+}
+
+/**
+ * VULTR_INFERENCE_BASE_URL: only `https://api.vultrinference.com/v1` (a trailing slash is ignored).
+ * Another https URL is accepted only with AIRLOCK_ALLOW_TEST_INFERENCE_URL=1 and never with
+ * AIRLOCK_PRODUCTION=1; tests inject a fake driver or transport instead of pointing at a host.
+ */
+export function parseInferenceBaseUrl(raw: string | undefined, options: { production: boolean; allowTestUrl: boolean }): string {
+  const value = (raw?.trim() || PINNED_VULTR_BASE).replace(/\/+$/, "");
+  if (value === PINNED_VULTR_BASE) return value;
+  if (options.production) throw new ConfigError(`VULTR_INFERENCE_BASE_URL must be ${PINNED_VULTR_BASE} in production (AIRLOCK_PRODUCTION=1)`);
+  if (!options.allowTestUrl) throw new ConfigError(`VULTR_INFERENCE_BASE_URL must be ${PINNED_VULTR_BASE}; another endpoint needs AIRLOCK_ALLOW_TEST_INFERENCE_URL=1 (never in production)`);
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new ConfigError("VULTR_INFERENCE_BASE_URL is not a valid URL");
+  }
+  if (url.protocol !== "https:") throw new ConfigError("VULTR_INFERENCE_BASE_URL must be https");
+  if (url.username || url.password) throw new ConfigError("VULTR_INFERENCE_BASE_URL must not carry credentials");
+  log.warn("VULTR_INFERENCE_BASE_URL overridden for testing (AIRLOCK_ALLOW_TEST_INFERENCE_URL=1): runs are not Vultr Serverless Inference", { host: url.host });
+  return value;
 }
 
 /**
@@ -179,4 +233,19 @@ export function redactConfig(config: Config): Record<string, unknown> {
     judgePassword: config.judgePassword ? "[set]" : null,
     vultr: { ...config.vultr, apiKey: config.vultr.apiKey ? "[redacted]" : null },
   };
+}
+
+/**
+ * The transport handed to the live driver: never follows a redirect (a 3xx is an error, so the
+ * bearer key cannot be forwarded to another host) and refuses any URL outside the configured base.
+ */
+export function inferenceFetch(baseUrl: string, fetchImpl: typeof fetch = fetch): typeof fetch {
+  const base = new URL(baseUrl);
+  const prefix = baseUrl.replace(/\/+$/, "") + "/";
+  const wrapped = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    if (url.origin !== base.origin || !(url.href + "/").startsWith(prefix)) throw new Error(`inference request outside ${base.origin}${base.pathname} refused`);
+    return fetchImpl(input, { ...init, redirect: "error" });
+  }) as typeof fetch;
+  return wrapped;
 }

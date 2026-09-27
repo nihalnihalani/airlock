@@ -1,17 +1,18 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
-import type { Task, VerificationRecord } from "@airlock/contracts";
-import { ARTIFACT_KIND_EXPORT, createApp, STORE_KIND_GRANTS, type ApiDeps } from "../src/api.ts";
+import type { RepairAvailability, Task, VerificationRecord } from "@airlock/contracts";
+import { ARTIFACT_KIND_EXPORT, CONTENT_SECURITY_POLICY, createApp, STORE_KIND_GRANTS, type ApiDeps } from "../src/api.ts";
+import { RepairAvailabilityService, SCRIPTED_REASON } from "../src/availability.ts";
 import { exportBundle } from "../src/artifacts/index.ts";
 import { TaskEventBus } from "../src/events.ts";
 import { ARTIFACT_KIND_BUNDLE, STORE_KIND_VERIFICATIONS } from "../src/repair-handler.ts";
 import { SessionService } from "../src/sessions.ts";
 import { createStore, type Store } from "../src/store/index.ts";
 import { exportBundleDouble, FX_FIXED_SOURCE, fixtureObserve, makeFixture, MemoryArtifactStore, scriptedDriverDouble, zipFilesDouble, type Fixture } from "./helpers/doubles.ts";
-import { FakeSupervisor } from "./helpers/fake-supervisor.ts";
+import { FakeSupervisor, fakeHost } from "./helpers/fake-supervisor.ts";
 import { makeHarness, OWNER, type Harness } from "./helpers/harness.ts";
 
 const sha = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
@@ -37,8 +38,8 @@ interface Ctx {
   close: () => Promise<void>;
 }
 
-async function makeCtx(options: { withWorker?: boolean; now?: () => number; webDist?: string; trustedProxies?: string[]; realExport?: boolean; driverScript?: Parameters<typeof scriptedDriverDouble>[0] } = {}): Promise<Ctx> {
-  const supervisor = new FakeSupervisor({ profile: fixture.profile, observe: fixtureObserve });
+async function makeCtx(options: { withWorker?: boolean; now?: () => number; webDist?: string; trustedProxies?: string[]; realExport?: boolean; driverScript?: Parameters<typeof scriptedDriverDouble>[0]; supervisor?: FakeSupervisor; extra?: Partial<ApiDeps> } = {}): Promise<Ctx> {
+  const supervisor = options.supervisor ?? new FakeSupervisor({ profile: fixture.profile, observe: fixtureObserve });
   let harness: Harness | null = null;
   let store: Store;
   let artifacts: MemoryArtifactStore;
@@ -71,10 +72,12 @@ async function makeCtx(options: { withWorker?: boolean; now?: () => number; webD
     zipFiles: zipFilesDouble,
     exportGrantTtlMs: 60_000,
     hostileMinIntervalMs: 10_000,
+    runtimeDir: fixture.runtimeDir,
     ssePollMs: 20,
     ...(options.now ? { now: options.now } : {}),
     ...(options.webDist ? { webDist: options.webDist } : {}),
     ...(options.trustedProxies ? { trustedProxies: options.trustedProxies } : {}),
+    ...options.extra,
   };
   const app = createApp(deps);
   return { app, store, supervisor, artifacts, harness, bus, deps, close: async () => (harness ? harness.close() : store.close()) };
@@ -233,7 +236,12 @@ describe("routes and roles", () => {
       expect((await ctx.app.request("/api/tasks")).status).toBe(401);
       expect((await ctx.app.request("/api/tasks/nope")).status).toBe(401);
       expect((await ctx.app.request("/api/tasks/nope/events")).status).toBe(401);
-      expect((await ctx.app.request("/api/host")).status).toBe(200);
+      // The host check needs a session; liveness does not, and says nothing else.
+      expect((await ctx.app.request("/api/host")).status).toBe(401);
+      expect((await ctx.app.request("/api/host", { headers: { cookie: op } })).status).toBe(200);
+      const health = await ctx.app.request("/api/health");
+      expect(health.status).toBe(200);
+      expect(await health.json()).toEqual({ ok: true });
     } finally {
       await ctx.close();
     }
@@ -270,16 +278,21 @@ describe("routes and roles", () => {
     }
   });
 
-  test("hostile is judge|operator only and rate limited per session", async () => {
+  test("hostile is judge only and rate limited per client, so logging in again does not reset it", async () => {
     let t = 1_000_000;
     const ctx = await makeCtx({ now: () => t });
     try {
+      const op = await login(ctx.app, OPERATOR);
+      expect((await ctx.app.request("/api/hostile", json({ command: "true" }, op))).status).toBe(403);
       const judge = await login(ctx.app, JUDGE);
       const first = await ctx.app.request("/api/hostile", json({ command: ":(){ :|:& };:" }, judge));
       expect(first.status).toBe(200);
       expect(((await first.json()) as { survived: { supervisorHealthy: boolean } }).survived.supervisorHealthy).toBe(true);
       const second = await ctx.app.request("/api/hostile", json({ command: "cat /etc/shadow" }, judge));
       expect(second.status).toBe(429);
+      // A fresh login (new session, same client) is still limited.
+      const relogin = await login(ctx.app, JUDGE);
+      expect((await ctx.app.request("/api/hostile", json({ command: "cat /etc/shadow" }, relogin))).status).toBe(429);
       t += 10_001;
       expect((await ctx.app.request("/api/hostile", json({ command: "cat /etc/shadow" }, judge))).status).toBe(200);
       expect(ctx.supervisor.hostileCommands).toHaveLength(2);
@@ -405,7 +418,7 @@ describe("preview and export", () => {
     }
   });
 
-  test("preview is owner-or-operator and rate limited per session", async () => {
+  test("preview is owner-or-operator and rate limited per session and per client", async () => {
     let t = 5_000_000;
     const ctx = await makeCtx({ withWorker: true, now: () => t });
     try {
@@ -421,10 +434,12 @@ describe("preview and export", () => {
       // But not in a tight loop: one preview per interval per session, like /api/hostile.
       const second = await ctx.app.request(`/api/tasks/${task.id}/preview`, json(body, judge));
       expect(second.status).toBe(429);
-      // The operator's own session has its own budget.
-      expect((await ctx.app.request(`/api/tasks/${task.id}/preview`, json(body, op))).status).toBe(200);
+      // Another session from the same client shares the client's budget (a re-login buys nothing).
+      expect((await ctx.app.request(`/api/tasks/${task.id}/preview`, json(body, op))).status).toBe(429);
       t += 2_001;
       expect((await ctx.app.request(`/api/tasks/${task.id}/preview`, json(body, judge))).status).toBe(200);
+      t += 2_001;
+      expect((await ctx.app.request(`/api/tasks/${task.id}/preview`, json(body, op))).status).toBe(200);
       expect(ctx.supervisor.invocations.filter((i) => i.role === "preview")).toHaveLength(3);
     } finally {
       await ctx.close();
@@ -735,6 +750,304 @@ describe("preview and export", () => {
       expect(events.at(-1)?.title).toBe("Outcome CANDIDATE_PASSED_CHECKS");
     } finally {
       await ctx.close();
+    }
+  });
+});
+
+// ---- milestone 2: drift, hostile, availability, diagnostics, CSP --------------------------------
+
+/** Lets a test change what the preview sandbox's own inspection reports. */
+class DriftingSupervisor extends FakeSupervisor {
+  previewImage: string | null = null;
+  override async invoke(input: Parameters<FakeSupervisor["invoke"]>[0], opts?: Parameters<FakeSupervisor["invoke"]>[1]) {
+    const result = await super.invoke(input, opts);
+    if (input.role === "preview" && this.previewImage) return { ...result, inspection: { ...result.inspection, imageDigest: this.previewImage } };
+    return result;
+  }
+}
+const errorOf = async (res: Response) => ((await res.json()) as { error: string }).error;
+
+describe("preview and export are bound to the verified runtime, adapter and contract (M5)", () => {
+  test("adapter, contract, runtime and runtime-image drift refuse preview, a new grant and a sealed download; restoring the configuration allows them again", async () => {
+    let t = 7_000_000;
+    const ctx = await makeCtx({ withWorker: true, now: () => t });
+    const adapterPath = join(fixture.runtimeDir, "adapter.py");
+    const original = await Bun.file(adapterPath).text();
+    try {
+      const op = await login(ctx.app, OPERATOR);
+      const task = await completedTask(ctx, op);
+      const body = { candidateDigest: task.candidateDigest, input: { x: 5 } };
+      const preview = () => ctx.app.request(`/api/tasks/${task.id}/preview`, json(body, op));
+      const exportIt = () => ctx.app.request(`/api/tasks/${task.id}/export`, json({}, op));
+      const grant = (await (await exportIt()).json()) as { url: string };
+      const expectRefused = async (what: string) => {
+        const p = await preview();
+        expect(p.status).toBe(409);
+        const pe = await errorOf(p);
+        expect(pe).toContain("configuration changed since verification");
+        expect(pe).toContain(what);
+        expect(pe).toContain("preview refused");
+        const e = await exportIt();
+        expect(e.status).toBe(409);
+        expect(await errorOf(e)).toContain("export refused");
+        // Prefer refusing: an already-sealed zip is not handed out under a drifted configuration.
+        expect((await ctx.app.request(grant.url, { headers: { cookie: op } })).status).toBe(409);
+      };
+      const previewsBefore = ctx.supervisor.invocations.filter((i) => i.role === "preview").length;
+
+      await writeFile(adapterPath, "# a different adapter\n");
+      await expectRefused("adapter");
+      await writeFile(adapterPath, original);
+
+      const loaded = ctx.deps.profiles.get("fx-1")!;
+      ctx.deps.profiles.set("fx-1", { ...loaded, contractDigest: "f".repeat(64) });
+      await expectRefused("contract");
+      ctx.deps.profiles.set("fx-1", loaded);
+
+      const host = ctx.supervisor.hostCheck;
+      ctx.supervisor.hostCheck = { ...host, selectedRuntime: "runsc" };
+      await expectRefused("runtime runsc");
+      ctx.supervisor.hostCheck = { ...host, runtimeImageId: "sha256:rebuilt" };
+      await expectRefused("runtime image");
+      // Refused before dispatch: no sandbox ran for any of these.
+      expect(ctx.supervisor.invocations.filter((i) => i.role === "preview")).toHaveLength(previewsBefore);
+
+      // The verified image id reported by the host check is not drift.
+      ctx.supervisor.hostCheck = { ...host, runtimeImageId: "sha256:fakeimage" };
+      expect((await preview()).status).toBe(200);
+      expect((await exportIt()).status).toBe(200);
+      expect((await ctx.app.request(grant.url, { headers: { cookie: op } })).status).toBe(200);
+    } finally {
+      await writeFile(adapterPath, original);
+      await ctx.close();
+    }
+  });
+
+  test("a preview sandbox that reports a different image than the verification is refused after the run", async () => {
+    const supervisor = new DriftingSupervisor({ profile: fixture.profile, observe: fixtureObserve });
+    const ctx = await makeCtx({ withWorker: true, supervisor });
+    try {
+      const op = await login(ctx.app, OPERATOR);
+      const task = await completedTask(ctx, op);
+      supervisor.previewImage = "sha256:swapped";
+      const res = await ctx.app.request(`/api/tasks/${task.id}/preview`, json({ candidateDigest: task.candidateDigest, input: { x: 5 } }, op));
+      expect(res.status).toBe(409);
+      const error = await errorOf(res);
+      expect(error).toContain("configuration changed since verification");
+      expect(error).toContain("sha256:swapped");
+      expect(error).not.toContain("valueCanonical");
+    } finally {
+      await ctx.close();
+    }
+  });
+});
+
+describe("hostile panel (D10, U3)", () => {
+  test("the card carries control-plane health measured before and after the run", async () => {
+    const ctx = await makeCtx({ withWorker: true });
+    try {
+      await ctx.harness!.waitUntil(async () => !!(await ctx.store.get("system", "worker-status", "tasks")));
+      const judge = await login(ctx.app, JUDGE);
+      const res = await ctx.app.request("/api/hostile", json({ command: "rm -rf / --no-preserve-root" }, judge));
+      expect(res.status).toBe(200);
+      const card = (await res.json()) as { survived: { controlPlane?: { healthyBefore: boolean; healthyAfter: boolean; checkedAt: string } } };
+      expect(card.survived.controlPlane?.healthyBefore).toBe(true);
+      expect(card.survived.controlPlane?.healthyAfter).toBe(true);
+      expect(Number.isFinite(Date.parse(card.survived.controlPlane!.checkedAt))).toBe(true);
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  test("a stopped worker reads as an unhealthy control plane on the card", async () => {
+    const ctx = await makeCtx({ withWorker: true });
+    try {
+      await ctx.harness!.worker.stop();
+      const judge = await login(ctx.app, JUDGE);
+      const card = (await (await ctx.app.request("/api/hostile", json({ command: "true" }, judge))).json()) as { survived: { controlPlane?: { healthyBefore: boolean; healthyAfter: boolean } } };
+      expect(card.survived.controlPlane).toMatchObject({ healthyBefore: false, healthyAfter: false });
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  test("different clients are also held to a global interval between hostile runs", async () => {
+    let t = 2_000_000;
+    const ctx = await makeCtx({ now: () => t, trustedProxies: ["loopback"], extra: { hostileGlobalMinIntervalMs: 3000 } });
+    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: ctx.app.fetch });
+    const post = async (client: string, path: string, body: unknown, cookie?: string) =>
+      fetch(`http://127.0.0.1:${server.port}${path}`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": client, ...(cookie ? { cookie } : {}) }, body: JSON.stringify(body) });
+    try {
+      const loginAs = async (client: string) => ((await post(client, "/api/session", { password: JUDGE })).headers.get("set-cookie") ?? "").split(";")[0]!;
+      const a = await loginAs("198.51.100.1");
+      const b = await loginAs("198.51.100.2");
+      expect((await post("198.51.100.1", "/api/hostile", { command: "true" }, a)).status).toBe(200);
+      const blocked = await post("198.51.100.2", "/api/hostile", { command: "true" }, b);
+      expect(blocked.status).toBe(429);
+      expect(await errorOf(blocked)).toContain("overall");
+      t += 3001;
+      expect((await post("198.51.100.2", "/api/hostile", { command: "true" }, b)).status).toBe(200);
+      // Client A is still inside its own per-client interval.
+      t += 3001;
+      expect((await post("198.51.100.1", "/api/hostile", { command: "true" }, a)).status).toBe(429);
+    } finally {
+      server.stop(true);
+      await ctx.close();
+    }
+  });
+});
+
+describe("repair availability (U5/G1) and diagnostics (G6)", () => {
+  const receipt = (overrides: Record<string, unknown> = {}) => ({
+    schemaVersion: 1,
+    recordedAt: "2026-09-27T10:00:00.000Z",
+    revision: "c7580dc",
+    profileId: "fx-1",
+    contractDigest: fixture.profile.contractDigest,
+    driver: "vultr",
+    model: "glm-5.3-normalize",
+    inferenceHost: "api.vultrinference.com",
+    runtime: "kata",
+    devUnsafe: false,
+    attempts: ["a", "b", "c"].map((id, i) => ({ taskId: `task-${id}`, outcome: i < 2 ? "CANDIDATE_PASSED_CHECKS" : "CHECKS_FAILED", candidateDigest: "1".repeat(64), modelCalls: 5, modelHosts: ["api.vultrinference.com"], durationMs: 1000 })),
+    passed: 2,
+    total: 3,
+    ...overrides,
+  });
+  const liveHost = () => fakeHost({ selectedRuntime: "kata", devUnsafe: false, availableRuntimes: ["runc", "kata"], instanceId: "vm-b-123" });
+
+  test("signed-out readers see availability; a live task created without evidence is marked repair-disabled; a passing receipt enables repair", async () => {
+    const evidenceDir = await mkdtemp(join(tmpdir(), "airlock-gate-"));
+    const availability = new RepairAvailabilityService({ driver: "vultr", model: "glm-5.3", evidenceDir, repoRoot: tmpdir(), controlInstanceId: "vm-a-456" });
+    const supervisor = new FakeSupervisor({ profile: fixture.profile, observe: fixtureObserve, host: liveHost() });
+    const ctx = await makeCtx({ supervisor, extra: { availability, scriptedDrivers: ["slow"], diagnostics: [{ name: "slow", title: "Runaway command", description: "sleeps" }] } });
+    try {
+      const none = (await (await ctx.app.request("/api/repair-availability")).json()) as RepairAvailability;
+      expect(none.available).toBe(false);
+      expect(none.reason).toContain("no valid live-gate receipt");
+      expect(none.instances).toEqual({ control: "vm-a-456", execution: "vm-b-123" });
+      expect(none.driver).toBe("vultr");
+      const op = await login(ctx.app, OPERATOR);
+      const created = (await (await ctx.app.request("/api/tasks", json({ profileId: "fx-1", issueText: "compute(0) raises" }, op))).json()) as Task;
+      expect(created.repairDisabledReason).toContain("live repair unavailable");
+      expect(created.scriptedDriver).toBeUndefined();
+      // A labelled diagnostic is never repair-disabled (and never a model repair).
+      const judge = await login(ctx.app, JUDGE);
+      const diag = await ctx.app.request("/api/tasks", json({ profileId: "fx-1", issueText: "x", scriptedDriver: "slow" }, judge));
+      expect(diag.status).toBe(201);
+      const diagTask = (await diag.json()) as Task;
+      expect(diagTask.scriptedDriver).toBe("slow");
+      expect(diagTask.repairDisabledReason).toBeUndefined();
+      // The operator running the gate itself is exempt; a judge may not claim to.
+      const gate = (await (await ctx.app.request("/api/tasks", json({ profileId: "fx-1", issueText: "x", liveGate: true }, op))).json()) as Task;
+      expect(gate.repairDisabledReason).toBeUndefined();
+      expect((await ctx.app.request("/api/tasks", json({ profileId: "fx-1", issueText: "x", liveGate: true }, judge))).status).toBe(403);
+
+      await writeFile(join(evidenceDir, "2026-09-27T10-00-00Z.json"), JSON.stringify(receipt()));
+      const ok = (await (await ctx.app.request("/api/repair-availability?profileId=fx-1")).json()) as RepairAvailability;
+      expect(ok.available).toBe(true);
+      expect(ok.evidence).toMatchObject({ passed: 2, attempts: 3, model: "glm-5.3-normalize", runtime: "kata", profileId: "fx-1" });
+      expect(ok.evidence!.path.startsWith("/")).toBe(false);
+      const live = (await (await ctx.app.request("/api/tasks", json({ profileId: "fx-1", issueText: "compute(0) raises" }, op))).json()) as Task;
+      expect(live.repairDisabledReason).toBeUndefined();
+      expect((await ctx.app.request("/api/repair-availability?profileId=nope")).status).toBe(404);
+    } finally {
+      await ctx.close();
+      await rm(evidenceDir, { recursive: true, force: true });
+    }
+  });
+
+  test("the diagnostics catalog is operator/judge only and lists only launchable scripts", async () => {
+    const ctx = await makeCtx({ extra: { scriptedDrivers: ["forged-log", "slow"], diagnostics: [{ name: "forged-log", title: "Forged success log", description: "d" }, { name: "slow", title: "slow", description: "" }, { name: "gone", title: "gone", description: "" }] } });
+    try {
+      expect((await ctx.app.request("/api/diagnostics")).status).toBe(401);
+      const judge = await login(ctx.app, JUDGE);
+      const res = await ctx.app.request("/api/diagnostics", { headers: { cookie: judge } });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ scripts: [{ name: "forged-log", title: "Forged success log", description: "d" }, { name: "slow", title: "slow", description: "" }] });
+      expect((await ctx.app.request("/api/tasks", json({ profileId: "fx-1", issueText: "x", scriptedDriver: "gone" }, judge))).status).toBe(422);
+      // Without a catalog the list is empty and every scriptedDriver is refused.
+      const bare = await makeCtx();
+      try {
+        const op = await login(bare.app, OPERATOR);
+        expect(await (await bare.app.request("/api/diagnostics", { headers: { cookie: op } })).json()).toEqual({ scripts: [] });
+      } finally {
+        await bare.close();
+      }
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  test("a scripted-driver control plane labels every task with its script and reports repair as unavailable", async () => {
+    const availability = new RepairAvailabilityService({ driver: "scripted", model: null, evidenceDir: "/nonexistent", repoRoot: tmpdir() });
+    const ctx = await makeCtx({ extra: { availability, scriptedDrivers: ["default"], defaultScriptedDriver: "default" } });
+    try {
+      const a = (await (await ctx.app.request("/api/repair-availability")).json()) as RepairAvailability;
+      expect(a).toMatchObject({ available: false, reason: SCRIPTED_REASON, driver: "scripted" });
+      const op = await login(ctx.app, OPERATOR);
+      const task = (await (await ctx.app.request("/api/tasks", json({ profileId: "fx-1", issueText: "x" }, op))).json()) as Task;
+      expect(task.scriptedDriver).toBe("default");
+      expect(task.repairDisabledReason).toBeUndefined();
+    } finally {
+      await ctx.close();
+    }
+  });
+});
+
+describe("security headers (U6)", () => {
+  const expectHeaders = (res: Response) => {
+    expect(res.headers.get("content-security-policy")).toBe(CONTENT_SECURITY_POLICY);
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(res.headers.get("referrer-policy")).toBe("no-referrer");
+  };
+
+  test("the policy forbids inline and foreign scripts, framing and foreign connections", () => {
+    const directives = Object.fromEntries(CONTENT_SECURITY_POLICY.split(";").map((d) => d.trim().split(/\s+/)).map(([k, ...v]) => [k, v.join(" ")]));
+    expect(directives["script-src"]).toBe("'self'");
+    expect(directives["connect-src"]).toBe("'self'");
+    expect(directives["frame-ancestors"]).toBe("'none'");
+    expect(directives["base-uri"]).toBe("'none'");
+    expect(directives["default-src"]).toBe("'self'");
+  });
+
+  test("API responses, errors, 404s, the SPA, SSE and the export download all carry the headers", async () => {
+    const repoDist = resolve(import.meta.dir, "../../web/dist");
+    const hasRepoDist = await Bun.file(join(repoDist, "index.html")).exists();
+    const dist = hasRepoDist ? repoDist : await mkdtemp(join(tmpdir(), "airlock-dist-"));
+    if (!hasRepoDist) await writeFile(join(dist, "index.html"), "<!doctype html><title>Airlock</title><script type=\"module\" src=\"/assets/app.js\"></script>");
+    const ctx = await makeCtx({ withWorker: true, webDist: dist });
+    try {
+      expectHeaders(await ctx.app.request("/api/health"));
+      expectHeaders(await ctx.app.request("/api/host"));
+      expectHeaders(await ctx.app.request("/api/nope"));
+      expectHeaders(await ctx.app.request("/api/tasks", { method: "POST", headers: { "content-type": "application/json" }, body: "{oops" }));
+      const index = await ctx.app.request("/");
+      expect(index.status).toBe(200);
+      expectHeaders(index);
+      const html = await index.text();
+      // The built UI must run under script-src 'self': no inline <script> bodies, only same-origin src.
+      for (const tag of html.match(/<script\b[^>]*>[\s\S]*?<\/script>/g) ?? []) {
+        expect(tag).toMatch(/src="\/[^/]/);
+        expect(tag.replace(/<script\b[^>]*>/, "").replace("</script>", "").trim()).toBe("");
+      }
+      const op = await login(ctx.app, OPERATOR);
+      const task = await completedTask(ctx, op);
+      const sse = await ctx.app.request(`/api/tasks/${task.id}/events`, { headers: { cookie: op } });
+      expect(sse.status).toBe(200);
+      expect(sse.headers.get("content-type")).toContain("text/event-stream");
+      expectHeaders(sse);
+      const text = await sse.text();
+      expect(text).toContain("event: end");
+      expect(text).toContain("event: phase");
+      const grant = (await (await ctx.app.request(`/api/tasks/${task.id}/export`, json({}, op))).json()) as { url: string };
+      const dl = await ctx.app.request(grant.url, { headers: { cookie: op } });
+      expect(dl.status).toBe(200);
+      expect(dl.headers.get("content-type")).toBe("application/zip");
+      expectHeaders(dl);
+    } finally {
+      await ctx.close();
+      if (!hasRepoDist) await rm(dist, { recursive: true, force: true });
     }
   });
 });
