@@ -6,12 +6,13 @@
 
 [![The Agent Arena Hackathon](https://img.shields.io/badge/The%20Agent%20Arena%20Hackathon-2026-007BFC?style=for-the-badge)](#hackathon-fit)
 [![Challenge 1](https://img.shields.io/badge/Challenge%201-Blast%20Radius%20Zero-dc2626?style=for-the-badge)](#hackathon-fit)
-[![Live repair gate](https://img.shields.io/badge/live%20repair%20gate-3%2F3%20passed-16a34a?style=for-the-badge)](#status)
+[![Live repair gate](https://img.shields.io/badge/live%20repair%20gate-3%2F3%20on%20Vultr-16a34a?style=for-the-badge)](#status)
+[![Live demo](https://img.shields.io/badge/live%20demo-Kata%20on%20VX1-007BFC?style=for-the-badge)](https://144-202-21-168.sslip.io)
 
 [![Vultr Serverless Inference](https://img.shields.io/badge/Vultr-Serverless%20Inference%20%C2%B7%20glm--5.3-007BFC?style=flat-square&logo=vultr&logoColor=white)](https://www.vultr.com/products/serverless-inference/)
 [![Vultr VX1](https://img.shields.io/badge/Vultr-VX1%20sandbox%20host-007BFC?style=flat-square&logo=vultr&logoColor=white)](https://docs.vultr.com/how-to-set-up-agent-sandboxing-on-vultr-cloud-compute)
-[![Kata Containers](https://img.shields.io/badge/Kata-microVM%20target-f59e0b?style=flat-square)](https://katacontainers.io/)
-[![gVisor](https://img.shields.io/badge/gVisor-runsc%20floor-4285F4?style=flat-square)](https://gvisor.dev/)
+[![Kata Containers](https://img.shields.io/badge/Kata-guest%20kernel%20per%20sandbox-f59e0b?style=flat-square)](https://katacontainers.io/)
+[![gVisor](https://img.shields.io/badge/gVisor-runsc%20installed%20floor-4285F4?style=flat-square)](https://gvisor.dev/)
 [![CopilotKit](https://img.shields.io/badge/CopilotKit-OpenMuse%20%C2%B7%20OpenBot%20modules-6366f1?style=flat-square)](THIRD_PARTY_NOTICES.md)
 
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6?style=flat-square&logo=typescript&logoColor=white)
@@ -39,9 +40,11 @@ Built at **The Agent Arena Hackathon** (Vultr, NetBird, Cerebral Valley; San Fra
 
 ## Status
 
-- **Live repair:** the hero case ([python-tabulate #365](https://github.com/astanin/python-tabulate/issues/365)) was repaired by `glm-5.3` on Vultr Serverless Inference in **3 of 3 fresh runs**, each judged by the external comparator (13–17 model calls, 36–69 s per run). All three patches fix the root cause (use the header count when the table is empty). The gate is `bun scripts/live-gate.ts --n 3`.
-- **Where it ran:** those runs, the smoke and the test suites ran on one macOS laptop with Docker under Colima, on plain `runc` with `AIRLOCK_DEV_UNSAFE=1`. That is a development configuration: it shares the host kernel, and every record it produces is labelled `dev-unsafe`.
-- **Not yet exercised:** the two-VM Vultr deployment, the Kata tier on VX1 and the gVisor tier. They are designed and documented below; none of their properties is claimed until measured there.
+- **Deployed on Vultr, `atl`:** control plane on `vhp-2c-4gb-amd` (VM A) behind Caddy TLS at **https://144-202-21-168.sslip.io**; supervisor on a **VX1** `vx1-g-4c-16g-240s` (VM B), bound to its VPC address only, with **Kata Containers** as the sandbox runtime (gVisor `runsc` installed as the floor). About $0.19/hour for both. Details, scripts and teardown: [`deploy/README.md`](deploy/README.md).
+- **Isolation, measured on VM B** (`deploy/preflight.sh`): `/dev/kvm` present; every sandbox runs a **guest kernel `6.18.35` under Kata** while the host runs `6.8.0-139-generic`; the supervisor's inspection records `runtime=kata`, `devUnsafe=false`; the isolation probe reports metadata, DNS, outbound TCP, Docker socket and host mounts all **BLOCKED**; `169.254.169.254` is unreachable from inside a sandbox; teardown `(no sandboxes)`. Port 4300 is not reachable from the internet.
+- **Smoke against the deployment:** diagnostic repair `CANDIDATE_PASSED_CHECKS`, forged "tests passed" log `CHECKS_FAILED`, a task cancelled mid-command `cancelled` with nothing left running, and a fork bomb absorbed by its Kata sandbox while another task kept running.
+- **Live repair against the deployment:** [python-tabulate #365](https://github.com/astanin/python-tabulate/issues/365) repaired by `glm-5.3` on Vultr Serverless Inference in **3 of 3 fresh runs**, each judged by the external comparator (12–15 model calls, 41–63 s per run). Locally on dev-unsafe `runc` it was also 3 of 3. All patches fix the root cause (use the header count when the table is empty). The gate is `bun scripts/live-gate.ts --n 3`. This is one known historical bug, not a general repair-success rate.
+- **Local development** (`./run.sh`) runs on plain `runc` with `AIRLOCK_DEV_UNSAFE=1`: it shares the host kernel and every record it produces is labelled `dev-unsafe`.
 
 ## Architecture
 
@@ -113,11 +116,11 @@ Every run record carries them; the task page shows them under "Five checkpoints"
 
 The tier is **inspected, never assumed**: the supervisor creates every container with the configured OCI runtime, reads the effective configuration back and refuses (409, container destroyed) if any hardening check or the runtime differs.
 
-| Tier | `AIRLOCK_RUNTIME` | Meaning | Status here |
+| Tier | `AIRLOCK_RUNTIME` | Meaning | Measured |
 |---|---|---|---|
-| Kata Containers | `kata` | own guest kernel per sandbox; target on the VX1 host | untested |
-| gVisor | `runsc` | user-space syscall interception; the floor for a deployment | untested |
-| runc | `runc` + `AIRLOCK_DEV_UNSAFE=1` | shares the host kernel; **development only**, never a deployment default | what this checkout has run on |
+| Kata Containers | `kata` | own guest kernel per sandbox; target on the VX1 host | **deployed**: VM B runs every sandbox under Kata (guest kernel 6.18.35, host 6.8.0), inspected and recorded per run |
+| gVisor | `runsc` | user-space syscall interception; the floor for a deployment | installed on VM B and verified by the preflight (`4.19.0-gvisor`); not the selected runtime |
+| runc | `runc` + `AIRLOCK_DEV_UNSAFE=1` | shares the host kernel; **development only**, never a deployment default | local `./run.sh` on macOS/Colima |
 
 ## Quick start (local, dev-unsafe)
 
@@ -261,7 +264,7 @@ It does not mean the patch is safe, certified, correct in general, or free of ot
 ## Limits and dev-unsafe
 
 - `runc` shares the host kernel. It is accepted only with `AIRLOCK_DEV_UNSAFE=1`, warns at start, and labels every host check, inspection, record and UI page. The hostile panel's "survived" card on `runc` shows that the container's read-only rootfs, dropped capabilities and `--network none` held for that command; it is not a kernel-isolation claim.
-- Kata and gVisor tiers, the VX1 host, the VPC link and NetBird are untested from this checkout.
+- The deployment runs Kata on one VX1 host with the supervisor on the VPC link; NetBird (the optional add-on) is not set up, SSH on both VMs is open to the deploying machine's IP only, and VM B's own egress is unrestricted (sandboxes have none). See the trust-properties section of `deploy/README.md` for exactly what is and is not enforced.
 - Live Vultr repairs: 3 of 3 fresh hero runs passed the comparator with `glm-5.3` (the gate needs 2 of 3). That is one known historical bug run three times, not a general repair-success rate.
 - One profile. Adding profiles is real adapter work, per above.
 - The control plane uses an embedded PGlite database and runs the API and worker in one process; splitting them means moving to Postgres.
