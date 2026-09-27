@@ -39,7 +39,7 @@ bun scripts/probe-model.ts <model> && bun scripts/probe-model.ts --vision <model
 deploy/deploy.sh --driver vultr --model <model> --skip-host-setup
 bun scripts/live-gate.ts --n 3                              # writes docs/evidence/live-gate/<ts>.json on ≥ 2/3
 git add docs/evidence/live-gate && git commit               # repair becomes available only with a matching receipt
-deploy/deploy.sh --only control --skip-host-setup           # reload receipts (or restart airlock-control)
+deploy/deploy.sh --only control --driver vultr --model <model> --skip-host-setup   # reload receipts; without --driver it falls back to scripted
 deploy/vultr/destroy.sh                                     # when done: both VMs bill while they exist
 ```
 
@@ -65,7 +65,7 @@ Production refuses dev-unsafe hosts, runc, and unpinned images on both planes. R
 | Human takeover and approvals | verified on Vultr (approval confirmed by the destination's receipt) | acceptance-f223c19 |
 | Runtime tier measured (Kata on VX1) | verified: preflight 49/49 | docs/evidence/vultr/preflight-*.txt |
 | Live Vultr inference (repair, general, vision) | verified (glm-5.3; vision probe) | docs/evidence/live |
-| Public demo URL on this revision | https://155-138-198-12.sslip.io (revision ee94b83; acceptance at f223c19, demo at dfbba65) | deploy logs, acceptance |
-| Demo video (useful work + containment + teardown) | done: Vultr recording (live model, Kata) and the local labelled recording | [docs/demo/vultr-demo.mp4](demo/vultr-demo.mp4), [docs/demo/README.md](demo/README.md) |
+| Public demo URL on this revision | https://96-30-198-46.sslip.io (redeployed 27 Sep from the maintainer's machine; the previous deployment at `155-138-198-12.sslip.io`, revision dfbba65, is retired and no longer running) | deploy logs, preflight/smoke evidence 20260927T18*, live-gate receipt 2026-09-27T18-13-30Z |
+| Demo video (useful work + containment + teardown) | done: Vultr recording (live model, Kata) on the retired `155-138-198-12` pair, and the local labelled recording | [docs/demo/vultr-demo.mp4](demo/vultr-demo.mp4), [docs/demo/README.md](demo/README.md) |
 | Independent review | verifier: local acceptance, C41 crash/restart 7/7; devil's advocate: R1, S1–S4, L1, N1 closed; L2, L3, N2 documented limitations | [acceptance-matrix.md](acceptance-matrix.md), ledger |
 | NetBird bonus | not attempted (optional) | — |

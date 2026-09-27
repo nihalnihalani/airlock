@@ -8,7 +8,7 @@ An AI agent that does real work (repairs real bugs, browses the real web, runs r
 
 [![The Agent Arena Hackathon](https://img.shields.io/badge/The%20Agent%20Arena%20Hackathon-Vultr%20·%20SF%202026-007BFC?style=for-the-badge)](#-hackathon-submission)
 [![Challenge 1](https://img.shields.io/badge/Challenge%201-Blast%20Radius%20Zero-dc2626?style=for-the-badge)](#-how-airlock-solves-blast-radius-zero)
-[![Live demo](https://img.shields.io/badge/▶%20live%20demo-155--138--198--12.sslip.io-16a34a?style=for-the-badge)](https://155-138-198-12.sslip.io)
+[![Live demo](https://img.shields.io/badge/▶%20live%20demo-96--30--198--46.sslip.io-16a34a?style=for-the-badge)](https://96-30-198-46.sslip.io)
 [![Demo video](https://img.shields.io/badge/▶%20video-Vultr%20walkthrough%202%3A20-111827?style=for-the-badge)](docs/demo/vultr-demo.mp4)
 
 [![Vultr Serverless Inference](https://img.shields.io/badge/Vultr-Serverless%20Inference%20·%20glm--5.3-007BFC?style=flat-square&logo=vultr&logoColor=white)](https://www.vultr.com/products/cloud-inference/)
@@ -50,9 +50,9 @@ An AI agent that does real work (repairs real bugs, browses the real web, runs r
 - **Real work, not a chat.** Paste a real bug report and Airlock reproduces it, repairs it with `glm-5.3` on **Vultr Serverless Inference**, and returns a patch. Or give it a goal and it drives a real **Chromium**, downloads data, and analyses it offline into a chart with cited sources.
 - **Blast radius zero.** Every command, page and line of model-written code runs in a **Kata microVM on a Vultr VX1 host**. It has its own guest kernel, no network (the browser gets only an allowlisting proxy), no secrets, hard caps, and it is destroyed after use. `rm -rf /` and fork bombs die inside their sandbox while everything else keeps running.
 - **The agent can't mark its own homework.** Success is decided by an external comparator, on sealed bytes, in fresh sandboxes. A forged "all tests passed" log still fails.
-- **Deployed and measured on Vultr:** preflight **49/49**, live repair **3/3**, end-to-end acceptance **9/9** with the live model.
+- **Deployed and measured on Vultr:** preflight **49/49** and live repair **3/3** on the current pair; end-to-end acceptance **9/9** with the live model and the demo video on the previous pair (`155-138-198-12`, retired and deleted).
 
-**Try it:** https://155-138-198-12.sslip.io. Sign in with the judge password shared with the submission (it is never stored in this repo). Then start a repair (the `tabulate-365` profile), run a web-analysis task, or paste `rm -rf / --no-preserve-root` into **Hostile input**.
+**Try it:** https://96-30-198-46.sslip.io. Sign in with the judge password shared with the submission (it is never stored in this repo). Then start a repair (the `tabulate-365` profile), run a web-analysis task, or paste `rm -rf / --no-preserve-root` into **Hostile input**.
 
 ---
 
@@ -68,7 +68,7 @@ The kickoff turned the brief into four judge questions. Here are the answers, ea
 
 | The judge asks | Airlock's answer | Proof |
 |---|---|---|
-| **"Show me the instance."** | Two Vultr VMs in `atl`: VM A `vc2-2c-4gb` (control) and VM B **VX1** `vx1-g-4c-16g-240s` (sandboxes, `/dev/kvm`). Every run record carries the host check of the machine that ran it, and the UI shows both instance IDs. | [01-instance-host-check](docs/assets/vultr/01-instance-host-check.jpg) |
+| **"Show me the instance."** | Two Vultr VMs in `atl`: VM A `vc2-2c-4gb` (control) and VM B **VX1** `vx1-g-4c-16g-240s` (sandboxes, `/dev/kvm`). Every run record carries the host check of the machine that ran it, including the instance ID. | [01-instance-host-check](docs/assets/vultr/01-instance-host-check.jpg) |
 | **"Is the model yours, or a borrowed key?"** | Every agent turn goes to **Vultr Serverless Inference**. The model was picked by a measured tool-call round trip on the live `/v1/models` list, and each turn records model, host and tokens. | [live-gate receipt](docs/evidence/live-gate/) |
 | **"Is Vultr planning and dispatching?"** | The control plane on VM A owns phases, budgets and the model loop, and dispatches every tool call over the **VPC** to the supervisor on VX1. Nothing from a report or the model runs in the app process. | [Architecture](#-architecture) |
 | **"If I paste `rm -rf /`, what dies?"** | Only that sandbox: its Kata guest kernel `6.18.35` (host `6.8.0`). The control plane, supervisor, host sentinel and a sibling task survive, and the card ends with `(no sandboxes)`. | [06-hostile-rm-rf](docs/assets/vultr/06-hostile-rm-rf.jpg) · [07-forkbomb-sibling-survived](docs/assets/vultr/07-hostile-forkbomb-sibling-survived.jpg) |
@@ -278,9 +278,9 @@ Every run record, task page and export bundle carries all five:
 
 | Gate | Result | Evidence |
 |---|---|---|
-| **Preflight on the VX1 host** (KVM, Kata, 13 hardening checks, isolation probe, workspace quota, Chromium sandbox under Kata, egress-only-via-proxy, metadata and form POSTs refused, empty host) | **49/49** | [docs/evidence/vultr/](docs/evidence/vultr/) |
-| **Live repair gate**: fresh tabulate #365 repairs through the public URL, judged by the comparator | **3/3** | [docs/evidence/live-gate/](docs/evidence/live-gate/) |
-| **Vultr acceptance**: analysis · web research · live repair + byte-identical export · hero (2 data variants) · approvals with destination receipt · human takeover · Kata containment · two-judge isolation · empty host | **9/9** | [acceptance-f223c19](docs/evidence/vultr/acceptance-f223c19/) |
+| **Preflight on the VX1 host**, re-run on the current pair (KVM, Kata, 13 hardening checks, isolation probe, workspace quota, Chromium sandbox under Kata, egress-only-via-proxy, metadata and form POSTs refused, empty host) | **49/49** | [docs/evidence/vultr/](docs/evidence/vultr/) |
+| **Live repair gate**: fresh tabulate #365 repairs through the public URL, judged by the comparator (current pair, 18:13Z, and the previous pair) | **3/3** | [docs/evidence/live-gate/](docs/evidence/live-gate/) |
+| **Vultr acceptance** (previous pair, same code, 17:03Z): analysis · web research · live repair + byte-identical export · hero (2 data variants) · approvals with destination receipt · human takeover · Kata containment · two-judge isolation · empty host | **9/9** | [acceptance-f223c19](docs/evidence/vultr/acceptance-f223c19/) |
 | **Negative controls**: forged "tests passed" log → `CHECKS_FAILED`; changed approval digest → 409; replayed approval → 409; other judge → 404; off-allowlist navigation → 422 | pass | [acceptance-f223c19](docs/evidence/vultr/acceptance-f223c19/); forged log: [Vultr smoke](docs/evidence/vultr/smoke-20260927T164034Z.txt) (scripted driver) |
 | **Crash/restart** (local `runc`, scripted drivers, not the deployment): control plane or supervisor killed mid-operation; nothing uncertain is replayed | 7/7 | [docs/acceptance-matrix.md](docs/acceptance-matrix.md) |
 | **Findings ledger**: 95 audited requirements | 0 open (1 conditional, 1 optional) | [docs/implementation-status.md](docs/implementation-status.md) |

@@ -1,0 +1,133 @@
+# deploy/preflight.sh on VM B (VX1 vx1-g-4c-16g-240s, atl, instance a14c83ea-3bc9-413c-908d-f866257e74e3) — 20260927T180645Z — revision 7e438ba — after deploy.sh --driver vultr rebuilt the images (runtime image sha256:b42b1a0f…, the one the live gate ran on)
+== airlock preflight on airlock-sandbox at 2026-09-27T18:06:48Z
+host kernel: 6.8.0-139-generic   Linux airlock-sandbox 6.8.0-139-generic #139-Ubuntu SMP PREEMPT_DYNAMIC Sat Aug  1 03:52:05 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+cpu: AMD EPYC-Turin Processor   virt flags on 4 cores
+/dev/kvm: crw-rw---- 1 root kvm 10, 232 Sep 27 18:05 /dev/kvm
+  ok   /dev/kvm present
+  ok   /dev/kvm readable+writable by root
+  ok   /dev/kvm readable+writable by airlock-supervisor
+== docker
+Docker version 29.8.1, build 4a63305
+runtimes: io.containerd.runc.v2 kata runc runsc    default: runc
+daemon.json: {"log-driver":"json-file","log-opts":{"max-file":"3","max-size":"20m"},"runtimes":{"kata":{"options":{"ConfigPath":"/opt/kata/share/defaults/kata-containers/configuration.toml"},"runtimeType":"io.containerd.kata.v2"},"runsc":{"path":"/usr/bin/runsc"}}}
+== runtime uname checks (docker run --rm --runtime=<name> python:3.12-slim uname -r)
+  kata: 6.18.35
+  ok   kata guest kernel (6.18.35) differs from host (6.8.0-139-generic)
+  runsc: 4.19.0-gvisor
+  ok   runsc reports gVisor's kernel string (4.19.0-gvisor)
+  runc: 6.8.0-139-generic
+  (runc shares the host kernel: same — reference only, never a deployment runtime)
+  kata-runtime check: System is capable of running Kata Containers System can currently create Kata Containers 
+  kata full uname inside guest: Linux e84bddc95bfb 6.18.35 #1 SMP Mon Jun 15 12:55:58 UTC 2026 x86_64 GNU/Linux
+  runsc full uname inside sandbox: Linux f76c58f4c43f 4.19.0-gvisor #1 SMP Sun Jan 10 15:06:54 PST 2016 x86_64 GNU/Linux
+== listeners and firewall on VM B
+LISTEN 0      512        10.6.96.3:4300      0.0.0.0:*    users:(("bun",pid=20541,fd=22))          
+LISTEN 0      128          0.0.0.0:22        0.0.0.0:*    users:(("sshd",pid=1089,fd=3))           
+LISTEN 0      128             [::]:22           [::]:*    users:(("sshd",pid=1089,fd=4))           
+  ok   supervisor bound to the VPC address 10.6.96.3:4300 only
+ufw: Status: active;4300/tcp ALLOW 10.6.96.5 # airlock supervisor from the control plane VPC address;
+  ok   ufw active, 4300/tcp allowed from 10.6.96.5 only
+docker containers owned by airlock (should be none between runs): 
+== supervisor service
+active User=airlock-supervisor Group=airlock-supervisor SupplementaryGroups=docker 
+env file: root:root 600 /etc/airlock/supervisor.env
+AIRLOCK_RUNTIME=kata  AIRLOCK_DEV_UNSAFE=
+  ok   AIRLOCK_DEV_UNSAFE is not 1
+== supervisor API (deploy/preflight-api.ts)
+== supervisor /health (public liveness) and /host (authenticated host check)
+  ok   public /health is liveness only ({"ok":true})
+{
+  "checkedAt": "2026-09-27T18:06:02.365Z",
+  "dockerVersion": "29.8.1",
+  "cpuVirtualization": true,
+  "kvmPresent": true,
+  "kvmReadWrite": true,
+  "availableRuntimes": [
+    "io.containerd.runc.v2",
+    "kata",
+    "runc",
+    "runsc"
+  ],
+  "selectedRuntime": "kata",
+  "devUnsafe": false,
+  "hostUname": "Linux airlock-sandbox 6.8.0-139-generic #139-Ubuntu SMP PREEMPT_DYNAMIC Sat Aug  1 03:52:05 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux",
+  "hostHostname": "airlock-sandbox",
+  "instanceId": "a14c83ea-3bc9-413c-908d-f866257e74e3",
+  "runtimeImageId": "sha256:b42b1a0fcddd45bc590cfafc7d74ec5f39afb88383161ca99c59853c153bf1c7"
+}
+  ok   GET /host → 200
+  ok   host.devUnsafe=false (false)
+  ok   host.kvmPresent=true (true)
+  ok   host.selectedRuntime=kata (not runc)
+  ok   runtime image pinned (sha256:b42b1a0fcddd45bc590cfafc7d74ec5f39afb88383161ca99c59853c153bf1c7)
+== author sandbox: create → inspect → probe → uname → destroy
+  ok   POST /attempts → 200
+  inspection.runtime=kata devUnsafe=false container=airlock-author-preflight-muk4rnyc-amuk4rnyc
+  inspection.guestHostname=sandbox
+  inspection.guestUname=Linux sandbox 6.18.35 #1 SMP Mon Jun 15 12:55:58 UTC 2026 x86_64 GNU/Linux
+  inspection.imageDigest=airlock-runtime-python@sha256:b42b1a0fcddd45bc590cfafc7d74ec5f39afb88383161ca99c59853c153bf1c7
+  inspection.checks={"networkNone":true,"nonRootUser":true,"readOnlyRootfs":true,"capDropAll":true,"noNewPrivileges":true,"pidsLimited":true,"memoryLimited":true,"cpuLimited":true,"noHostBinds":true,"noPorts":true,"privateIpc":true,"restartDisabled":true,"ownedLabels":true}
+  ok   inspection.runtime="kata" equals the selected runtime "kata"
+  ok   inspection.devUnsafe=false
+  probe: metadataEndpoint=BLOCKED dns=BLOCKED outboundTcp=BLOCKED dockerSocket=BLOCKED hostMounts=BLOCKED
+  ok   probe.metadataEndpoint=BLOCKED (BLOCKED)
+  ok   probe.dns=BLOCKED (BLOCKED)
+  ok   probe.outboundTcp=BLOCKED (BLOCKED)
+  ok   probe.dockerSocket=BLOCKED (BLOCKED)
+  ok   probe.hostMounts=BLOCKED (BLOCKED)
+  exec uname -a (exit 0):
+    Linux sandbox 6.18.35 #1 SMP Mon Jun 15 12:55:58 UTC 2026 x86_64 GNU/Linux
+    sandbox
+    uid=1000(airlock) gid=1000(airlock) groups=1000(airlock)
+    Linux version 6.18.35 (@7c0e9e6c767b) (gcc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0, GNU ld (GNU Binutils for Ubuntu) 2.38) #1 SMP Mon Jun 15 12:55:58 UTC 2026
+  ok   exec inside the sandbox succeeded
+  teardown: {"destroyedAt":"2026-09-27T18:06:55.744Z","containersRemaining":[],"volumesRemaining":[],"clean":true,"host":{"listedAt":"2026-09-27T18:06:55.744Z","scope":"host","containers":[],"volumes":[],"networks":[]},"networksRemaining":[]}
+  ok   teardown clean (no sandboxes)
+== hostile one-shot: metadata endpoint from inside the sandbox
+  ok   POST /hostile → 200
+  died: {"container":"airlock-hostile-hostile-op-pf-muk4rq4j-reynri","runtime":"kata","guestUname":"Linux sandbox 6.18.35 #1 SMP Mon Jun 15 12:55:58 UTC 2026 x86_64 GNU/Linux","reason":"the command exited 0; then the container and its volume were destroyed"}
+  survived: {"supervisorHealthy":true,"hostSentinelUnchanged":true,"otherAttemptsRunning":0,"hostUptimeSeconds":625,"siblings":[]}
+  exec stdout:
+    6.18.35
+    METADATA_BLOCKED URLError
+  teardown: {"destroyedAt":"2026-09-27T18:06:58.795Z","containersRemaining":[],"volumesRemaining":[],"clean":true,"host":{"listedAt":"2026-09-27T18:06:58.795Z","scope":"host","containers":[],"volumes":[],"networks":[]},"networksRemaining":[]}
+  ok   169.254.169.254 unreachable from inside the sandbox
+  ok   hostile inspection.runtime="kata"
+  ok   supervisor healthy and host sentinel unchanged afterwards
+  ok   hostile teardown clean
+== G4/D1: workspace quota, background child, post-stop collection
+  ok   author attempt for runtime gates → 200
+  D1 host MemAvailable: before 14953 MiB, with the workspace full 14698 MiB (delta 255 MiB)
+  workspace fill:
+    133169152 bytes (133 MB, 127 MiB) copied, 0.836088 s, 159 MB/s
+    rc=0
+    none              131072 131072         0 100% /workspace
+  ok   D1/G4: the workspace quota holds (wrote 133169152 of 419430400 bytes; /workspace size 131072 KiB)
+  ok   G4: detached background child started
+  ok   author write before freeze
+  ok   D1: post-stop collection on this runtime returns the written file (freeze 200, 1 file(s))
+  ok   G4: destroy clean after a detached child (whole sandbox stopped)
+  ok   G4: destroyed id cannot execute again (→ 409)
+== C4: browser attempt under this runtime (Chromium sandbox, egress, mutation guard)
+  ok   browser attempt → 200
+  browser inspection.runtime=kata guest=Linux browser 6.18.35 #1 SMP Mon Jun 15 12:55:58 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+  chromium sandbox: {"chromiumProcesses":7,"anyNoSandboxFlag":false,"zygotePresent":true,"renderersInNestedPidNamespace":true,"renderers":1}
+  ok   C4: browser container runs under kata
+  ok   C4: Chromium's own sandbox is active under this runtime
+  ok   C4: allowed navigation works through the egress proxy
+  ok   C4: screenshot captured
+  ok   C8: metadata endpoint refused
+  ok   C27: form POST on an allowlisted site refused by the runner under this runtime
+  egress summary: {"allowed":2,"denied":1}
+  ok   browser teardown clean (containers and networks)
+== C29/C30: analysis sandbox under this runtime
+  ok   analysis attempt → 200
+  ok   analysis code ran offline
+  ok   collected outputs/summary.json has the computed answer
+  ok   analysis teardown clean
+== host-wide listing after preflight: {"containers":0,"volumes":0,"networks":0}
+  ok   host-wide (no sandboxes) after preflight
+PREFLIGHT API: all checks passed
+== egress note
+Vultr's firewall filters inbound only; VM B's own egress is unrestricted (apt, image pulls). Sandboxes run with --network none, so no sandbox has egress regardless.
+PREFLIGHT PASSED

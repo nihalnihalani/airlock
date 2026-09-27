@@ -1,0 +1,160 @@
+# scripts/smoke.ts through https://96-30-198-46.sslip.io — 20260927T180213Z — revision faf79cd — Kata on VX1, scripted diagnostic drivers — redeployed from the maintainer's machine
+Airlock smoke — control https://96-30-198-46.sslip.io, supervisor http://127.0.0.1:14300
+
+== public surface (signed out)
+  ok   GET /api/health → {ok:true} and nothing else
+  ok   Content-Security-Policy on API responses (default-src 'self'; script-src 'self'; style-src 'self' 'uns…)
+  ok   nosniff and no-referrer on API responses
+  ok   the web UI is served under the same policy
+  ok   GET /api/host without a session → 401
+    repair availability: available=false driver=scripted reason=scripted diagnostics driver: runs are diagnostics, not model repairs
+  ok   a scripted driver never reports live repair as available
+
+== login as operator and judge
+  ok   operator password available (data/dev.env or AIRLOCK_OPERATOR_PASSWORD)
+  ok   judge password available (data/dev.env or AIRLOCK_JUDGE_PASSWORD)
+  ok   session role is operator (operator)
+  ok   second session role is judge (judge)
+  ok   GET /api/host with a session → 200
+  ok   diagnostics catalog offers diagnostic, forged-log, general-analysis, general-hero, slow
+  ok   profile tabulate-365 is offered
+  ok   maintainer reference commit is not exposed
+
+== task 1: diagnostic scripted repair → CANDIDATE_PASSED_CHECKS
+  task task-8ef55752b70f2679 (diagnostic, scripted:diagnostic)
+    #2 phase     prepare
+    #3 phase     baseline
+    #6 check     Isolation checkpoints
+    #13 check     Baseline reproduces the reported failure
+    #14 phase     reproduce
+    #21 phase     repair
+    #26 phase     freeze
+    #30 phase     verify
+    #37 check     Candidate passed these checks
+    #38 phase     Outcome CANDIDATE_PASSED_CHECKS
+  ok   SSE stream ended with the terminal `end` event
+  ok   status done (done)
+  ok   outcome CANDIDATE_PASSED_CHECKS (CANDIDATE_PASSED_CHECKS)
+  ok   task is labelled a diagnostic (scriptedDriver=diagnostic)
+  ok   baseline record: reported failure reproduced
+  ok   verification record: 6/6 cases
+  ok   TaskView carries 6 contract case titles (seam 2)
+
+== five checkpoints (task 1)
+  ok   1 host check present on TaskView
+    docker 29.8.1; cpuVirt=true kvm=true runtimes=[io.containerd.runc.v2,kata,runc,runsc] selected=kata devUnsafe=false
+  ok   2 execution log: 14 exec events with exit codes
+    #7 baseline invocation reported-empty-headers-maxheader succeeded exit=0
+    #8 baseline invocation reg-small-table-maxheader succeeded exit=0
+    #9 baseline invocation reg-small-table-plain succeeded exit=0
+    #10 baseline invocation reg-empty-headers-no-option succeeded exit=0
+    #11 baseline invocation reg-maxcolwidths-wrap succeeded exit=0
+    #12 baseline invocation reg-scalar-maxheader-int succeeded exit=0
+    #18 run: python -c "import tabulate; print(tabulate.tabulate([], headers=['a', 'b'], maxheadercolwidths=5))" exit=1
+    #23 run: python -c "import tabulate; print(tabulate.tabulate([], headers=['a', 'b'], maxheadercolwidths=5))" exit=1
+    #31 candidate invocation reported-empty-headers-maxheader succeeded exit=0
+    #32 candidate invocation reg-small-table-maxheader succeeded exit=0
+    #33 candidate invocation reg-small-table-plain succeeded exit=0
+    #34 candidate invocation reg-empty-headers-no-option succeeded exit=0
+    #35 candidate invocation reg-maxcolwidths-wrap succeeded exit=0
+    #36 candidate invocation reg-scalar-maxheader-int succeeded exit=0
+  ok   3 in-sandbox identity proof
+    container airlock-candidate-task-8ef55752b70f2679-op-op-4d0df76d384d0c7057ebee8a runtime=kata hostname=sandbox
+    uname=Linux sandbox 6.18.35 #1 SMP Mon Jun 15 12:55:58 UTC 2026 x86_64 GNU/Linux
+  ok   4 isolation probe fully BLOCKED before agent work
+    metadata=BLOCKED dns=BLOCKED tcp=BLOCKED dockerSocket=BLOCKED hostMounts=BLOCKED
+  ok   5 teardown: (no sandboxes)
+  ok   5 model turns recorded
+  ok   model events are labelled scripted (scripted:diagnostic, seam 3)
+  ok   run events carry command and full ExecResult (seam 3)
+
+== preview on the sealed candidate
+  ok   preview ran against the sealed digest
+  ok   preview observation ok (exec succeeded)
+  ok   preview text equals the contract's header-only table
+    preview text:
+      | Name    Value
+      | ------  -------
+  ok   preview with a foreign digest is refused (409)
+
+== export bundle
+  ok   GET /api/exports/grant-0326ce1bc358a6ece3e623b0 → 200 application/zip
+  ok   downloaded zip hashes to the grant's zipDigest
+  ok   unzip ok (169661 bytes)
+    x/README.txt
+    x/baseline.json
+    x/events.jsonl
+    x/manifest.json
+    x/patch.diff
+    x/reproduction/README.txt
+    x/reproduction/files/tabulate/__init__.py
+    x/task.json
+    x/verification.json
+  ok   zip contains patch.diff
+  ok   patch -p1 --dry-run applies cleanly to profiles/tabulate-365/base: patching file 'tabulate/__init__.py'
+  ok   repeated export returns the same grant
+
+== hostile panel (judge): rm -rf / --no-preserve-root
+  ok   the operator role cannot run the hostile panel (403)
+    died:     container=airlock-hostile-hostile-op-op-92d1c17ac9f3bfaf794b41ed runtime=kata reason=the command exited 1; then the container and its volume were destroyed
+    exec:     failed exit=1 794ms stderr(tail)="e system\nrm: cannot remove '/proc/sys/net/ipv6/conf/default/disable_ipv6': Read-only file system\nrm: cannot remove '/proc/sys/net/ipv6/conf/default/disable_poli"
+    survived: supervisorHealthy=true hostSentinelUnchanged=true otherAttemptsRunning=0 hostUptimeSeconds=389
+  ok   died: the sandbox is named and its end is explained
+  ok   survived: supervisor healthy and host sentinel unchanged
+  ok   teardown clean: (no sandboxes)
+    control plane: healthyBefore=true healthyAfter=true
+  ok   survived: control plane healthy before and after (store + worker heartbeat)
+  ok   a fresh judge login from the same client is still rate limited (429)
+  ok   control plane still answers after the hostile run (200)
+
+== task 2: forged-log scripted 'repair' → CHECKS_FAILED by the comparator
+  task task-dfcee488835852b3 (forged log, behaviour unchanged, scripted:forged-log)
+    #2 phase     prepare
+    #3 phase     baseline
+    #6 check     Isolation checkpoints
+    #13 check     Baseline reproduces the reported failure
+    #14 phase     reproduce
+    #17 phase     repair
+    #22 phase     freeze
+    #26 phase     verify
+    #33 check     Candidate failed checks
+    #35 phase     reproduce
+    #38 check     Isolation checkpoints
+    #41 phase     repair
+    #46 phase     freeze
+    #50 phase     verify
+    #57 check     Candidate failed checks
+    #58 phase     Outcome CHECKS_FAILED
+  ok   SSE stream ended with the terminal `end` event
+  ok   status done (done)
+  ok   outcome CHECKS_FAILED (CHECKS_FAILED)
+  ok   a candidate was sealed and externally verified (the write was accepted, not refused)
+  ok   verification record: not passed
+  ok   the comparator failed the reported case (reported-empty-headers-maxheader)
+  ok   the forged-log run printed "312 passed" in its sandbox (exec stdout), and the comparator still failed it
+  ok   preview on a failed candidate is refused (409)
+
+== task 3: fork bomb in a hostile sandbox while task 3's command runs; then cancel during its next command
+  task task-f497724e285ed80f (slow, cancelled, scripted:slow)
+    #2 phase     prepare
+    #3 phase     baseline
+    #6 check     Isolation checkpoints
+    #13 check     Baseline reproduces the reported failure
+    #14 phase     reproduce
+    fork bomb: exec timed_out exit=null; survived: supervisorHealthy=true otherAttemptsRunning=1; teardown clean=true
+    cancel → status cancelling (phase reproduce)
+  ok   SSE stream ended with the terminal `end` event
+  ok   hostile fork bomb ran while task 3's command was executing
+  ok   supervisor and host sentinel survived the fork bomb
+  ok   task 3's attempt was still running during the fork bomb (otherAttemptsRunning=1)
+  ok   fork-bomb sandbox torn down clean
+  ok   task 3's first command completed unaffected (succeeded exit=0)
+  ok   cancel was accepted while running
+  ok   final status cancelled (cancelled)
+  ok   no outcome invented for a cancelled task
+  ok   teardown after cancellation recorded
+  ok   supervisor GET /attempts → 200
+  ok   no live attempt for task-f497724e285ed80f at the supervisor (0)
+  ok   docker ps by label airlock.supervisor=true: (no sandboxes)
+
+SMOKE PASSED — outcomes: task1=CANDIDATE_PASSED_CHECKS task2=CHECKS_FAILED task3=cancelled
