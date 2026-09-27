@@ -1,0 +1,10 @@
+{
+  "title": "General analysis (scripted diagnostic): uploaded CSV -> summary",
+  "description": "DIAGNOSTIC fixture, not a model run: a scripted driver for the analysis profile. Upload a CSV first and create the task with it as the only input; the labelled summarize.py summarises the first CSV under inputs/ into outputs/summary.json and outputs/columns.csv. Every model event is labelled scripted.",
+  "turns": [
+    { "text": "Listing the inputs.", "toolCalls": [{ "name": "files_list", "args": {} }] },
+    { "text": "Writing the summary program.", "toolCalls": [{ "name": "code_write", "args": { "path": "code/summarize.py", "contentFile": "summarize.py" } }] },
+    { "text": "Running it.", "toolCalls": [{ "name": "code_run", "args": { "language": "python", "file": "code/summarize.py" } }] },
+    { "text": "Submitting.", "toolCalls": [{ "name": "submit_result", "args": { "summary": "Scripted diagnostic: row and column summary of the uploaded CSV.", "outputs": ["outputs/summary.json", "outputs/columns.csv"], "sources": [] } }] }
+  ]
+}

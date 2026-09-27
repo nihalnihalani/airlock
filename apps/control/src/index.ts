@@ -6,10 +6,12 @@
 import { join } from "node:path";
 import type { Task } from "@airlock/contracts";
 import { createApp } from "./api.ts";
+import { ArtifactService } from "./artifact-service.ts";
 import { RepairAvailabilityService, describeDiagnostics, type DiagnosticScript } from "./availability.ts";
 import { ArtifactStore, buildManifest, exportBundle, validateEnvelope, zipFiles } from "./artifacts/index.ts";
 import { inferenceFetch, loadConfig, redactConfig, ConfigError } from "./config.ts";
 import { TaskEventBus } from "./events.ts";
+import { createDispatchingHandler, createGeneralHandler } from "./general-handler.ts";
 import { log } from "./log.ts";
 import { loadProfilesReport } from "./profiles.ts";
 import { computeAdapterDigest, createRepairHandler, type DriverSource } from "./repair-handler.ts";
@@ -67,11 +69,13 @@ async function main() {
       : null;
   const driverCatalog: ScriptedCatalog | null = config.driver.kind === "scripted" ? await openScriptedCatalog(config.driver.scriptPath) : null;
   const diagnosticCatalog: ScriptedCatalog | null = config.diagnosticScriptsDir ? await openScriptedCatalog(config.diagnosticScriptsDir) : null;
+  const generalCatalog: ScriptedCatalog | null = config.generalDiagnosticScriptsDir ? await openScriptedCatalog(config.generalDiagnosticScriptsDir) : null;
   const catalogFor = (name: string): ScriptedCatalog | null =>
-    diagnosticCatalog?.names.includes(name) ? diagnosticCatalog : driverCatalog?.names.includes(name) ? driverCatalog : null;
-  const scriptedDrivers = [...new Set([...(diagnosticCatalog?.names ?? []), ...(driverCatalog?.names ?? [])])].sort();
+    diagnosticCatalog?.names.includes(name) ? diagnosticCatalog : generalCatalog?.names.includes(name) ? generalCatalog : driverCatalog?.names.includes(name) ? driverCatalog : null;
+  const scriptedDrivers = [...new Set([...(diagnosticCatalog?.names ?? []), ...(generalCatalog?.names ?? []), ...(driverCatalog?.names ?? [])])].sort();
   const diagnostics: DiagnosticScript[] = [
     ...(diagnosticCatalog ? await describeDiagnostics(diagnosticCatalog.path, diagnosticCatalog.names) : []),
+    ...(generalCatalog ? await describeDiagnostics(generalCatalog.path, generalCatalog.names.filter((n) => !diagnosticCatalog?.names.includes(n))) : []),
     ...(driverCatalog ? await describeDiagnostics(driverCatalog.path, driverCatalog.names.filter((n) => !diagnosticCatalog?.names.includes(n))) : []),
   ].sort((a, b) => a.name.localeCompare(b.name));
   const defaultScriptedDriver = driverCatalog ? (driverCatalog.names.length === 1 ? driverCatalog.names[0]! : driverCatalog.names.includes("default") ? "default" : null) : null;
@@ -100,7 +104,7 @@ async function main() {
   });
 
   const bus = new TaskEventBus();
-  const handler = createRepairHandler({
+  const repairHandler = createRepairHandler({
     profiles: report.profiles,
     supervisor,
     driver,
@@ -120,6 +124,22 @@ async function main() {
     // state when it was created (a scripted control plane has no live repair to gate).
     repairAvailability: async (_task, profile, host) => (availability.driver === "vultr" ? availability.evaluate(profile, host) : null),
   });
+  // General tasks (kind "general") run the general handler at the same worker seam; repair is unchanged.
+  const artifactService = new ArtifactService(store, artifacts);
+  const generalHandler = createGeneralHandler({
+    supervisor,
+    driver,
+    store,
+    artifacts: artifactService,
+    blobs: artifacts,
+    authorizationMs: Math.round((WORKER_LEASE_MS * 2) / 3),
+    maxTokens: config.modelMaxTokens,
+    ...(config.modelReasoningEffort ? { reasoningEffort: config.modelReasoningEffort } : {}),
+    vision: config.modelVision,
+    production: config.production,
+  });
+  if (config.modelVision) log.info("AIRLOCK_MODEL_VISION=1: screenshots are sent to the model as images (verify with scripts/probe-model.ts --vision)");
+  const handler = createDispatchingHandler({ repair: repairHandler, general: generalHandler });
   const worker = new TaskWorker(store, handler, { bus, leaseMs: WORKER_LEASE_MS, pollMs: 1000, concurrency: 2 });
   const sessions = new SessionService(store, {
     operatorPassword: config.operatorPassword,
@@ -133,6 +153,7 @@ async function main() {
     profiles: report.profiles,
     supervisor,
     artifacts,
+    artifactService,
     worker,
     bus,
     exportBundle,

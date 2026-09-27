@@ -23,6 +23,8 @@ bunx tsc --noEmit -p tsconfig.json  # from apps/control
 | `AIRLOCK_ALLOW_TEST_INFERENCE_URL` | no | unset | `1` permits a non-Vultr https inference URL for testing. Refused in production. |
 | `AIRLOCK_PRODUCTION` | no | unset (deploy.sh: `1`) | `1` marks a deployment: test-only overrides are refused; new tasks are refused (503) while the supervisor is dev-unsafe or on `runc`; a record measured dev-unsafe or on `runc` is never a verdict, previewed or exported; export also requires a fully BLOCKED isolation probe on both records. A scripted default driver is still allowed (labelled diagnostics). |
 | `AIRLOCK_DIAGNOSTIC_SCRIPTS_DIR` | no | unset (dev-up: `apps/control/test/fixtures/scripted`) | Directory of labelled diagnostic scripts (`<name>.json`, optional `title`/`description`) that an operator or judge may launch with `scriptedDriver` **whatever the model driver**. Such tasks carry `task.scriptedDriver`, are labelled diagnostic in their events, and never count as model repairs. |
+| `AIRLOCK_GENERAL_DIAGNOSTIC_SCRIPTS_DIR` | no | unset | Labelled scripted diagnostics for **general** tasks (e.g. `apps/control/test/fixtures/scripted-general`), merged into the diagnostics catalog; a general task selects one with `scriptedDriver`. Never a model run. |
+| `AIRLOCK_MODEL_VISION` | no | unset | `1` marks the configured model as vision-capable: general tasks attach each screenshot (PNG) to the next model turn as an `image_url` content part. Set it only after `bun scripts/probe-model.ts --vision <model>` passed (an actual image round trip). Unset: no image is ever sent. |
 | `AIRLOCK_LIVE_GATE_EVIDENCE_DIR` | no | `<repo>/docs/evidence/live-gate` | Committed `LiveGateReceipt` files. See *Repair availability*. |
 | `AIRLOCK_INSTANCE_ID` | no | unset | Vultr instance id of this VM, reported by `GET /api/repair-availability` beside the execution host's. |
 | `AIRLOCK_MODEL` | with `vultr` | — | Model name chosen by the measured tool-call probe. |
@@ -77,13 +79,20 @@ script; `'unsafe-inline'` for styles covers the `<style>` element Radix injects 
 | `GET /api/host` | operator, judge | Supervisor `HostCheck`. |
 | `GET /api/repair-availability[?profileId=]` → `RepairAvailability` | any | Whether live repair is backed by evidence now, with the precise reason and the receipt summary; `instances {control, execution}` and `model` only to a signed-in session. Default profile: the first loaded. Re-evaluated per request. |
 | `GET /api/diagnostics` → `{scripts:[{name,title,description}]}` | operator, judge | The labelled diagnostic scripts a task may name with `scriptedDriver`. |
-| `POST /api/tasks` `CreateTaskRequest` → `Task` (201) | operator, judge | Profile must be loaded (422 otherwise). `scriptedDriver` must name a script in the diagnostics catalog (422 otherwise). With the live driver and repair unavailable, the task gets `repairDisabledReason` (reproduction and baseline only). A scripted-driver control plane labels every task with the script it runs. `liveGate: true` (operator only, never with a script; recorded on the task) exempts the task from the repair-disabled state: it is how `scripts/live-gate.ts` produces the evidence. |
+| `POST /api/tasks` `CreateTaskRequest` → `Task` (201) | operator, judge | **`kind: "general"`**: `profileId` must be a general task profile (`analysis`, `web-research`, `web-analysis`; 422 otherwise); `issueText` is the goal; `inputArtifactIds` must be the caller's own uploads and the profile must accept uploads; `egressAllow` is required and non-empty for a browser profile (≤ 16 exact hosts or `.suffix`; IP literals, single-label names, `localhost`, `.internal`/`.local`/other special-use names and a bare TLD suffix are refused) and must be empty otherwise; `scriptedDriver` may name a labelled diagnostic. The task starts with `cleanup: {status: "none"}`. **Repair** (kind absent or `"repair"`, no general fields): profile must be loaded (422 otherwise). `scriptedDriver` must name a script in the diagnostics catalog (422 otherwise). With the live driver and repair unavailable, the task gets `repairDisabledReason` (reproduction and baseline only). A scripted-driver control plane labels every task with the script it runs. `liveGate: true` (operator only, never with a script; recorded on the task) exempts the task from the repair-disabled state: it is how `scripts/live-gate.ts` produces the evidence. |
 | `GET /api/tasks`, `GET /api/tasks/:id` | owner or operator | List (a judge gets its own session's tasks, the operator all) / `TaskView` (task, baseline and candidate records, sealed manifest, host). |
 | `GET /api/tasks/:id/events` | owner or operator | SSE of `RunEvent` (`id` = seq, `event` = kind), replayed after `Last-Event-ID` (or `?after=`), plus `task` snapshots and a final `end`. Carries every model turn and each `run` command's stdout/stderr (bounded). The session is re-checked before every delivery; a stream closes when its session is logged out or expires. |
 | `POST /api/tasks/:id/cancel` → `Task` | owner or operator | queued with no attempt → cancelled; queued that still names an attempt (requeued after a lost lease), or running → cancelling (the worker's cancel pass revokes and confirms teardown); terminal → 409. |
 | `POST /api/tasks/:id/preview` `PreviewRequest` → `PreviewResult` | owner or operator | Refused (409) unless `candidateDigest` equals the task's sealed digest, the verification record passed, and the stored bundle still carries that digest. Refused (409, "configuration changed since verification; preview refused") when the adapter digest recomputed from disk, the loaded contract digest, the supervisor's selected runtime, or its enforced runtime image id (when comparable) differs from the verification record; checked again after the run against the preview sandbox's own inspection (image digest and runtime). Runs a fresh `preview` invocation on the sealed bundle; writes nothing. One per 2 s per session and per client (429). |
+| `POST /api/tasks/:id/export` (general) → `{grantId,url,expiresAt,zipDigest,outcome,partial}` | owner or operator | General tasks: only `RESULT_VERIFIED` or `RESULT_PARTIAL` (409 otherwise; `partial: true` and a `-partial.zip` name label the latter). Sealed once per (task, result digest) into a local `GeneralExportSeal`; grants are `GeneralExportGrant` records (the contract `ExportSeal`/`ExportGrant` are candidate-bound). Download via the same `GET /api/exports/:grantId`. Zip: `task.json` (profile id/version/tools/checks/budgets, input digests), `result.json`, `outputs/`, `code/`, `screenshots/` + `screenshots.json` (sha256, source URL, step), `page-text/`, `events.jsonl`, `identity.json` (model/host per turn, tools, sandbox runtimes), `egress.json`, `cleanup.json` (teardown receipts), `manifest.json`, `README.txt` with the completion checks. |
 | `POST /api/tasks/:id/export` → `{grantId,url,expiresAt,zipDigest}` | owner or operator | Only for `CANDIDATE_PASSED_CHECKS` with a passing candidate record for the sealed digest and a passing baseline record under the same contract, adapter and runtime image, and no configuration drift since verification (same checks as preview; 409 otherwise). The first export seals the zip once (`ExportSeal`: zip sha256, verification and baseline record digests, events through a fixed seq; grant events excluded) and stores it content-addressed. The immutable `ExportGrant` binds the verification record digest and the sealed zip digest; repeated calls return the same unexpired grant. |
 | `GET /api/exports/:grantId` | the granting owner | Re-checks eligibility, including drift (a sealed zip is not served while the running configuration differs from the verified one; restoring it makes the grant usable again), then serves the sealed zip byte for byte (re-hashed on read; `x-airlock-zip-sha256`): `patch.diff`, `manifest.json`, `verification.json`, `baseline.json`, `task.json` (the task record with lease fields removed: owner, issue text, budget, `scriptedDriver` on diagnostic runs), `events.jsonl` (the run event log through the seal, including every model turn's text and every command run), `reproduction/`, `README.txt`. Repeatable, identical across grants and restarts; 410 when expired or when the grant predates sealed exports. |
+| `GET /api/task-profiles` | any | The general task profiles: tools, budgets, completion checks, whether uploads are accepted, max destinations. |
+| `POST /api/uploads` (raw body, header `x-filename`) → `Artifact` (201) | operator, judge | The file bytes are the body (no multipart); `x-filename` carries the name (URI-encoding allowed). Media type sniffed from the bytes: PNG, JPEG, PDF, JSON, CSV (a `.csv` name that parses) or UTF-8 text; anything else 415. Name reduced to a safe basename with the sniffed extension. ≤ 10 MiB per file (413, streamed; never buffered past the cap); per session owner ≤ 20 uploads and ≤ 50 MiB (413). |
+| `GET /api/uploads` → `{artifacts, quota}` | operator, judge | The caller's own uploads and quota use. |
+| `GET /api/artifacts/:id` | owner or operator | Bytes of one artifact (404 for anyone else). Re-hashed on read; `content-type` = the stored type, `x-content-type-options: nosniff`, `cache-control: private, no-store`, `x-airlock-sha256`, and a stricter `content-security-policy` (`default-src 'none'; … sandbox`). `inline` disposition only for PNG/JPEG (`?download=1` forces attachment); everything else `attachment`. |
+| `GET /api/tasks/:id/artifacts` → `Artifact[]` | owner or operator | The task's inputs, screenshots, saved page text (`download`) and collected outputs, with provenance (`source.url/step/tool/attemptId`). |
+| `GET /api/tasks/:id/artifacts/:artifactId` | owner or operator | The same bytes, scoped to the task. |
 | `POST /api/hostile {command, profileId?}` → `BlastRadiusCard` | judge | One per 10 s per client key, one per 3 s overall, one at a time (429; the per-client memory is bounded by evicting expired, then least recently used keys, never by clearing it). The control plane fills `survived.controlPlane {healthyBefore, healthyAfter, checkedAt}`: a store query plus the worker heartbeat record being fresh (≤ 15 s), checked right before and after the supervisor call. `survived.siblings` and `teardown.host` entries that are not the caller's own tasks keep role, state and counts but read `taskId: "other"`, `"other-task container"` / `"other-task volume"` (operators see them unredacted). Host listings stored in verification records and teardown events are redacted the same way to the task's own entries. |
 
 ## Repair availability
@@ -152,6 +161,88 @@ only the client side): the invocation finishes within its own deadline, its tear
 "<role> invocation finished after cancellation", its observations are discarded, and only then does
 the cancel pass run. Any failure destroys the attempt; incomplete teardown stays visible on the task.
 
+## General tasks (doc 40 Stages 2–4)
+
+`task.kind === "general"` runs `createGeneralHandler` (`src/general-handler.ts`) at the same
+TaskWorker seam (`createDispatchingHandler`); every other task runs the unchanged RepairHandler.
+
+**Profiles** (`src/task-profiles.ts`; the controller, not the model, picks images, tools, limits,
+network policy and checks):
+
+| Profile | Sandboxes | Tools | Checks | Uploads |
+|---|---|---|---|---|
+| `analysis` | code (`analysis` Python image, or `node`) | code_write, code_run, code_read, files_list, submit_result | outputs-claimed, outputs-valid, required-outputs, summary-schema | yes |
+| `web-research` | browser (task `egressAllow`) | browser_navigate/observe/click/type/key/scroll/screenshot/tabs, submit_result | screenshot-evidence, sources-cited, sources-visited, sources-in-policy | no |
+| `web-analysis` | browser + code | all of the above + browser_save_text, files_list | all eight; `outputs/summary.json` required | yes |
+
+Budgets per profile: model calls, tokens (M3 reserve/settle), wall clock (persisted across
+recoveries), browser operations, code runs, browser sessions, code sandboxes, recoveries,
+per-sandbox deadline.
+
+**Tools** (serial, zod-validated; a tool outside the profile is refused as an observation). Browser
+tools create the browser attempt lazily (supervisor `profileId`/`role` `"browser"`, `egressAllow`
+from the task); navigation outside `egressAllow` is refused before dispatch. Code tools create one
+code attempt lazily (`analysis` for Python, `node` for Node; one per task), `put` the task's inputs
+under `inputs/` (digest-checked) and then write/run under `code/`; `code_run` executes
+`/opt/airlock/run.sh code/<file>` (the image's fixed runner), never a model command line.
+`browser_save_text` copies the latest observation's text (≤ 32 KiB) into `inputs/<name>` as a
+`download` artifact: the only thing that crosses from the browser to code, done by the controller.
+`browser_screenshot` validates the PNG and its sha256, stores it as a `screenshot` artifact
+(`source.url/step/tool/attemptId`) and, with `AIRLOCK_MODEL_VISION=1`, attaches it to the next turn
+(only the newest image stays in the history). `stale_reference` and `pending_review` come back as
+observations (no human review yet: the model is told to continue without the action or submit).
+A browser op that ends `interrupted` (or whose supervisor call did not complete) is never replayed:
+the browser attempt is torn down, counted (`general-usage.browserInterruptions`), and the next
+browser tool starts a fresh session within the session budget.
+
+**Result.** `submit_result {summary, outputs[], sources[], unsupported_capability?}` never sets
+success: the controller stops the code sandbox through `collect-outputs`, re-validates the envelope
+(strict base64, length, sha256, safe unique paths), stores every collected file as an `output`
+artifact, tears everything down, then runs the profile's completion checks (`src/completion-checks.ts`:
+claimed outputs present and not rejected; JSON parses; CSV parses with ≥ 1 data row; PNG header,
+CRC and 1..8192 dimensions; `summary.json` is an object with a non-empty `answer`; ≥ 1 screenshot;
+every cited URL reached by this task's own browser per its events; every cited host inside
+`egressAllow`). Outcome: all pass → `RESULT_VERIFIED`; some fail with outputs/screenshots →
+`RESULT_PARTIAL`; nothing acceptable → `RESULT_FAILED`; declared missing capability (or only
+unavailable tools and nothing produced) → `UNSUPPORTED`; budget/wall clock/repeated identical
+failure (3×) → `STOPPED_LIMIT`; driver failures, unconfirmed stop, malformed envelope or an
+infrastructure error → `INCONCLUSIVE`. `Task.result` carries the checks with detail.
+
+**State dimensions (C35/C36).** Workflow = `status`/`phase` (general runs record `prepare → repair`
+(the model loop; the contract Phase enum has no "execute") `→ freeze → verify → ready`); result =
+`outcome` + `result`; cleanup = `Task.cleanup` (`none` → `pending` while any attempt lives →
+`confirmed` only after every attempt's destroy returned a clean teardown; `failed`, or `retrying`
+while a cancel pass retries). The repair handler maintains `cleanup` the same way. Every tool event
+carries `data.opState` (`started` before dispatch with its `operationId`, then `completed`,
+`failed` or `unknown`); `completed` is written only from the supervisor's answer.
+
+**Records.** `task-attempts` (one row per attempt: role, generation, live/destroyed/teardown-failed;
+the cancel pass and recoveries tear down from these), `general-usage` (browser ops, code runs,
+sessions, interruptions, unavailable-tool calls, start time), `general-code` (code files, content
+addressed, for the evidence bundle), `artifacts` (immutable `Artifact` records). A recovery (lost
+lease/restart) reconciles journaled operations, tears down every earlier attempt, counts the
+recovery and restarts the model loop with a note; nothing uncertain is replayed.
+
+**Supervisor calls used** (all journaled, M8): `POST /attempts` (roles browser/analysis/node),
+`/attempts/:id/tool` (`put` under `inputs/`, `read`, `write`, `exec`), `/attempts/:id/browser`,
+`/attempts/:id/collect-outputs`, `/renew`, `/revoke`, `/destroy`; reads `GET /attempts/:id/browser`
+(evidence, recorded on the lifecycle event) and `/attempts/:id/egress` (recorded before teardown).
+
+## Model call sites (C21)
+
+Every runtime model call goes through `createVultrDriver` (`src/vultr-client.ts`) against the
+pinned base URL (`https://api.vultrinference.com/v1`, `inferenceFetch`: no redirects, nothing
+outside the base). There is no alternate provider and no fallback.
+
+| Call site | Purpose | Images |
+|---|---|---|
+| `src/repair-handler.ts` `modelLoop` → `driver.chat` | repair agent turns | never |
+| `src/general-handler.ts` model loop → `driver.chat` | general task planning/acting, including screenshot reasoning (the image rides on the next turn; there is no separate vision or summarization call) | only with `AIRLOCK_MODEL_VISION=1` |
+| `src/vultr-probe.ts` `probeModel` / `probeVision` (via `scripts/probe-model.ts`, operator-run, not in the task path) | measured tool-call and image round trips | the probe's generated PNG |
+| `src/vultr-client.ts` `listModels` (probe only) | `/v1/models` catalog | — |
+
+A scripted driver (`scripted:<name>`) replaces the model only for labelled diagnostics and tests.
+
 ## Driver modes
 
 - `vultr` — `createVultrDriver` against Serverless Inference (chat completions with forced tools).
@@ -163,6 +254,23 @@ diagnostics catalog (or the scripted driver's own directory), whatever the confi
 other task runs the configured driver.
 
 ## Tests
+
+General tasks (`test/general*.test.ts`, fake supervisor with browser/analysis/node roles, `put`,
+collect-outputs and a simulated browser runner): the hero combined flow (navigate → observe →
+screenshot → save text → code_write → code_run → submit → `RESULT_VERIFIED`, artifacts with
+provenance, `started`→`completed` per operation id, both attempts destroyed, cleanup confirmed);
+the labelled `test/fixtures/scripted-general/` scripts load and the hero script runs end to end;
+stale ref fed back; interrupted click never replayed (fresh session, counted); navigation outside
+`egressAllow` refused before dispatch; an unvisited cited source; a missing claimed output and a
+collector-rejected one → `RESULT_PARTIAL`; inputs `put` before code; an unavailable tool refused and
+a declared missing capability → `UNSUPPORTED`; model-call budget → `STOPPED_LIMIT`; code-run budget
+as an observation and repeated identical failure → `STOPPED_LIMIT`; cancel tears down both attempts
+and `cleanup` stays `retrying` until the browser teardown is clean; a recovery; vision attached only
+when enabled (and recorded on the model event); repair still dispatched next to general tasks.
+API: upload auth/type (415)/size/quota (413), sniffing and names, cross-owner artifact 404, safe
+headers, general task validation (profile, egressAllow, inputs), and the evidence bundle sealed
+once and served byte for byte. Units: PNG, CSV, egress policy, completion checks, envelope
+re-validation, `image_url` wire format and the vision probe.
 
 `bun test` uses an in-memory PGlite store, an in-memory fake supervisor and thin doubles for the
 verifier/artifacts modules. Covered: happy path, unchanged-tree submit, forged "all tests passed"

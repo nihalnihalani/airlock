@@ -6,6 +6,7 @@
  * `add(a, b)`, feeds the tool result back, and records whether the follow-up turn used it,
  * with latency and token usage. `scripts/probe-model.ts` prints the table and a recommendation.
  */
+import { encodePng } from "./png.ts";
 import {
   VultrError,
   createVultrDriver,
@@ -204,6 +205,70 @@ export function formatTable(rows: ProbeRow[]): string {
     String(r.tokens.output),
     r.error ?? "",
   ]);
+  const widths = headers.map((h, i) => Math.max(h.length, ...data.map((d) => (d[i] as string).length)));
+  const line = (cells: string[]) => cells.map((c, i) => c.padEnd(widths[i] as number)).join("  ");
+  return [line(headers), line(widths.map((w) => "-".repeat(w))), ...data.map(line)].join("\n");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Vision round trip (C20): an actual image through Vultr Serverless Inference
+// ---------------------------------------------------------------------------------------------
+
+export interface VisionProbeRow {
+  model: string;
+  ok: boolean;
+  /** The reply names the colour that fills the generated image. */
+  recognized: boolean;
+  color: string;
+  reply: string;
+  ms: number;
+  tokens: { input: number; output: number };
+  error?: string;
+}
+
+/** Solid colours that are easy to name; the probe picks one at random so a canned reply cannot pass. */
+export const VISION_COLORS: { name: string; rgb: [number, number, number]; accept: RegExp }[] = [
+  { name: "red", rgb: [220, 20, 20], accept: /\bred\b/i },
+  { name: "green", rgb: [20, 180, 40], accept: /\bgreen\b/i },
+  { name: "blue", rgb: [20, 40, 220], accept: /\bblue\b/i },
+  { name: "yellow", rgb: [240, 220, 20], accept: /\byellow\b/i },
+];
+
+/**
+ * Sends a generated 64x64 PNG of one solid colour as an `image_url` content part and asks for the
+ * colour. `recognized` only when the reply names it (and names no other probe colour).
+ */
+export async function probeVision(model: string, opts: ProbeOptions & { color?: string }): Promise<VisionProbeRow> {
+  const choice = VISION_COLORS.find((c) => c.name === opts.color) ?? VISION_COLORS[Math.floor(Math.random() * VISION_COLORS.length)]!;
+  const row: VisionProbeRow = { model, ok: false, recognized: false, color: choice.name, reply: "", ms: 0, tokens: { input: 0, output: 0 } };
+  const budget = opts.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : 90_000;
+  const controller = new AbortController();
+  const started = performance.now();
+  try {
+    const driver =
+      opts.driverFactory?.(model) ??
+      createVultrDriver({ apiKey: opts.apiKey, baseUrl: opts.baseUrl, model, ...(opts.fetch ? { fetch: opts.fetch } : {}), requestTimeoutMs: budget });
+    const png = encodePng(64, 64, choice.rgb);
+    const messages: ChatMessage[] = [
+      { role: "user", content: "What single colour fills this image? Answer with one lowercase word.", images: [{ mediaType: "image/png", base64: Buffer.from(png).toString("base64") }] },
+    ];
+    const out = await withTimeout(driver.chat({ system: "You describe images precisely and briefly.", messages, tools: [], signal: controller.signal, maxTokens: 512 }), budget, controller);
+    row.reply = out.text.trim().slice(0, 200);
+    row.tokens = { input: out.usage.input, output: out.usage.output };
+    const named = VISION_COLORS.filter((c) => c.accept.test(out.text)).map((c) => c.name);
+    row.recognized = named.length === 1 && named[0] === choice.name;
+    row.ok = true;
+  } catch (err) {
+    row.error = err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200);
+    if (err instanceof VultrError && err.kind === "auth") throw err;
+  }
+  row.ms = Math.round(performance.now() - started);
+  return row;
+}
+
+export function formatVisionTable(rows: VisionProbeRow[]): string {
+  const headers = ["model", "ok", "recognized", "color", "reply", "ms", "error"];
+  const data = rows.map((r) => [r.model, r.ok ? "yes" : "no", r.recognized ? "yes" : "no", r.color, JSON.stringify(r.reply.slice(0, 40)), String(r.ms), r.error ?? ""]);
   const widths = headers.map((h, i) => Math.max(h.length, ...data.map((d) => (d[i] as string).length)));
   const line = (cells: string[]) => cells.map((c, i) => c.padEnd(widths[i] as number)).join("  ");
   return [line(headers), line(widths.map((w) => "-".repeat(w))), ...data.map(line)].join("\n");

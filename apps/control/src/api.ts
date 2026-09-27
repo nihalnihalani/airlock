@@ -21,6 +21,7 @@ import {
   canonicalJson,
   sha256,
   type AdapterRequest,
+  type Artifact,
   type BlastRadiusCard,
   type CandidateBundle,
   type ExportGrant,
@@ -35,7 +36,11 @@ import {
   type TaskView,
   type VerificationRecord,
 } from "@airlock/contracts";
+import { ArtifactError, ArtifactService, OWNER_QUOTA_BYTES, OWNER_QUOTA_FILES, UPLOAD_MAX_BYTES, dispositionFor, inlineAllowed } from "./artifact-service.ts";
 import type { AvailabilityService, DiagnosticScript } from "./availability.ts";
+import { buildGeneralBundle, type GeneralExportGrant, type GeneralExportSeal } from "./general-export.ts";
+import { STORE_KIND_GENERAL_CODE } from "./general-handler.ts";
+import { TASK_PROFILES, publicTaskProfile, validateEgressAllow, type TaskProfile } from "./task-profiles.ts";
 import type { TaskEventBus } from "./events.ts";
 import { log } from "./log.ts";
 import type { LoadedProfile } from "./profiles.ts";
@@ -114,6 +119,10 @@ export interface ApiDeps {
    * probe on both records) is never previewed or exported.
    */
   production?: boolean;
+  /** Task artifacts (uploads, outputs, screenshots); built from store + artifacts when absent. */
+  artifactService?: ArtifactService;
+  /** General task profile registry (default: task-profiles.ts). */
+  taskProfiles?: ReadonlyMap<string, TaskProfile>;
   now?: () => number;
   /** SSE poll interval (ms) as a safety net behind the bus. */
   ssePollMs?: number;
@@ -125,6 +134,11 @@ export const STORE_KIND_TASKS = "tasks";
 export const STORE_KIND_GRANTS = "export-grants";
 /** Artifact-store kind of the sealed export records (ExportSeal); the zip bytes are a blob. */
 export const ARTIFACT_KIND_EXPORT = "export";
+/** Artifact-store kind of sealed general-task evidence bundles (GeneralExportSeal). */
+export const ARTIFACT_KIND_GENERAL_EXPORT = "general-export";
+export const STORE_KIND_GENERAL_GRANTS = "general-export-grants";
+/** Served with artifact bytes: nothing in them may run, load or frame anything. */
+export const ARTIFACT_CSP = "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 const MAX_JSON_BODY = 256 * 1024;
 /**
  * The built UI needs no inline script; Radix injects a <style> element at runtime (scroll lock),
@@ -169,9 +183,12 @@ export function createApp(deps: ApiDeps) {
   const hostileGlobalMinIntervalMs = deps.hostileGlobalMinIntervalMs ?? 3000;
   const previewLast = new Map<string, number>();
   const previewMinIntervalMs = deps.previewMinIntervalMs ?? 2000;
+  const artifactService = deps.artifactService ?? new ArtifactService(deps.store, deps.artifacts, () => (deps.now?.() ?? Date.now()));
+  const taskProfiles = deps.taskProfiles ?? TASK_PROFILES;
 
   app.onError((error, c) => {
     if (error instanceof AppError) return c.json({ error: error.message }, error.status);
+    if (error instanceof ArtifactError) return c.json({ error: error.message }, error.status);
     if (error instanceof z.ZodError) return c.json({ error: `invalid body: ${error.issues.map((i) => `${i.path.join(".")} ${i.message}`).join("; ").slice(0, 500)}` }, 400);
     if (error instanceof LoginRateLimited) return c.json({ error: error.message }, 429);
     if (error instanceof ExportIntegrityError) {
@@ -312,6 +329,8 @@ export function createApp(deps: ApiDeps) {
 
   // ---- profiles, host ---------------------------------------------------------------------------
   app.get("/api/profiles", (c) => c.json([...deps.profiles.values()].map((p) => publicManifest(p.manifest))));
+  // General task profiles: tools, budgets, checks and whether uploads are accepted (no task data).
+  app.get("/api/task-profiles", (c) => c.json([...taskProfiles.values()].map(publicTaskProfile)));
   // Liveness only: no host facts, no task data.
   app.get("/api/health", (c) => c.json({ ok: true }));
   app.get("/api/host", async (c) => {
@@ -341,6 +360,8 @@ export function createApp(deps: ApiDeps) {
   app.post("/api/tasks", async (c) => {
     const session = requireRole(c, "operator", "judge");
     const body = await readJson(c, CreateTaskRequest);
+    if (body.kind === "general") return createGeneralTask(c, session, body);
+    if (body.inputArtifactIds?.length || body.egressAllow?.length) throw new AppError("inputArtifactIds and egressAllow are for general tasks (kind \"general\")", 422);
     if (!deps.profiles.has(body.profileId)) throw new AppError(`profile "${body.profileId}" is not supported`, 422);
     if (body.scriptedDriver !== undefined) {
       if (!deps.scriptedDrivers || deps.scriptedDrivers.length === 0) throw new AppError("scriptedDriver is only accepted when the control plane has a diagnostic script catalog (AIRLOCK_DIAGNOSTIC_SCRIPTS_DIR or a scripted model driver)", 422);
@@ -395,6 +416,126 @@ export function createApp(deps: ApiDeps) {
     });
     return c.json(task, 201);
   });
+  /**
+   * A general task (40 §6): the profile must be in the general registry; inputs must be the caller's
+   * own uploads (and the profile must accept uploads); egressAllow is required for a browser profile
+   * and validated (no IP literals, localhost, `.internal`…), empty otherwise. The controller, not the
+   * request, decides images, tools, limits and checks.
+   */
+  async function createGeneralTask(c: Context<Env>, session: SessionRecord, body: z.infer<typeof CreateTaskRequest>) {
+    const profile = taskProfiles.get(body.profileId);
+    if (!profile) throw new AppError(`general task profile "${body.profileId}" is not supported; available: ${[...taskProfiles.keys()].join(", ")}`, 422);
+    if (body.liveGate) throw new AppError("liveGate applies to repair tasks only", 422);
+    if (body.scriptedDriver !== undefined) {
+      if (!deps.scriptedDrivers || !deps.scriptedDrivers.includes(body.scriptedDriver)) throw new AppError(`scripted driver "${body.scriptedDriver}" is not available`, 422);
+    }
+    const egress = validateEgressAllow(body.egressAllow, profile);
+    if (!egress.ok) throw new AppError(`egressAllow refused: ${egress.reasons.join("; ")}`, 422);
+    const inputIds = [...new Set(body.inputArtifactIds ?? [])];
+    if (inputIds.length > 0 && !profile.acceptsUploads) throw new AppError(`profile "${profile.id}" does not accept input files`, 422);
+    for (const id of inputIds) {
+      const found = await artifactService.find(id);
+      // Another owner's artifact reads as absent, like a task.
+      if (!found || found.owner !== session.owner || found.artifact.kind !== "upload") throw new AppError(`input artifact ${id} not found among your uploads`, 422);
+    }
+    if (deps.production) {
+      const host = await deps.supervisor.host();
+      if (host.devUnsafe || host.selectedRuntime === "runc") throw new AppError(`this production control plane refuses new tasks: the supervisor runs ${host.selectedRuntime}${host.devUnsafe ? " with AIRLOCK_DEV_UNSAFE" : ""} (gVisor or Kata required)`, 503);
+    }
+    const scriptedDriver = body.scriptedDriver ?? deps.defaultScriptedDriver ?? undefined;
+    const at = iso();
+    const task: Task = {
+      id: `task-${randomBytes(8).toString("hex")}`,
+      owner: session.owner,
+      profileId: profile.id,
+      issueText: body.issueText,
+      kind: "general",
+      ...(inputIds.length ? { inputArtifactIds: inputIds } : {}),
+      ...(egress.hosts.length ? { egressAllow: egress.hosts } : {}),
+      ...(scriptedDriver !== undefined ? { scriptedDriver } : {}),
+      status: "queued",
+      phase: "prepare",
+      generation: 0,
+      leaseId: null,
+      leaseUntil: null,
+      attempts: 0,
+      budget: { modelCallsUsed: 0, repairAttemptsUsed: 0, tokensUsed: 0 },
+      cleanup: { status: "none", at },
+      createdAt: at,
+      updatedAt: at,
+    };
+    const inserted = await deps.store.insertIfAbsent(session.owner, STORE_KIND_TASKS, task);
+    if (!inserted) throw new AppError("task id collision; retry", 409);
+    await deps.store.appendEvent(session.owner, task.id, {
+      id: `evt-${randomBytes(8).toString("hex")}`,
+      at,
+      kind: "lifecycle",
+      title: "Task created",
+      detail: `general task, profile ${profile.id} v${profile.version}${egress.hosts.length ? `; destinations ${egress.hosts.join(", ")}` : ""}${inputIds.length ? `; ${inputIds.length} input file(s)` : ""}${scriptedDriver !== undefined ? `; diagnostic (scripted:${scriptedDriver}), not a model run` : ""}`,
+      data: { kind: "general", profileId: profile.id, profileVersion: profile.version, egressAllow: egress.hosts, inputArtifactIds: inputIds, ...(scriptedDriver !== undefined ? { diagnostic: true, scriptedDriver } : {}) },
+    });
+    return c.json(task, 201);
+  }
+
+  // ---- uploads and artifacts (C28) ----------------------------------------------------------------
+  // Raw body upload: `POST /api/uploads` with the file bytes as the body and its name in the
+  // `x-filename` header (URI-encoded allowed). No multipart. The type is sniffed from the bytes.
+  app.post("/api/uploads", async (c) => {
+    const session = requireRole(c, "operator", "judge");
+    let filename = c.req.header("x-filename") ?? "";
+    try {
+      filename = decodeURIComponent(filename);
+    } catch {
+      // keep the raw header; it is sanitised anyway
+    }
+    if (!filename.trim() || filename.length > 1024) throw new AppError("x-filename header required (the file's name)", 400);
+    const length = Number(c.req.header("content-length") ?? "");
+    if (Number.isFinite(length) && length > UPLOAD_MAX_BYTES) throw new AppError(`upload exceeds ${UPLOAD_MAX_BYTES} bytes`, 413);
+    const bytes = await readBodyBounded(c.req.raw, UPLOAD_MAX_BYTES);
+    const artifact = await artifactService.ingestUpload(session.owner, filename, bytes);
+    log.debug("upload stored", { artifactId: artifact.id, bytes: artifact.byteLength, mediaType: artifact.mediaType, role: session.role });
+    return c.json(artifact, 201);
+  });
+  app.get("/api/uploads", async (c) => {
+    const session = requireRole(c, "operator", "judge");
+    const artifacts = await artifactService.listUploads(session.owner);
+    return c.json({ artifacts, quota: { usedFiles: artifacts.length, usedBytes: artifacts.reduce((n, a) => n + a.byteLength, 0), maxFiles: OWNER_QUOTA_FILES, maxBytes: OWNER_QUOTA_BYTES, maxFileBytes: UPLOAD_MAX_BYTES } });
+  });
+  const serveArtifact = async (c: Context<Env>, artifact: Artifact) => {
+    const bytes = await artifactService.bytes(artifact);
+    const inline = inlineAllowed(artifact) && c.req.query("download") !== "1";
+    c.header("content-type", artifact.mediaType);
+    c.header("content-disposition", dispositionFor(artifact, inline));
+    c.header("cache-control", "private, no-store");
+    c.header("x-content-type-options", "nosniff");
+    c.header("content-security-policy", ARTIFACT_CSP);
+    c.header("x-airlock-sha256", artifact.sha256);
+    return new Response(new Uint8Array(bytes).buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer, { status: 200, headers: c.res.headers });
+  };
+  const artifactIdParam = (raw: string | undefined) => {
+    const id = raw ?? "";
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(id)) throw new AppError("invalid artifact id", 400);
+    return id;
+  };
+  // Owner or operator; anything else reads as absent (404), like tasks.
+  app.get("/api/artifacts/:artifactId", async (c) => {
+    const session = requireRole(c, "operator", "judge");
+    const found = await artifactService.find(artifactIdParam(c.req.param("artifactId")));
+    if (!found || !canAccess(session, found.owner)) throw new AppError("artifact not found", 404);
+    return serveArtifact(c, found.artifact);
+  });
+  app.get("/api/tasks/:id/artifacts", async (c) => {
+    const { owner, task } = await authorizeTask(c);
+    return c.json(await artifactService.listForTask(owner, task));
+  });
+  app.get("/api/tasks/:id/artifacts/:artifactId", async (c) => {
+    const { owner, task } = await authorizeTask(c);
+    const id = artifactIdParam(c.req.param("artifactId"));
+    const artifact = (await artifactService.listForTask(owner, task)).find((a) => a.id === id);
+    if (!artifact) throw new AppError("artifact not found", 404);
+    return serveArtifact(c, artifact);
+  });
+
   app.get("/api/tasks", async (c) => {
     const session = requireRole(c, "operator", "judge");
     const tasks =
@@ -585,6 +726,7 @@ export function createApp(deps: ApiDeps) {
 
   app.post("/api/tasks/:id/export", async (c) => {
     const { session, owner, task } = await authorizeTask(c);
+    if (task.kind === "general") return exportGeneral(c, session, owner, task);
     const eligible = await exportEligibility(owner, task, { newAuthorization: true });
     const seal = await sealExport(owner, task, eligible);
     const existing = (await deps.store.list<ExportGrant>(session.owner, STORE_KIND_GRANTS)).find(
@@ -618,7 +760,11 @@ export function createApp(deps: ApiDeps) {
     const grantId = c.req.param("grantId");
     if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(grantId)) throw new AppError("invalid grant id", 400);
     const grant = await deps.store.get<ExportGrant>(session.owner, STORE_KIND_GRANTS, grantId);
-    if (!grant) throw new AppError("grant not found", 404);
+    if (!grant) {
+      const general = await deps.store.get<GeneralExportGrant>(session.owner, STORE_KIND_GENERAL_GRANTS, grantId);
+      if (general) return downloadGeneral(c, session, general);
+      throw new AppError("grant not found", 404);
+    }
     if (Date.parse(grant.expiresAt) <= now()) throw new AppError("grant expired; request a new export", 410);
     // Grants issued before sealed exports existed name no seal: they authorize nothing now.
     if (!grant.sealId || !grant.zipDigest || !grant.verificationRecordDigest) throw new AppError("grant predates sealed exports; request a new export", 410);
@@ -726,6 +872,81 @@ export function createApp(deps: ApiDeps) {
     const winner = await deps.artifacts.getJson<ExportSeal>(ARTIFACT_KIND_EXPORT, id);
     if (!matches(winner)) throw new AppError("sealed export does not match the task's verification records", 409);
     return winner;
+  }
+
+  // ---- general-task evidence bundle (C37) ---------------------------------------------------------------
+  async function generalEligibility(task: Task): Promise<{ outcome: GeneralExportSeal["outcome"]; resultDigest: string; profile: TaskProfile }> {
+    if (task.status !== "done" || (task.outcome !== "RESULT_VERIFIED" && task.outcome !== "RESULT_PARTIAL") || !task.result)
+      throw new AppError(`only a verified or partial general result can be exported (task ${task.status}${task.outcome ? `, ${task.outcome}` : ""})`, 409);
+    const profile = taskProfiles.get(task.profileId);
+    if (!profile) throw new AppError("task profile no longer available", 409);
+    return { outcome: task.outcome, resultDigest: await sha256(canonicalJson(task.result)), profile };
+  }
+
+  async function exportGeneral(c: Context<Env>, session: SessionRecord, owner: string, task: Task) {
+    const eligible = await generalEligibility(task);
+    const id = `gexp-${(await sha256(`${task.id}\n${eligible.resultDigest}`)).slice(0, 40)}`;
+    let seal = await deps.artifacts.getJson<GeneralExportSeal>(ARTIFACT_KIND_GENERAL_EXPORT, id);
+    if (seal && (seal.taskId !== task.id || seal.resultDigest !== eligible.resultDigest)) throw new AppError("sealed evidence does not match the task's result", 409);
+    if (!seal) {
+      const events = (await deps.store.listEvents(task.id, 0, 5000)).filter((e) => !(e.kind === "artifact" && (e.title === "Export authorized" || e.title === "Export sealed")));
+      const all = await artifactService.listForTask(owner, task);
+      const inputs = all.filter((a) => a.kind === "upload");
+      const artifacts: { artifact: Artifact; bytes: Uint8Array }[] = [];
+      for (const artifact of all.filter((a) => a.kind !== "upload")) artifacts.push({ artifact, bytes: await artifactService.bytes(artifact) });
+      const code = (await deps.store.get<{ files: Record<string, { sha256: string; byteLength: number }> }>(owner, STORE_KIND_GENERAL_CODE, task.id))?.files ?? {};
+      const codeFiles: { path: string; bytes: Uint8Array }[] = [];
+      for (const [path, ref] of Object.entries(code)) {
+        const bytes = await deps.artifacts.getBlob(ref.sha256);
+        if (bytes) codeFiles.push({ path, bytes });
+      }
+      const { files } = buildGeneralBundle({ task, profile: eligible.profile, inputs, artifacts, codeFiles, events });
+      const zip = deps.zipFiles(files);
+      const zipDigest = await deps.artifacts.putBlob(zip);
+      const fresh: GeneralExportSeal = { schemaVersion: 1, id, taskId: task.id, outcome: eligible.outcome, resultDigest: eligible.resultDigest, zipDigest, byteLength: zip.byteLength, eventsThroughSeq: events.at(-1)?.seq ?? 0, sealedAt: iso() };
+      if (await deps.artifacts.putImmutableJson(ARTIFACT_KIND_GENERAL_EXPORT, id, fresh)) {
+        seal = fresh;
+        const event = await deps.store.appendEvent(owner, task.id, { id: `evt-${randomBytes(8).toString("hex")}`, at: iso(), kind: "artifact", title: "Export sealed", detail: `evidence bundle ${zipDigest} (${zip.byteLength} bytes, events through #${fresh.eventsThroughSeq})${eligible.outcome === "RESULT_PARTIAL" ? "; PARTIAL result" : ""}` });
+        deps.bus.publish(event);
+      } else seal = await deps.artifacts.getJson<GeneralExportSeal>(ARTIFACT_KIND_GENERAL_EXPORT, id);
+      if (!seal || seal.resultDigest !== eligible.resultDigest) throw new AppError("sealed evidence does not match the task's result", 409);
+    } else if (!(await deps.artifacts.getBlob(seal.zipDigest))) throw new AppError("sealed evidence bytes missing; export refused", 409);
+    const existing = (await deps.store.list<GeneralExportGrant>(session.owner, STORE_KIND_GENERAL_GRANTS)).find((g) => g.taskId === task.id && g.sealId === seal!.id && Date.parse(g.expiresAt) > now());
+    const grant: GeneralExportGrant = existing ?? {
+      id: `grant-${randomBytes(12).toString("hex")}`,
+      owner: session.owner,
+      taskId: task.id,
+      sealId: seal.id,
+      resultDigest: seal.resultDigest,
+      zipDigest: seal.zipDigest,
+      outcome: seal.outcome,
+      createdAt: iso(),
+      expiresAt: new Date(now() + deps.exportGrantTtlMs).toISOString(),
+    };
+    if (!existing) {
+      if (!(await deps.store.insertImmutable(session.owner, STORE_KIND_GENERAL_GRANTS, grant))) throw new AppError("grant id collision; retry", 409);
+      const event = await deps.store.appendEvent(owner, task.id, { id: `evt-${randomBytes(8).toString("hex")}`, at: iso(), kind: "artifact", title: "Export authorized", detail: `grant ${grant.id}; evidence bundle ${grant.zipDigest}` });
+      deps.bus.publish(event);
+    }
+    return c.json({ grantId: grant.id, url: `/api/exports/${grant.id}`, expiresAt: grant.expiresAt, zipDigest: grant.zipDigest, outcome: grant.outcome, partial: grant.outcome === "RESULT_PARTIAL" }, existing ? 200 : 201);
+  }
+
+  async function downloadGeneral(c: Context<Env>, session: SessionRecord, grant: GeneralExportGrant) {
+    if (Date.parse(grant.expiresAt) <= now()) throw new AppError("grant expired; request a new export", 410);
+    const { owner, task } = await loadTask(grant.taskId);
+    if (!canAccess(session, owner)) throw new AppError("grant not found", 404);
+    const eligible = await generalEligibility(task);
+    if (eligible.resultDigest !== grant.resultDigest) throw new AppError("task no longer matches this grant", 409);
+    const seal = await deps.artifacts.getJson<GeneralExportSeal>(ARTIFACT_KIND_GENERAL_EXPORT, grant.sealId);
+    if (!seal || seal.zipDigest !== grant.zipDigest || seal.taskId !== task.id) throw new AppError("sealed evidence missing or does not match this grant", 409);
+    const zip = await deps.artifacts.getBlob(seal.zipDigest);
+    if (!zip || zip.byteLength !== seal.byteLength || (await sha256(zip)) !== seal.zipDigest) throw new AppError("sealed evidence bytes no longer match their digest", 409);
+    c.header("content-type", "application/zip");
+    c.header("content-disposition", `attachment; filename="airlock-${task.id}-${seal.outcome === "RESULT_PARTIAL" ? "partial" : "verified"}.zip"`);
+    c.header("cache-control", "private, no-store");
+    c.header("x-content-type-options", "nosniff");
+    c.header("x-airlock-zip-sha256", seal.zipDigest);
+    return new Response(new Uint8Array(zip).buffer.slice(zip.byteOffset, zip.byteOffset + zip.byteLength) as ArrayBuffer, { status: 200, headers: c.res.headers });
   }
 
   // ---- hostile panel --------------------------------------------------------------------------------
@@ -839,10 +1060,36 @@ export function createApp(deps: ApiDeps) {
   return app;
 }
 
+/** Reads a request body, refusing (413) once it exceeds `cap` bytes; never buffers past the cap. */
+async function readBodyBounded(req: Request, cap: number): Promise<Uint8Array> {
+  const reader = req.body?.getReader();
+  if (!reader) return new Uint8Array(0);
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > cap) {
+      await reader.cancel().catch(() => undefined);
+      throw new AppError(`upload exceeds ${cap} bytes`, 413);
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, at);
+    at += chunk.byteLength;
+  }
+  return out;
+}
+
 /** Applied to every response, API, static and SSE alike (a streaming response keeps its body). */
 function setSecurityHeaders(c: Context<Env>) {
   const apply = (headers: Headers) => {
-    headers.set("content-security-policy", CONTENT_SECURITY_POLICY);
+    // Artifact bytes carry their own, stricter policy (ARTIFACT_CSP); everything else gets the app's.
+    if (headers.get("content-security-policy") !== ARTIFACT_CSP) headers.set("content-security-policy", CONTENT_SECURITY_POLICY);
     headers.set("x-content-type-options", "nosniff");
     headers.set("referrer-policy", "no-referrer");
   };

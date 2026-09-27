@@ -13,7 +13,11 @@ import {
   AttemptState,
   AuthorToolResult,
   BlastRadiusCard,
+  BrowserEvidence,
+  BrowserOpResult,
+  CollectOutputsResult,
   DestroyResult as DestroyResultSchema,
+  EgressLog,
   FreezeResult as FreezeResultSchema,
   HostCheck,
   InvokeResult,
@@ -21,6 +25,7 @@ import {
   type AttemptRef,
   type AdapterRequest,
   type AuthorToolArgs,
+  type BrowserOp,
   type CandidateBundle,
   type Operation,
   type SandboxRole,
@@ -74,10 +79,7 @@ export type HealthResponse = z.infer<typeof HealthResponse>;
 export interface SupervisorClient {
   health(signal?: AbortSignal): Promise<HealthResponse>;
   host(signal?: AbortSignal): Promise<HostCheck>;
-  createAttempt(
-    input: { ref: AttemptRef; profileId: string; role: SandboxRole; absoluteDeadline: string; authorizedUntil?: string },
-    opts?: CallOptions,
-  ): Promise<AttemptState>;
+  createAttempt(input: CreateAttemptInput, opts?: CallOptions): Promise<AttemptState>;
   /**
    * Extend an attempt's execution authorization (contracts `RenewRequest`). The supervisor never
    * extends past the absolute deadline and never revives a revoked/destroyed attempt: 404/409 mean
@@ -102,6 +104,27 @@ export interface SupervisorClient {
     opts?: CallOptions,
   ): Promise<InvokeResult>;
   hostile(input: { profileId: string; command: string }, opts?: CallOptions): Promise<BlastRadiusCard>;
+  /**
+   * One runner operation on a live browser attempt (`POST /attempts/:id/browser`). `interrupted`
+   * means the runner was lost: the outcome is unknown, the attempt is closed, never replay it.
+   */
+  browserOp(input: { ref: AttemptRef; request: BrowserOp }, opts?: CallOptions): Promise<BrowserOpResult>;
+  /** What the supervisor established when it created the browser attempt (`GET /attempts/:id/browser`). */
+  browserEvidence(attemptId: string, signal?: AbortSignal): Promise<BrowserEvidence>;
+  /** The per-attempt egress proxy's decisions (`GET /attempts/:id/egress`). */
+  egressLog(attemptId: string, signal?: AbortSignal): Promise<EgressLog>;
+  /** Stop an analysis/node sandbox and collect `outputs/` read-only (`POST /attempts/:id/collect-outputs`). */
+  collectOutputs(input: { ref: AttemptRef }, opts?: CallOptions): Promise<CollectOutputsResult>;
+}
+
+export interface CreateAttemptInput {
+  ref: AttemptRef;
+  profileId: string;
+  role: SandboxRole;
+  absoluteDeadline: string;
+  authorizedUntil?: string;
+  /** Browser role only: destinations the attempt's egress proxy allows (from task policy, never from the model). */
+  egressAllow?: string[];
 }
 
 export interface CallOptions {
@@ -118,6 +141,7 @@ export interface CallOptions {
 }
 
 export type DestroyResult = z.infer<typeof DestroyResultSchema>;
+export type { BrowserEvidence, BrowserOpResult, CollectOutputsResult, EgressLog } from "@airlock/contracts";
 export type FreezeResult = z.infer<typeof FreezeResultSchema>;
 
 export function newOperationId(): string {
@@ -139,6 +163,8 @@ const DEFAULT_TIMEOUTS = {
   destroy: 60_000,
   invoke: 180_000,
   hostile: 120_000,
+  browserOp: 90_000,
+  collectOutputs: 120_000,
 } as const;
 
 export interface HttpSupervisorClientOptions {
@@ -178,9 +204,10 @@ export class HttpSupervisorClient implements SupervisorClient {
   listAttempts(signal?: AbortSignal) {
     return this.get("/attempts", z.array(AttemptState), signal, true);
   }
-  createAttempt(input: { ref: AttemptRef; profileId: string; role: SandboxRole; absoluteDeadline: string; authorizedUntil?: string }, opts?: CallOptions) {
+  createAttempt(input: CreateAttemptInput, opts?: CallOptions) {
     const body: Record<string, unknown> = { ...input };
     if (input.authorizedUntil === undefined) delete body.authorizedUntil;
+    if (input.egressAllow === undefined) delete body.egressAllow;
     return this.mutate("/attempts", body, AttemptState, DEFAULT_TIMEOUTS.createAttempt, opts);
   }
   renew(input: { ref: AttemptRef; authorizedUntil: string }, opts?: CallOptions) {
@@ -215,6 +242,20 @@ export class HttpSupervisorClient implements SupervisorClient {
   }
   hostile(input: { profileId: string; command: string }, opts?: CallOptions) {
     return this.mutate("/hostile", input, BlastRadiusCard, DEFAULT_TIMEOUTS.hostile, opts);
+  }
+  browserOp(input: { ref: AttemptRef; request: BrowserOp }, opts?: CallOptions) {
+    return this.mutate(`/attempts/${encodeURIComponent(input.ref.attemptId)}/browser`, input, BrowserOpResult, DEFAULT_TIMEOUTS.browserOp, opts);
+  }
+  async browserEvidence(attemptId: string, signal?: AbortSignal) {
+    assertPlainId(attemptId);
+    return this.get(`/attempts/${encodeURIComponent(attemptId)}/browser`, BrowserEvidence, signal, true);
+  }
+  async egressLog(attemptId: string, signal?: AbortSignal) {
+    assertPlainId(attemptId);
+    return this.get(`/attempts/${encodeURIComponent(attemptId)}/egress`, EgressLog, signal, true);
+  }
+  collectOutputs(input: { ref: AttemptRef }, opts?: CallOptions) {
+    return this.mutate(`/attempts/${encodeURIComponent(input.ref.attemptId)}/collect-outputs`, input, CollectOutputsResult, DEFAULT_TIMEOUTS.collectOutputs, opts);
   }
 
   private headers(json: boolean): Record<string, string> {

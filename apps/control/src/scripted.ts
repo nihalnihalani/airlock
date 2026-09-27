@@ -2,7 +2,7 @@
  * Scripted model scripts for diagnostics and tests (`AIRLOCK_MODEL_DRIVER=scripted:<path>`).
  *
  * A script is a JSON file holding `ScriptedTurn[]` (or `{ "turns": ScriptedTurn[] }` with an
- * optional `_comment`). A `write_file` tool call may carry `contentFile` instead of `content`: a
+ * optional `_comment`). A `write_file` (repair) or `code_write` (general) tool call may carry `contentFile` instead of `content`: a
  * path relative to the script file whose bytes become the content, so a labelled diagnostic
  * candidate can live next to the script as a real file rather than a JSON string.
  *
@@ -50,7 +50,7 @@ export async function loadScriptedTurns(file: string): Promise<ScriptedTurn[]> {
     const toolCalls: { name: string; args: unknown }[] = [];
     for (const call of turn.toolCalls ?? []) {
       let args = call.args ?? null;
-      if (call.name === "write_file" && args && typeof args === "object" && typeof (args as Record<string, unknown>).contentFile === "string") {
+      if ((call.name === "write_file" || call.name === "code_write") && args && typeof args === "object" && typeof (args as Record<string, unknown>).contentFile === "string") {
         const { contentFile, ...rest } = args as Record<string, unknown>;
         const ref = String(contentFile);
         if (isAbsolute(ref) || ref.includes("\0")) throw new Error(`${file}: contentFile must be a relative path`);

@@ -40,6 +40,17 @@ export interface Config {
   modelMaxTokens: number;
   /** Sent as reasoning_effort only when set (AIRLOCK_MODEL_REASONING_EFFORT). */
   modelReasoningEffort: string | null;
+  /**
+   * AIRLOCK_MODEL_VISION=1: the configured model accepts images (verify with
+   * `bun scripts/probe-model.ts --vision <model>`); general tasks then attach screenshots to the
+   * next model turn. Unset: no image is ever sent.
+   */
+  modelVision: boolean;
+  /**
+   * Labelled diagnostic scripts for general tasks (AIRLOCK_GENERAL_DIAGNOSTIC_SCRIPTS_DIR), merged
+   * into the diagnostics catalog; null: none.
+   */
+  generalDiagnosticScriptsDir: string | null;
   /** Built web UI (apps/web/dist) served at `/` behind the API; null when the directory is absent. */
   webDist: string | null;
   /** Cookie `Secure` flag; true unless AIRLOCK_INSECURE_COOKIES=1 (local http). */
@@ -140,6 +151,14 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     diagnosticScriptsDir = resolve(diagnosticRaw);
     requireDir(diagnosticScriptsDir, "AIRLOCK_DIAGNOSTIC_SCRIPTS_DIR");
   }
+  const generalRaw = env.AIRLOCK_GENERAL_DIAGNOSTIC_SCRIPTS_DIR?.trim() ?? "";
+  let generalDiagnosticScriptsDir: string | null = null;
+  if (generalRaw !== "" && generalRaw !== "none") {
+    generalDiagnosticScriptsDir = resolve(generalRaw);
+    requireDir(generalDiagnosticScriptsDir, "AIRLOCK_GENERAL_DIAGNOSTIC_SCRIPTS_DIR");
+  }
+  const visionRaw = env.AIRLOCK_MODEL_VISION?.trim() ?? "";
+  if (visionRaw !== "" && visionRaw !== "0" && visionRaw !== "1") throw new ConfigError("AIRLOCK_MODEL_VISION must be 1 (the model accepts images) or 0/unset");
   const instanceId = env.AIRLOCK_INSTANCE_ID?.trim() || null;
   if (instanceId !== null && !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(instanceId)) throw new ConfigError("AIRLOCK_INSTANCE_ID must be a plain identifier (letters, digits, . _ : -; at most 128)");
 
@@ -163,6 +182,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     diagnosticScriptsDir,
     modelMaxTokens,
     modelReasoningEffort,
+    modelVision: visionRaw === "1",
+    generalDiagnosticScriptsDir,
     secureCookies: env.AIRLOCK_INSECURE_COOKIES !== "1",
     trustedProxies: parseTrustedProxies(env.AIRLOCK_TRUST_PROXY),
     sessionTtlMs: intEnv(env, "AIRLOCK_SESSION_TTL_MS", 12 * 60 * 60 * 1000, 60_000, 30 * 24 * 60 * 60 * 1000),

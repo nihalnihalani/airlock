@@ -51,21 +51,22 @@ import {
   type HostCheck,
   type InvokeResult,
   type IsolationProbe,
-  type Operation,
   type Outcome,
   type ProfileManifest,
   type RepairAvailability,
+  type RunEvent,
   type SourceManifest,
   type Task,
   type VerificationRecord,
 } from "@airlock/contracts";
 import { log } from "./log.ts";
+import { STORE_KIND_OPERATIONS, createJournal, teardownAttempt, type Journal, type OperationRecord } from "./journal.ts";
 import type { LoadedProfile } from "./profiles.ts";
 import { redactTeardown } from "./redact.ts";
 import { MODEL_TOOLS, systemPrompt, taskMessage, type ToolSpec } from "./prompts.ts";
 import { DEFAULT_MAX_TOKENS as DRIVER_DEFAULT_MAX_TOKENS } from "./vultr-client.ts";
 import type { Store } from "./store/index.ts";
-import { SupervisorCapacityError, SupervisorError, SupervisorFenceError, SupervisorNotFoundError, type CallOptions, type SupervisorClient } from "./supervisor-client.ts";
+import { SupervisorError, SupervisorFenceError, SupervisorNotFoundError, type SupervisorClient } from "./supervisor-client.ts";
 import { aggregateInvocations, type CaseInvocation } from "./verifier/index.ts";
 import { LostLeaseError, TeardownIncompleteError, type TaskContext, type TaskHandler } from "./worker/index.ts";
 
@@ -165,32 +166,13 @@ export interface RepairDeps {
 
 export const STORE_KIND_VERIFICATIONS = "verifications";
 export const STORE_KIND_MANIFESTS = "manifests";
-/** Supervisor operation journal (M8): one row per dispatched mutation, written before it is sent. */
-export const STORE_KIND_OPERATIONS = "operations";
+/** Supervisor operation journal (M8): shared with the general handler (journal.ts). */
+export { STORE_KIND_OPERATIONS, type OperationRecord } from "./journal.ts";
 /** Checkpoint 4 of each author attempt, kept so a resumed verification can still record it. */
 export const STORE_KIND_ATTEMPT_PROBES = "attempt-probes";
 export const ARTIFACT_KIND_BUNDLE = "bundle";
 
 export const DEFAULT_AUTHORIZATION_MS = 40_000;
-
-/** A journaled supervisor operation (M8). */
-export interface OperationRecord {
-  id: string;
-  operationId: string;
-  requestDigest: string;
-  kind: "createAttempt" | "authorTool" | "freeze" | "revoke" | "destroy" | "invoke" | "renew";
-  taskId: string;
-  attemptId?: string;
-  generation?: number;
-  /** intent: recorded, not yet answered; acked: answered; failed: definitively refused (4xx); unknown: outcome uncertain. */
-  state: "intent" | "acked" | "failed" | "unknown";
-  createdAt: string;
-  settledAt?: string;
-  error?: string;
-  /** Set by a recovering run: what the supervisor reported for this operation's attempt. */
-  reconciledAt?: string;
-  reconciliation?: string;
-}
 
 const DETAIL_CAP = 16 * 1024;
 const TOOL_RESULT_CAP = 24 * 1024;
@@ -226,7 +208,6 @@ class TeardownFailedError extends Error {
   }
 }
 
-type Journal = <T>(kind: OperationRecord["kind"], ref: AttemptRef | null, call: (opts: CallOptions) => Promise<T>) => Promise<T>;
 
 /** How one repair attempt ended. `failed` attempts may be followed by another (M4). */
 type AttemptEnd =
@@ -245,105 +226,14 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
   const renewIntervalMs = Math.max(1, deps.renewIntervalMs ?? Math.floor(authorizationMs / 2));
   const capacityRetryDelaysMs = deps.capacityRetryDelaysMs ?? [1000, 2000, 4000, 8000, 8000];
 
-  /**
-   * Journal wrapper (M8): the operation row is written by the client's `beforeSend` hook, i.e.
-   * after the Operation is built and before any byte leaves the process, then settled from the
-   * response. A 4xx is a definitive refusal ("failed"); anything else (transport, 503, abort) leaves
-   * the outcome "unknown" for reconciliation. Journal writes are unguarded store writes on purpose:
-   * they must land even while a lost-lease run tears its attempt down.
-   */
+  /** Journal wrapper (M8), shared with the general handler: see journal.ts. */
   function journalFor(owner: string, taskId: string): Journal {
-    const once = journalOnce(owner, taskId);
-    // A 429 from the supervisor is its admission control refusing before any Docker call: nothing
-    // ran, so the same request is tried again (as a fresh journaled operation) after a bounded
-    // backoff. Past the last delay the capacity error propagates like any other refusal.
-    return async (kind, ref, call) => {
-      for (let i = 0; ; i++) {
-        try {
-          return await once(kind, ref, call);
-        } catch (error) {
-          const delay = capacityRetryDelaysMs[i];
-          if (!(error instanceof SupervisorCapacityError) || delay === undefined) throw error;
-          log.warn("supervisor at capacity; retrying", { taskId, kind, retry: i + 1, delayMs: delay });
-          await new Promise((r) => setTimeout(r, delay));
-        }
-      }
-    };
+    return createJournal({ store: deps.store, owner, taskId, now, capacityRetryDelaysMs });
   }
 
-  function journalOnce(owner: string, taskId: string): Journal {
-    return async (kind, ref, call) => {
-      let row: OperationRecord | null = null;
-      const opts: CallOptions = {
-        beforeSend: async (operation: Operation) => {
-          row = {
-            id: operation.operationId,
-            operationId: operation.operationId,
-            requestDigest: operation.requestDigest,
-            kind,
-            taskId,
-            ...(ref ? { attemptId: ref.attemptId, generation: ref.generation } : {}),
-            state: "intent",
-            createdAt: iso(),
-          };
-          await deps.store.put(owner, STORE_KIND_OPERATIONS, row);
-        },
-      };
-      try {
-        const result = await call(opts);
-        const settled = row as OperationRecord | null;
-        if (settled) await deps.store.put(owner, STORE_KIND_OPERATIONS, { ...settled, state: "acked", settledAt: iso() }).catch((e) => log.warn("operation journal update failed", { taskId, kind, error: e }));
-        return result;
-      } catch (error) {
-        const settled = row as OperationRecord | null;
-        if (settled) {
-          const definitive = error instanceof SupervisorError && error.status >= 400 && error.status < 500;
-          await deps.store
-            .put(owner, STORE_KIND_OPERATIONS, { ...settled, state: definitive ? "failed" : "unknown", settledAt: iso(), error: errorMessage(error).slice(0, 500) })
-            .catch((e) => log.warn("operation journal update failed", { taskId, kind, error: e }));
-        }
-        throw error;
-      }
-    };
-  }
-
-  /**
-   * Best-effort teardown of an attempt: revoke then destroy. Unknown attempts count as gone.
-   * Teardown runs twice on cancellation (the aborted run's failure path, then the worker's cancel
-   * pass): the supervisor fences the repeat with 409 because the identity is tombstoned. That is
-   * only "clean" when the supervisor's own journal says the attempt is `destroyed` (which it sets
-   * only after a clean teardown); any other fenced state stays visible as incomplete.
-   */
-  async function teardown(ref: AttemptRef, journal: Journal): Promise<{ clean: boolean; detail: string; data?: Record<string, unknown> }> {
-    const confirmedDestroyed = async (): Promise<boolean> => {
-      try {
-        const state = await deps.supervisor.getAttempt(ref.attemptId);
-        return state.ref.taskId === ref.taskId && state.status === "destroyed";
-      } catch (error) {
-        return error instanceof SupervisorNotFoundError;
-      }
-    };
-    let revoked = "revoked";
-    try {
-      await journal("revoke", ref, (opts) => deps.supervisor.revoke({ ref }, opts));
-    } catch (error) {
-      if (error instanceof SupervisorNotFoundError) return { clean: true, detail: "attempt unknown to supervisor (already destroyed)" };
-      if (error instanceof SupervisorFenceError && (await confirmedDestroyed())) return { clean: true, detail: "attempt already destroyed (supervisor journal status: destroyed)" };
-      revoked = `revoke failed: ${errorMessage(error)}`;
-    }
-    try {
-      const result = await journal("destroy", ref, (opts) => deps.supervisor.destroy({ ref }, opts));
-      return {
-        clean: result.teardown.clean,
-        detail: `${revoked}; destroyed; remaining containers=${result.teardown.containersRemaining.length} volumes=${result.teardown.volumesRemaining.length}`,
-        // Other tasks' containers and volumes in the host-wide listing are anonymised before storing.
-        data: { teardown: redactTeardown(result.teardown, new Set([ref.taskId])) },
-      };
-    } catch (error) {
-      if (error instanceof SupervisorNotFoundError) return { clean: true, detail: `${revoked}; attempt unknown to supervisor (already destroyed)` };
-      if (error instanceof SupervisorFenceError && (await confirmedDestroyed())) return { clean: true, detail: `${revoked}; attempt already destroyed (supervisor journal status: destroyed)` };
-      return { clean: false, detail: `${revoked}; destroy failed: ${errorMessage(error)}` };
-    }
+  /** Revoke then destroy, confirmed by the supervisor (journal.ts `teardownAttempt`). */
+  function teardown(ref: AttemptRef, journal: Journal): Promise<{ clean: boolean; detail: string; data?: Record<string, unknown> }> {
+    return teardownAttempt(deps.supervisor, ref, journal);
   }
 
   return async (owner, initial, ctx) => {
@@ -355,8 +245,14 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
     if (task.attemptId) {
       const ref: AttemptRef = { taskId: task.id, attemptId: task.attemptId, generation: task.generation };
       const result = await teardown(ref, journalFor(owner, task.id));
-      await ctx.event("lifecycle", result.clean ? "Attempt destroyed after cancellation" : "Teardown incomplete after cancellation", result.detail, result.data);
-      if (!result.clean) throw new TeardownIncompleteError(`Cancellation requested, but teardown of attempt ${task.attemptId} is incomplete: ${result.detail}`);
+      await ctx.event("lifecycle", result.clean ? "Attempt destroyed after cancellation" : "Teardown incomplete after cancellation", result.detail, { ...(result.data ?? {}), attemptId: task.attemptId, opState: result.clean ? "completed" : "failed" });
+      if (!result.clean) {
+        // Cleanup is its own state dimension (40 §6): the task stays `cancelling` and says so.
+        await ctx.checkpoint({ cleanup: { status: "retrying", at: new Date(now()).toISOString(), detail: result.detail.slice(0, 1024) } });
+        throw new TeardownIncompleteError(`Cancellation requested, but teardown of attempt ${task.attemptId} is incomplete: ${result.detail}`);
+      }
+      await ctx.event("lifecycle", "Task cancelled");
+      return { status: "cancelled", error: undefined, cleanup: { status: "confirmed", at: new Date(now()).toISOString(), detail: `supervisor confirmed teardown of attempt ${task.attemptId}` } } as Partial<Task>;
     }
     await ctx.event("lifecycle", "Task cancelled");
     return { status: "cancelled", error: undefined } as Partial<Task>;
@@ -377,6 +273,11 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
       if (patch.phase && patch.phase !== before) log.debug("phase", { taskId: task.id, from: before, to: patch.phase, attemptId: task.attemptId ?? null, generation: task.generation, modelCalls: task.budget.modelCallsUsed });
       return task;
     };
+    /** Cleanup state after one teardown: confirmed only on the supervisor's clean teardown (40 §6). */
+    const cleanupAfter = (result: { clean: boolean; detail: string }, attemptId: string): NonNullable<Task["cleanup"]> =>
+      result.clean
+        ? { status: "confirmed", at: iso(), detail: `supervisor confirmed teardown of attempt ${attemptId}` }
+        : { status: "failed", at: iso(), detail: `attempt ${attemptId}: ${result.detail}`.slice(0, 1024) };
     const finish = async (outcome: Outcome, why: string): Promise<Partial<Task>> => {
       await ctx.event("phase", `Outcome ${outcome}`, why);
       await checkpoint({ phase: "ready", outcome });
@@ -392,7 +293,8 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
       const ref = liveAttempt;
       liveAttempt = null;
       const result = await teardown(ref, journal);
-      await ctx.event("lifecycle", result.clean ? `Attempt destroyed (${reason})` : `Teardown incomplete (${reason})`, result.detail, result.data).catch(() => undefined);
+      await ctx.event("lifecycle", result.clean ? `Attempt destroyed (${reason})` : `Teardown incomplete (${reason})`, result.detail, { ...(result.data ?? {}), attemptId: ref.attemptId, opState: result.clean ? "completed" : "failed" }).catch(() => undefined);
+      await checkpoint({ cleanup: cleanupAfter(result, ref.attemptId) }).catch(() => undefined);
       if (!result.clean) throw new TeardownFailedError(`teardown of attempt ${ref.attemptId} could not be confirmed (${reason}): ${result.detail}`);
     };
     /** Execution authorization for an attempt: a short window, never past its absolute deadline. */
@@ -493,7 +395,8 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
         await ctx.event("lifecycle", "Discarded attempt from an earlier run", `${stale.attemptId}: ${result.detail}`, { attemptId: stale.attemptId, ...(result.data ?? {}) });
         if (!result.clean) throw new Error(`Previous attempt ${stale.attemptId} could not be torn down: ${result.detail}`);
       }
-      if (task.attemptId) await checkpoint({ attemptId: undefined } as Partial<Task>);
+      if (task.attemptId || staleAttempts.length > 0)
+        await checkpoint({ attemptId: undefined, ...(staleAttempts.length > 0 ? { cleanup: { status: "confirmed", at: iso(), detail: `supervisor confirmed teardown of ${staleAttempts.length} earlier attempt(s)` } } : {}) } as Partial<Task>);
       if (recovering && recoveries > limits.recoveries)
         return finish("INCONCLUSIVE", `recovery limit reached: the task was recovered ${recoveries} times (max ${limits.recoveries}) after lost leases or restarts`);
       if (deps.production && (host.devUnsafe || host.selectedRuntime === "runc"))
@@ -739,7 +642,7 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
         const ref: AttemptRef = { taskId: task.id, attemptId, generation };
         const startedAt = now();
         const deadlineMs = startedAt + caps.attemptTimeoutMs;
-        await checkpoint({ attemptId, generation });
+        await checkpoint({ attemptId, generation, cleanup: { status: "pending", at: iso() } });
         await ctx.event("lifecycle", "Creating author sandbox", `attempt ${attemptId}, generation ${generation}, deadline ${iso(deadlineMs)}; execution authorized for ${Math.round(authorizationMs / 1000)} s at a time, renewed while this run holds its lease`);
         let attempt: AttemptState;
         // The ref is live BEFORE the request leaves: whatever happens to the call (503, timeout,
@@ -1118,42 +1021,57 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
       }
 
       async function runTool(attemptRef: AttemptRef, name: unknown, args: unknown, turn: { cutOff: boolean; maxTokens: number; deadlineMs: number }): Promise<{ payload: unknown; submitted?: boolean }> {
+        // Per-operation state on every tool event (40 §6, C36): "completed" only with the supervisor's
+        // answer; a controller refusal before dispatch is "failed"; an uncertain outcome is "unknown".
+        let lastToolOp: { opState: "completed" | "failed" | "unknown"; operationId?: string } | null = null;
+        const toolEvent = (kind: RunEvent["kind"], title: string, detail?: string, data?: Record<string, unknown>) =>
+          ctx.event(kind, title, detail, { opState: lastToolOp?.opState ?? "failed", ...(lastToolOp?.operationId ? { operationId: lastToolOp.operationId } : {}), ...(data ?? {}) });
         const parsed = ModelToolCall.safeParse({ name, args });
         if (!parsed.success) {
           const issues = parsed.error.issues.map((i) => `${i.path.join(".")} ${i.message}`).join("; ").slice(0, 500);
           if (turn.cutOff) {
             // A call whose arguments were still being written when max_tokens ran out.
             const reason = `This tool call was cut off by the output limit of ${turn.maxTokens} tokens before its arguments were complete (${issues}). Retry with a smaller command or edit: a shorter heredoc, or edit_file with a small old_text instead of rewriting a whole file.`;
-            await ctx.event("tool", `${String(name).slice(0, 32)} cut off by output limit`, reason, { tool: String(name).slice(0, 32), finishReason: "length", maxTokens: turn.maxTokens });
+            await toolEvent("tool", `${String(name).slice(0, 32)} cut off by output limit`, reason, { tool: String(name).slice(0, 32), finishReason: "length", maxTokens: turn.maxTokens });
             return { payload: { error: reason } };
           }
           const reason = `invalid tool call: ${issues}`;
-          await ctx.event("tool", `${String(name).slice(0, 32)} rejected`, reason);
+          await toolEvent("tool", `${String(name).slice(0, 32)} rejected`, reason);
           return { payload: { error: reason } };
         }
         const call = parsed.data;
         await ctx.guard();
         if (authorityLost) throw new AttemptLostError(authorityLost);
         if (now() >= turn.deadlineMs) return { payload: { error: "attempt deadline reached" } };
-        const tool = (args: Parameters<SupervisorClient["authorTool"]>[0]["args"]) =>
-          journal("authorTool", attemptRef, (opts) => deps.supervisor.authorTool({ ref: attemptRef, args }, { ...opts, signal: ctx.signal }));
+        const tool = async (args: Parameters<SupervisorClient["authorTool"]>[0]["args"]) => {
+          let operationId: string | undefined;
+          try {
+            const result = await journal("authorTool", attemptRef, (opts) => deps.supervisor.authorTool({ ref: attemptRef, args }, { ...opts, signal: ctx.signal }), { onIntent: (op) => void (operationId = op.operationId) });
+            lastToolOp = { opState: result.kind === "refused" ? "failed" : "completed", ...(operationId ? { operationId } : {}) };
+            return result;
+          } catch (error) {
+            const definitive = error instanceof SupervisorError && error.status >= 400 && error.status < 500;
+            lastToolOp = { opState: definitive ? "failed" : "unknown", ...(operationId ? { operationId } : {}) };
+            throw error;
+          }
+        };
         try {
           switch (call.name) {
             case "read_file": {
               const { path, start_line: startLine, end_line: endLine } = call.args;
               if (!manifest.readablePaths.includes(path)) {
-                await ctx.event("tool", "read_file refused", `${path} is not a readable path`);
+                await toolEvent("tool", "read_file refused", `${path} is not a readable path`);
                 return { payload: { error: `"${path}" is not readable. Allowed: ${manifest.readablePaths.join(", ")}` } };
               }
               if (startLine !== undefined && endLine !== undefined && endLine < startLine) return { payload: { error: "end_line must be >= start_line" } };
               const result = await tool({ kind: "read", path });
               if (result.kind !== "read") {
-                await ctx.event("tool", `read_file ${path}`, describeToolResult(result), { tool: "read_file", path, refused: describeToolResult(result) });
+                await toolEvent("tool", `read_file ${path}`, describeToolResult(result), { tool: "read_file", path, refused: describeToolResult(result) });
                 return { payload: { error: describeToolResult(result) } };
               }
               const slice = sliceLines(result.content, startLine, endLine, READ_FILE_CHARS);
               const truncated = result.truncated || slice.truncated;
-              await ctx.event("tool", `read_file ${path}${startLine !== undefined || endLine !== undefined ? ` [${slice.startLine}-${slice.endLine}]` : ""}`, `${slice.content.length} chars, lines ${slice.startLine}-${slice.endLine} of ${slice.totalLines}${truncated ? " (truncated)" : ""}`, {
+              await toolEvent("tool", `read_file ${path}${startLine !== undefined || endLine !== undefined ? ` [${slice.startLine}-${slice.endLine}]` : ""}`, `${slice.content.length} chars, lines ${slice.startLine}-${slice.endLine} of ${slice.totalLines}${truncated ? " (truncated)" : ""}`, {
                 tool: "read_file",
                 path,
                 chars: slice.content.length,
@@ -1177,38 +1095,38 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
             case "edit_file": {
               const { path, old_text: oldText, new_text: newText } = call.args;
               if (!manifest.allowedReplacementPaths.includes(path)) {
-                await ctx.event("tool", "edit_file refused", `${path} is not an allowed replacement path`);
+                await toolEvent("tool", "edit_file refused", `${path} is not an allowed replacement path`);
                 return { payload: { error: `"${path}" may not be changed. Allowed: ${manifest.allowedReplacementPaths.join(", ")}` } };
               }
               // The current bytes come from the sandbox through the supervisor (bounded by caps.maxFileBytes),
               // never from a controller-side copy: the author may already have changed the file.
               const current = await tool({ kind: "read", path });
               if (current.kind !== "read") {
-                await ctx.event("tool", `edit_file ${path}`, describeToolResult(current), { tool: "edit_file", path, refused: describeToolResult(current) });
+                await toolEvent("tool", `edit_file ${path}`, describeToolResult(current), { tool: "edit_file", path, refused: describeToolResult(current) });
                 return { payload: { error: describeToolResult(current) } };
               }
               if (current.truncated) {
-                await ctx.event("tool", "edit_file refused", `${path} exceeds the read cap; it cannot be edited safely`);
+                await toolEvent("tool", "edit_file refused", `${path} exceeds the read cap; it cannot be edited safely`);
                 return { payload: { error: `"${path}" exceeds ${caps.maxFileBytes} bytes and cannot be edited safely` } };
               }
               const occurrences = countOccurrences(current.content, oldText);
               if (occurrences === 0) {
-                await ctx.event("tool", `edit_file ${path} rejected`, "old_text not found", { tool: "edit_file", path, occurrences });
+                await toolEvent("tool", `edit_file ${path} rejected`, "old_text not found", { tool: "edit_file", path, occurrences });
                 return { payload: { error: "old_text not found. Read the current file text and copy it exactly, including indentation." } };
               }
               if (occurrences > 1) {
-                await ctx.event("tool", `edit_file ${path} rejected`, `old_text is not unique (${occurrences} occurrences)`, { tool: "edit_file", path, occurrences });
+                await toolEvent("tool", `edit_file ${path} rejected`, `old_text is not unique (${occurrences} occurrences)`, { tool: "edit_file", path, occurrences });
                 return { payload: { error: `old_text is not unique; include more context (it occurs ${occurrences} times)` } };
               }
               const at = current.content.indexOf(oldText);
               const next = current.content.slice(0, at) + newText + current.content.slice(at + oldText.length);
               const byteLength = Buffer.byteLength(next, "utf8");
               if (byteLength > caps.maxFileBytes) {
-                await ctx.event("tool", "edit_file refused", `${path}: ${byteLength} bytes exceeds ${caps.maxFileBytes}`);
+                await toolEvent("tool", "edit_file refused", `${path}: ${byteLength} bytes exceeds ${caps.maxFileBytes}`);
                 return { payload: { error: `file would exceed ${caps.maxFileBytes} bytes` } };
               }
               const written = await tool({ kind: "write", path, content: next });
-              await ctx.event("tool", `edit_file ${path}`, written.kind === "write" ? `${written.byteLength} bytes; replaced ${oldText.length} chars with ${newText.length} chars at offset ${at}\n--- old\n${bounded(oldText, 4000)}\n--- new\n${bounded(newText, 4000)}` : describeToolResult(written), {
+              await toolEvent("tool", `edit_file ${path}`, written.kind === "write" ? `${written.byteLength} bytes; replaced ${oldText.length} chars with ${newText.length} chars at offset ${at}\n--- old\n${bounded(oldText, 4000)}\n--- new\n${bounded(newText, 4000)}` : describeToolResult(written), {
                 tool: "edit_file",
                 path,
                 offset: at,
@@ -1224,16 +1142,16 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
             }
             case "write_file": {
               if (!manifest.allowedReplacementPaths.includes(call.args.path)) {
-                await ctx.event("tool", "write_file refused", `${call.args.path} is not an allowed replacement path`);
+                await toolEvent("tool", "write_file refused", `${call.args.path} is not an allowed replacement path`);
                 return { payload: { error: `"${call.args.path}" may not be changed. Allowed: ${manifest.allowedReplacementPaths.join(", ")}` } };
               }
               const byteLength = Buffer.byteLength(call.args.content, "utf8");
               if (byteLength > caps.maxFileBytes) {
-                await ctx.event("tool", "write_file refused", `${call.args.path}: ${byteLength} bytes exceeds ${caps.maxFileBytes}`);
+                await toolEvent("tool", "write_file refused", `${call.args.path}: ${byteLength} bytes exceeds ${caps.maxFileBytes}`);
                 return { payload: { error: `file exceeds ${caps.maxFileBytes} bytes` } };
               }
               const result = await tool({ kind: "write", path: call.args.path, content: call.args.content });
-              await ctx.event("tool", `write_file ${call.args.path}`, result.kind === "write" ? `${result.byteLength} bytes` : describeToolResult(result), {
+              await toolEvent("tool", `write_file ${call.args.path}`, result.kind === "write" ? `${result.byteLength} bytes` : describeToolResult(result), {
                 tool: "write_file",
                 path: call.args.path,
                 ...(result.kind === "write" ? { byteLength: result.byteLength } : { refused: describeToolResult(result) }),
@@ -1248,7 +1166,7 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
               const result = await tool({ kind: "exec", command: call.args.command });
               if (result.kind === "exec") {
                 const r = result.result;
-                await ctx.event("exec", `run: ${bounded(call.args.command, 200)}`, `${r.status} exit=${r.exitCode} ${r.durationMs}ms${r.truncated ? " (output truncated)" : ""}\nstdout:\n${bounded(r.stdout, 6000)}\nstderr:\n${bounded(r.stderr, 6000)}`, {
+                await toolEvent("exec", `run: ${bounded(call.args.command, 200)}`, `${r.status} exit=${r.exitCode} ${r.durationMs}ms${r.truncated ? " (output truncated)" : ""}\nstdout:\n${bounded(r.stdout, 6000)}\nstderr:\n${bounded(r.stderr, 6000)}`, {
                   tool: "run",
                   command: call.args.command,
                   status: r.status,
@@ -1269,11 +1187,11 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
                   },
                 };
               }
-              await ctx.event("tool", "run refused", describeToolResult(result));
+              await toolEvent("tool", "run refused", describeToolResult(result));
               return { payload: { error: describeToolResult(result) } };
             }
             case "submit_candidate": {
-              await ctx.event("tool", "submit_candidate", bounded(call.args.summary, 4000));
+              await toolEvent("tool", "submit_candidate", bounded(call.args.summary, 4000), { opState: "completed" });
               return { payload: { accepted: true, note: "The candidate will be frozen and verified externally. No result is reported to you." }, submitted: true };
             }
           }
@@ -1282,7 +1200,7 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
           if (error instanceof SupervisorFenceError) throw new AttemptLostError(`attempt fenced by supervisor: ${errorMessage(error)}`);
           if (error instanceof SupervisorNotFoundError) throw new AttemptLostError(`attempt no longer exists: ${errorMessage(error)}`);
           const message = errorMessage(error);
-          await ctx.event("error", `${call.name} failed`, bounded(message, 2000));
+          await toolEvent("error", `${call.name} failed`, bounded(message, 2000));
           return { payload: { error: message.slice(0, 2000) } };
         }
       }
@@ -1293,7 +1211,10 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
         const ref = liveAttempt;
         liveAttempt = null;
         const result = await teardown(ref, journal);
-        if (!(error instanceof LostLeaseError)) await ctx.event("lifecycle", result.clean ? "Attempt destroyed after failure" : "Teardown incomplete after failure", result.detail, result.data).catch(() => undefined);
+        if (!(error instanceof LostLeaseError)) {
+          await ctx.event("lifecycle", result.clean ? "Attempt destroyed after failure" : "Teardown incomplete after failure", result.detail, { ...(result.data ?? {}), attemptId: ref.attemptId, opState: result.clean ? "completed" : "failed" }).catch(() => undefined);
+          await ctx.checkpoint({ cleanup: cleanupAfter(result, ref.attemptId) }).catch(() => undefined);
+        }
         else
           // Unguarded on purpose (the lease is gone, so ctx.event would refuse): the teardown outcome
           // of a lost-lease run stays on the record, clean or not. The task keeps its attemptId, so
