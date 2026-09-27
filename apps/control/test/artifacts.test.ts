@@ -392,6 +392,17 @@ describe("exportBundle", () => {
     }
   });
 
+  test("a scripted-driver (diagnostic) task's bundle is labelled on the README's first line", async () => {
+    const { bundle, baseFiles } = await makeBundle(candText, baseText);
+    const input = { profile, baseFiles, bundle, verification: record("candidate", bundle.candidateDigest, true), baseline: record("baseline", bundle.candidateDigest, true), events };
+    const readme = async (t: typeof task) => new TextDecoder().decode((await exportBundle({ ...input, task: t })).files.find((f) => f.path === "README.txt")!.bytes);
+    const diagnostic = await readme({ ...task, scriptedDriver: "hero-fixed" });
+    expect(diagnostic.split("\n")[0]).toStartWith("DIAGNOSTIC (scripted, not a model)");
+    expect(diagnostic.split("\n")[0]).toContain('"hero-fixed"');
+    const { scriptedDriver: _s, ...plain } = task as typeof task & { scriptedDriver?: string };
+    expect((await readme(plain as typeof task)).split("\n")[0]).toBe("Airlock export bundle");
+  });
+
   test("output is byte-for-byte reproducible", async () => {
     const { bundle, baseFiles } = await makeBundle(candText, baseText);
     const input = { profile, baseFiles, bundle, verification: record("candidate", bundle.candidateDigest, true), baseline: record("baseline", bundle.candidateDigest, true), task, events };

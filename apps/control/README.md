@@ -27,7 +27,8 @@ bunx tsc --noEmit -p tsconfig.json  # from apps/control
 | `AIRLOCK_MODEL_VISION` | no | unset | `1` marks the configured model as vision-capable: general tasks attach each screenshot (PNG) to the next model turn as an `image_url` content part. Set it only after `bun scripts/probe-model.ts --vision <model>` passed (an actual image round trip). Unset: no image is ever sent. |
 | `AIRLOCK_FORMS_ORIGINS` | no | unset | Comma-separated origins (`https://host[:port]`) of **supported final-action destinations**: services implementing the `airlock-forms-v1` adapter (apps/fixtures). Only forms there can be submitted, only through `browser_propose_submit` and a person's approval. Unset: every final action is unsupported. |
 | `AIRLOCK_FORMS_SECRET` | with `AIRLOCK_FORMS_ORIGINS` | — | ≥ 32 chars, shared with the destination. The control plane mints one-use approval codes and the receipts read token from it; never logged, never in an event, never shown to the model or a page before approval. |
-| `AIRLOCK_FIXTURES_ORIGIN` | no | unset | Public origin of the fixtures service; replaces `{{AIRLOCK_FIXTURES_ORIGIN}}` in scripted diagnostics (default `https://airlock-fixtures.example.com`). |
+| `AIRLOCK_FIXTURES_ORIGIN` | no | unset | Public origin of the fixtures service; replaces `{{AIRLOCK_FIXTURES_ORIGIN}}` in scripted diagnostics (default `https://airlock-fixtures.example.com`). Its hostname, like each `AIRLOCK_FORMS_ORIGINS` hostname, is exempt from the wildcard-DNS refusal of `egressAllow` (below). |
+| `AIRLOCK_PUBLIC_HOST` | no (set it in a deployment) | unset | Comma-separated hostname(s) (or origins) of this Airlock deployment. A general task's `egressAllow` may never name them, exactly or through a covering `.suffix`; the host a task-creating request was addressed to (URL host, `Host`, `X-Forwarded-Host`) is refused the same way even when this is unset. |
 | `AIRLOCK_CONTROL_IDLE_MS` / `AIRLOCK_CONTROL_SETTLE_MS` / `AIRLOCK_PROPOSAL_TTL_MS` | no | 5 min / 10 s / 15 min | Human control returns to the agent after this long without a human action; how long a take waits for the in-flight browser op; lifetime of an action proposal and its approval code. |
 | `AIRLOCK_LIVE_GATE_EVIDENCE_DIR` | no | `<repo>/docs/evidence/live-gate` | Committed `LiveGateReceipt` files. See *Repair availability*. |
 | `AIRLOCK_INSTANCE_ID` | no | unset | Vultr instance id of this VM, reported by `GET /api/repair-availability` beside the execution host's. |
@@ -77,13 +78,13 @@ script; `'unsafe-inline'` for styles covers the `<style>` element Radix injects 
 
 | Route | Role | Notes |
 |---|---|---|
-| `POST /api/session {password}` → `{role}` | any | Login; rate limited per client (10/min), keyed on the socket peer address, or on the proxy's `X-Forwarded-For` hop when the peer is a proxy listed in `AIRLOCK_TRUST_PROXY`; a client-supplied header never opens a fresh budget, including on a direct connection that bypasses the proxy. `DELETE` logs out; `GET` returns the current role. |
+| `POST /api/session {password}` → `{role}` | any | Login; rate limited per client (10/min), keyed on the socket peer address, or on the proxy's `X-Forwarded-For` hop when the peer is a proxy listed in `AIRLOCK_TRUST_PROXY`; a client-supplied header never opens a fresh budget, including on a direct connection that bypasses the proxy. `DELETE` logs out; `GET` returns the current role and, when signed in, the caller's own opaque `owner` id (never anyone else's). |
 | `GET /api/health` → `{ok:true}` | any | Liveness only; nothing else. |
 | `GET /api/profiles` | any | `ProfileManifest[]` without the maintainer commit. |
 | `GET /api/host` | operator, judge | Supervisor `HostCheck`. |
 | `GET /api/repair-availability[?profileId=]` → `RepairAvailability` | any | Whether live repair is backed by evidence now, with the precise reason and the receipt summary; `instances {control, execution}` and `model` only to a signed-in session. Default profile: the first loaded. Re-evaluated per request. |
 | `GET /api/diagnostics` → `{scripts:[{name,title,description}]}` | operator, judge | The labelled diagnostic scripts a task may name with `scriptedDriver`. |
-| `POST /api/tasks` `CreateTaskRequest` → `Task` (201) | operator, judge | **`kind: "general"`**: `profileId` must be a general task profile (`analysis`, `web-research`, `web-analysis`; 422 otherwise); `issueText` is the goal; `inputArtifactIds` must be the caller's own uploads and the profile must accept uploads; `egressAllow` is required and non-empty for a browser profile (≤ 16 exact hosts or `.suffix`; IP literals, single-label names, `localhost`, `.internal`/`.local`/other special-use names and a bare TLD suffix are refused) and must be empty otherwise; `scriptedDriver` may name a labelled diagnostic. The task starts with `cleanup: {status: "none"}`. **Repair** (kind absent or `"repair"`, no general fields): profile must be loaded (422 otherwise). `scriptedDriver` must name a script in the diagnostics catalog (422 otherwise). With the live driver and repair unavailable, the task gets `repairDisabledReason` (reproduction and baseline only). A scripted-driver control plane labels every task with the script it runs. `liveGate: true` (operator only, never with a script; recorded on the task) exempts the task from the repair-disabled state: it is how `scripts/live-gate.ts` produces the evidence. |
+| `POST /api/tasks` `CreateTaskRequest` → `Task` (201) | operator, judge | **`kind: "general"`**: `profileId` must be a general task profile (`analysis`, `web-research`, `web-analysis`; 422 otherwise); `issueText` is the goal; `inputArtifactIds` must be the caller's own uploads and the profile must accept uploads; `egressAllow` is required and non-empty for a browser profile (≤ 16 exact hosts or `.suffix`; IP literals, single-label names, `localhost`, `.internal`/`.local`/other special-use names and a bare TLD suffix are refused) and must be empty otherwise; `scriptedDriver` may name a labelled diagnostic. `egressAllow` also refuses this deployment's own host(s) (`AIRLOCK_PUBLIC_HOST` and the request's own host, exactly or under a `.suffix` entry) and names under wildcard-DNS services (`sslip.io`, `nip.io`, `xip.io`, `traefik.me`, `localtest.me`, `lvh.me`, exact or `.suffix`), except the exact hostnames of the configured `AIRLOCK_FIXTURES_ORIGIN` / `AIRLOCK_FORMS_ORIGINS` (an own-host match is refused even then). The task starts with `cleanup: {status: "none"}`. **Repair** (kind absent or `"repair"`, no general fields): profile must be loaded (422 otherwise). `scriptedDriver` must name a script in the diagnostics catalog (422 otherwise). With the live driver and repair unavailable, the task gets `repairDisabledReason` (reproduction and baseline only). A scripted-driver control plane labels every task with the script it runs. `liveGate: true` (operator only, never with a script; recorded on the task) exempts the task from the repair-disabled state: it is how `scripts/live-gate.ts` produces the evidence. |
 | `GET /api/tasks`, `GET /api/tasks/:id` | owner or operator | List (a judge gets its own session's tasks, the operator all) / `TaskView` (task, baseline and candidate records, sealed manifest, host). |
 | `GET /api/tasks/:id/events` | owner or operator | SSE of `RunEvent` (`id` = seq, `event` = kind), replayed after `Last-Event-ID` (or `?after=`), plus `task` snapshots and a final `end`. Carries every model turn and each `run` command's stdout/stderr (bounded). The session is re-checked before every delivery; a stream closes when its session is logged out or expires. |
 | `POST /api/tasks/:id/cancel` → `Task` | owner or operator | queued with no attempt → cancelled; queued that still names an attempt (requeued after a lost lease), or running → cancelling (the worker's cancel pass revokes and confirms teardown); terminal → 409. |
@@ -302,6 +303,18 @@ claimed.
    refusal page → `failed`; a lost click response or unreadable receipt → `outcome_unknown`,
    reconciled by **reads only** (bounded retries, and once more when the run ends). The
    submission is never repeated.
+5. **However a run stops** (normal end, error, cancellation, lost lease) and again when a
+   recovery or cancel pass starts after a controller restart, the task's open proposals are
+   settled: `pending`/`approved` → `expired` (the event carries the reason); `claimed`/`submitted`
+   → `outcome_unknown` (the click may or may not have been sent), then reconciled by bounded
+   receipt reads only: a receipt with the approved digest → `confirmed`, anything else stays
+   `outcome_unknown`. Nothing is ever re-submitted.
+6. Once the approval code has been typed, any end short of a confirmed submission (click not sent,
+   lost, refused, unreadable) reloads the form (resetting every input) before control returns to
+   the model or a person; if the reload fails the browser session is closed. Every observation the
+   controller passes on (to the model, a person or an event) redacts the value of a control named
+   like `Approval code` / `airlock_approval` and any code minted in the run (the browser runner
+   redacts too).
 
 The model may fill fields of an adapter form, but a click on a button, Enter, or type-with-submit
 there is refused before dispatch (`final_action_requires_approval`, best effort). Whatever reaches
@@ -312,6 +325,21 @@ recorded); the controller records such arrivals as `check` events with `data.ada
 live panel from `GET /live` with refresh; human actions through `/control/action`; proposals from
 `GET /approvals` and the `Waiting for review` event (fields, destination, digest, expiry) with
 approve/reject that send the displayed digest; proposal status transitions and receipt.
+Artifact events that answer a started tool operation (live frames, a person's screenshots and
+saved downloads, the agent's screenshots and downloads) carry the same `data.operationId`, and each
+approved-submission step's started intent is answered by an `approved_submit <op>` tool event under
+that id (never with the typed text). Human actions keep `data.actor: "human"` and add
+`data.humanActor: {owner, role}` (the acting session's opaque owner id and role).
+
+**Diagnostic exports:** a task run by a scripted driver is labelled in its sealed bundle: the
+general bundle's `result.json` carries `label: "DIAGNOSTIC (scripted, not a model)"`,
+`diagnostic: true` and `scriptedDriver` (the outcome label moves to `outcomeLabel`), and the first
+line of `README.txt` says so; a repair export's `README.txt` starts with the same label.
+
+**Limitations:** the fixtures/forms service rate-limits per client IP, and every task's browser
+reaches it through VM B's egress, so all task browsers share one bucket there: one busy task can
+exhaust the limit for the others (the destination answers 429), and Airlock retries nothing on
+its behalf. A per-task key would need the destination to see something other than the client IP.
 
 ## Model call sites (C21)
 

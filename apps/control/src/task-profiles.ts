@@ -164,12 +164,32 @@ export function publicTaskProfile(p: TaskProfile) {
 const RESERVED_SUFFIXES = ["localhost", "local", "internal", "localdomain", "lan", "home", "corp", "intranet", "private", "arpa", "onion", "test", "invalid", "example"];
 
 /**
+ * Wildcard-DNS services: any name under them resolves to an address encoded in the name (often a
+ * private or loopback one, or the deployment itself), so an allowlist entry there is effectively an
+ * IP literal. Refused as exact names and as `.suffix`, except a configured fixtures/forms hostname.
+ */
+export const WILDCARD_DNS_SUFFIXES = ["sslip.io", "nip.io", "xip.io", "traefik.me", "localtest.me", "lvh.me"];
+
+export interface EgressPolicyOptions {
+  /** The deployment's own public host(s) and the control plane's request host: never a destination. */
+  ownHosts?: readonly string[];
+  /** Hostnames of the configured fixtures/forms origins: allowed even under a wildcard-DNS suffix. */
+  exemptHosts?: readonly string[];
+}
+
+const underOrAt = (host: string, suffix: string) => host === suffix || host.endsWith(`.${suffix}`);
+
+/**
  * Validates an owner-supplied destination list against the profile. Entries are exact hostnames
  * or `.suffix` (subdomains only). Refused: IP literals, single-label names, localhost, `.internal`
  * and other special-use suffixes, a bare public suffix as `.suffix` (e.g. `.com`), duplicates, and
- * more entries than the profile allows. Returns the normalised list or the reasons.
+ * more entries than the profile allows; the deployment's own host(s) (exactly, or covered by a
+ * `.suffix` entry); and names under wildcard-DNS services (sslip.io, nip.io…) other than the
+ * configured fixtures/forms hostnames. Returns the normalised list or the reasons.
  */
-export function validateEgressAllow(list: string[] | undefined, profile: TaskProfile): { ok: true; hosts: string[] } | { ok: false; reasons: string[] } {
+export function validateEgressAllow(list: string[] | undefined, profile: TaskProfile, options: EgressPolicyOptions = {}): { ok: true; hosts: string[] } | { ok: false; reasons: string[] } {
+  const own = (options.ownHosts ?? []).map((h) => h.trim().toLowerCase().replace(/\.$/, "")).filter(Boolean);
+  const exempt = new Set((options.exemptHosts ?? []).map((h) => h.trim().toLowerCase().replace(/\.$/, "")).filter(Boolean));
   const entries = (list ?? []).map((h) => h.trim().toLowerCase());
   if (!profile.browser) return entries.length === 0 ? { ok: true, hosts: [] } : { ok: false, reasons: [`profile "${profile.id}" has no browser; egressAllow must be empty`] };
   if (entries.length === 0) return { ok: false, reasons: [`profile "${profile.id}" needs at least one allowed destination (egressAllow)`] };
@@ -187,6 +207,8 @@ export function validateEgressAllow(list: string[] | undefined, profile: TaskPro
     else if (labels.length < 2) reasons.push(`${entry}: ${suffix ? "a suffix must name a registrable domain, not a top-level domain" : "single-label names are not allowed"}`);
     else if (RESERVED_SUFFIXES.includes(labels.at(-1)!) || host === "home.arpa" || labels.includes("localhost") || host.startsWith("metadata.")) reasons.push(`${entry}: special-use or internal names are not allowed`);
     else if (host.length > 253) reasons.push(`${entry}: too long`);
+    else if (own.some((o) => (suffix ? underOrAt(o, host) : o === host))) reasons.push(`${entry}: this Airlock deployment's own host is never a destination`);
+    else if (WILDCARD_DNS_SUFFIXES.some((w) => underOrAt(host, w)) && (suffix || !exempt.has(host))) reasons.push(`${entry}: wildcard-DNS names (${WILDCARD_DNS_SUFFIXES.join(", ")}) resolve to any address and are not allowed`);
   }
   return reasons.length ? { ok: false, reasons } : { ok: true, hosts: entries };
 }

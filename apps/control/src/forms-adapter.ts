@@ -77,7 +77,14 @@ export function adapterPath(config: FormsConfig | null | undefined, rawUrl: stri
   }
 }
 
-/** The approval code for one approved proposal (the controller types it; the model never sees it). */
+/**
+ * The approval code for one approved proposal. Only the controller types it, into the destination's
+ * approval input, and it is never put in a tool result, an event or the API. It does exist in the
+ * browser page from the moment it is typed until the submission replaces the page; on any failure
+ * before a confirmed submission the controller reloads the form (resetting the input) or closes
+ * the browser session before control returns, and observations redact the input's value (here and
+ * in the runner).
+ */
 export function approvalCodeFor(config: FormsConfig, p: { proposalId: string; payloadDigest: string; expiresAt: string }): string {
   return mintApprovalCode({ secret: config.secret, proposalId: p.proposalId, payloadDigest: p.payloadDigest, expiresAtEpoch: Math.floor(Date.parse(p.expiresAt) / 1000) });
 }

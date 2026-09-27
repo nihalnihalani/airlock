@@ -4,6 +4,8 @@ import { parseCsv } from "../src/csv.ts";
 import { validateOutputEnvelope } from "../src/general-handler.ts";
 import { encodePng, inspectPng } from "../src/png.ts";
 import { TASK_PROFILES, hostAllowed, normalizeUrl, validateEgressAllow } from "../src/task-profiles.ts";
+import { DIAGNOSTIC_LABEL, buildGeneralBundle } from "../src/general-export.ts";
+import type { Task } from "@airlock/contracts";
 import { VultrError, toWireMessages } from "../src/vultr-client.ts";
 import { probeVision } from "../src/vultr-probe.ts";
 import { createHash } from "node:crypto";
@@ -42,6 +44,45 @@ describe("egress policy", () => {
     expect(hostAllowed("example.org", [".example.org"])).toBe(false);
     expect(hostAllowed("evilexample.org", [".example.org"])).toBe(false);
     expect(normalizeUrl("https://A.example.org/x/#frag")).toBe("https://a.example.org/x");
+  });
+});
+
+describe("egress policy: own host and wildcard DNS (L1)", () => {
+  const p = profile("web-research");
+  const opts = { ownHosts: ["airlock.example.org", "203-0-113-7.sslip.io"], exemptHosts: ["fixtures.203-0-113-7.sslip.io", "forms.203-0-113-7.sslip.io"] };
+  test("the deployment's own host is refused, exactly or under a .suffix", () => {
+    for (const bad of ["airlock.example.org", ".example.org", "203-0-113-7.sslip.io"]) {
+      const r = validateEgressAllow([bad], p, opts);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reasons.join(" ")).toMatch(/own host|wildcard-DNS/);
+    }
+    expect(validateEgressAllow(["docs.example.org"], p, opts).ok).toBe(true);
+    expect(validateEgressAllow(["airlock.example.org"], p).ok).toBe(true);
+  });
+  test("wildcard-DNS services are refused except the configured fixtures/forms hostnames", () => {
+    for (const bad of ["127-0-0-1.sslip.io", "10.0.0.1.nip.io", "x.xip.io", "app.traefik.me", "localtest.me", "a.lvh.me", ".sslip.io", ".203-0-113-7.sslip.io", "nip.io"]) expect(validateEgressAllow([bad], p, opts).ok).toBe(false);
+    expect(validateEgressAllow(["fixtures.203-0-113-7.sslip.io", "forms.203-0-113-7.sslip.io"], p, opts)).toEqual({ ok: true, hosts: ["fixtures.203-0-113-7.sslip.io", "forms.203-0-113-7.sslip.io"] });
+    // An exemption is an exact hostname, never a suffix.
+    expect(validateEgressAllow([".fixtures.203-0-113-7.sslip.io"], p, opts).ok).toBe(false);
+    expect(validateEgressAllow(["sslip.io.example.org"], p, opts).ok).toBe(true);
+  });
+});
+
+describe("general evidence bundle labels (S3)", () => {
+  const base = { id: "task-0123456789abcdef", owner: "judge-x", profileId: "web-research", issueText: "goal", kind: "general", status: "done", phase: "ready", outcome: "RESULT_VERIFIED", generation: 1, leaseId: null, leaseUntil: null, attempts: 1, budget: { modelCallsUsed: 1, repairAttemptsUsed: 0, tokensUsed: 10 }, createdAt: "2026-09-27T00:00:00.000Z", updatedAt: "2026-09-27T00:00:00.000Z", result: { summary: "s", outputArtifactIds: [], sources: [], checks: [] } } as unknown as Task;
+  const files = (task: Task) => {
+    const out = buildGeneralBundle({ task, profile: profile("web-research"), inputs: [], artifacts: [], codeFiles: [], events: [] }).files;
+    const text = (path: string) => new TextDecoder().decode(out.find((f) => f.path === path)!.bytes);
+    return { result: JSON.parse(text("result.json")) as Record<string, unknown>, readme: text("README.txt") };
+  };
+  test("a scripted run is labelled DIAGNOSTIC in result.json and on the README's first line", () => {
+    const d = files({ ...base, scriptedDriver: "general-hero" } as Task);
+    expect(d.result).toMatchObject({ label: DIAGNOSTIC_LABEL, diagnostic: true, scriptedDriver: "general-hero", outcome: "RESULT_VERIFIED" });
+    expect(d.readme.split("\n")[0]).toStartWith(DIAGNOSTIC_LABEL);
+    const m = files(base);
+    expect(m.result.diagnostic).toBeUndefined();
+    expect(String(m.result.label)).toStartWith("VERIFIED");
+    expect(m.readme.split("\n")[0]).toStartWith("Airlock evidence bundle");
   });
 });
 

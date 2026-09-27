@@ -149,6 +149,11 @@ describe("uploads and artifacts API", () => {
       await expect422({ profileId: "web-research", egressAllow: [".com"] }, "top-level domain");
       await expect422({ profileId: "web-research", egressAllow: ["printer.local"] }, "special-use");
       await expect422({ profileId: "analysis", egressAllow: ["example.org"] }, "egressAllow must be empty");
+      await expect422({ profileId: "web-research", egressAllow: ["127-0-0-1.sslip.io"] }, "wildcard-DNS");
+      // The control plane's own request host is never a destination.
+      const own = await ctx.app.request("http://airlock.example.org/api/tasks", { method: "POST", headers: { cookie: j, "content-type": "application/json" }, body: JSON.stringify({ kind: "general", issueText: "x", profileId: "web-research", egressAllow: ["airlock.example.org"] }) });
+      expect(own.status).toBe(422);
+      expect(((await own.json()) as { error: string }).error).toContain("own host");
       const png = (await (await upload(ctx.app, j, "c.png", encodePng(2, 2, [1, 1, 1]))).json()) as Artifact;
       await expect422({ profileId: "web-research", egressAllow: ["example.org"], inputArtifactIds: [png.id] }, "does not accept input files");
       // Repair tasks do not take general fields.

@@ -37,7 +37,7 @@ export type BrowserExecOutcome =
 
 export interface BrowserExecutor {
   /** One op on the task's browser attempt. `create: false` refuses when no browser session is live. */
-  exec(request: BrowserAnyOp, opts: { actor: Actor; tool: string; create: boolean; humanOwner?: string }): Promise<BrowserExecOutcome>;
+  exec(request: BrowserAnyOp, opts: { actor: Actor; tool: string; create: boolean; humanOwner?: string; humanRole?: string }): Promise<BrowserExecOutcome>;
   hasLiveBrowser(): boolean;
 }
 
@@ -247,13 +247,13 @@ export class ControlService {
   }
 
   /** One human browser action (the caller must hold control); serialized with every other op. */
-  async humanAction(taskId: string, by: { owner: string }, request: BrowserAnyOp, tool: string): Promise<BrowserExecOutcome> {
+  async humanAction(taskId: string, by: { owner: string; role?: string }, request: BrowserAnyOp, tool: string): Promise<BrowserExecOutcome> {
     const ch = this.channels.get(taskId);
     const holds = () => ch !== undefined && ch.holder === "human" && ch.humanOwner === by.owner;
     if (!ch || !holds()) throw new ControlError("you do not hold control of this task's browser (take control first)", 409);
     ch.lastHumanAt = this.now();
     this.armIdle(ch);
-    const out = await this.lock(ch, async () => (holds() ? await ch.executor.exec(request, { actor: "human", tool, create: true, humanOwner: by.owner }) : null));
+    const out = await this.lock(ch, async () => (holds() ? await ch.executor.exec(request, { actor: "human", tool, create: true, humanOwner: by.owner, ...(by.role ? { humanRole: by.role } : {}) }) : null));
     if (!out) throw new ControlError("control changed before the action ran; nothing was done", 409);
     ch.lastHumanAt = this.now();
     this.armIdle(ch);

@@ -179,6 +179,10 @@ async function main() {
     availability,
     webDist: config.webDist,
     trustedProxies: config.trustedProxies,
+    egressPolicy: {
+      publicHosts: config.publicHosts,
+      exemptHosts: [...config.formsOrigins, ...(config.fixturesOrigin ? [config.fixturesOrigin] : [])].map((o) => new URL(o).hostname.toLowerCase()),
+    },
     production: config.production,
     control,
   });

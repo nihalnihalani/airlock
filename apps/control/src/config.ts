@@ -77,6 +77,8 @@ export interface Config {
   formsSecret: string | null;
   /** Public origin of the Airlock fixtures service, substituted for {{AIRLOCK_FIXTURES_ORIGIN}} in scripted diagnostics. */
   fixturesOrigin: string | null;
+  /** AIRLOCK_PUBLIC_HOST: this deployment's own public hostname(s), never allowed as a task destination. */
+  publicHosts: string[];
   /** Human browser control returns to the agent after this long without a human action (AIRLOCK_CONTROL_IDLE_MS). */
   controlIdleMs: number;
   /** How long taking control waits for the in-flight browser op (AIRLOCK_CONTROL_SETTLE_MS). */
@@ -198,8 +200,20 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     }
   }
 
+  const publicHosts: string[] = [];
+  for (const part of (env.AIRLOCK_PUBLIC_HOST ?? "").split(",").map((p) => p.trim()).filter(Boolean)) {
+    try {
+      const host = new URL(/^https?:\/\//i.test(part) ? part : `https://${part}`).hostname.toLowerCase().replace(/^\[|\]$/g, "");
+      if (!host) throw new Error("empty");
+      if (!publicHosts.includes(host)) publicHosts.push(host);
+    } catch {
+      throw new ConfigError(`AIRLOCK_PUBLIC_HOST entry "${part.slice(0, 100)}" is not a hostname or origin`);
+    }
+  }
+
   return {
     formsOrigins,
+    publicHosts,
     formsSecret,
     fixturesOrigin,
     controlIdleMs: intEnv(env, "AIRLOCK_CONTROL_IDLE_MS", 5 * 60_000, 10_000, 60 * 60_000),

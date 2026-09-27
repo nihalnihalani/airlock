@@ -760,6 +760,9 @@ function topReadme(
   const passedCases = verification.cases.filter((c) => c.passed).length;
   const rt = verification.runtimeProfile;
   const lines = [
+    ...(task.scriptedDriver !== undefined
+      ? [`DIAGNOSTIC (scripted, not a model): this candidate was written by the scripted driver "${task.scriptedDriver}", which replays a fixed script. No model repaired anything; it is not a model repair.`, ""]
+      : []),
     "Airlock export bundle",
     "=====================",
     "",

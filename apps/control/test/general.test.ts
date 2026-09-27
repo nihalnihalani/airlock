@@ -65,8 +65,9 @@ describe("general tasks: hero combined flow", () => {
       const started = tools.filter((e) => e.data?.opState === "started");
       expect(started.length).toBeGreaterThanOrEqual(6);
       for (const s of started) {
-        // The completion is a tool/exec event, or the lifecycle event of collect-outputs.
-        const completion = events.find((e) => e.seq > s.seq && e.data?.operationId === s.data?.operationId && e.data?.opState !== "started");
+        // The completion is a tool/exec event, or the lifecycle event of collect-outputs. Artifact
+        // events of the same operation (a stored screenshot) carry its operationId but no opState.
+        const completion = events.find((e) => e.seq > s.seq && e.kind !== "artifact" && e.data?.operationId === s.data?.operationId && e.data?.opState !== "started");
         expect(completion?.data?.opState).toBe("completed");
       }
       // The model sees a stale-free, bounded observation; the model events are labelled scripted.

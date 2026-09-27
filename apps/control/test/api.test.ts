@@ -105,9 +105,15 @@ describe("sessions", () => {
     try {
       expect(await (await ctx.app.request("/api/session")).json()).toEqual({ role: "viewer" });
       const op = await login(ctx.app, OPERATOR);
-      expect(await (await ctx.app.request("/api/session", { headers: { cookie: op } })).json()).toEqual({ role: "operator" });
+      const own = (await (await ctx.app.request("/api/session", { headers: { cookie: op } })).json()) as { role: string; owner: string };
+      expect(own.role).toBe("operator");
+      // The caller's own opaque owner id, and only its own.
+      expect(own.owner).toMatch(/^operator-[0-9a-f]{24}$/);
+      const other = await login(ctx.app, OPERATOR);
+      const theirs = (await (await ctx.app.request("/api/session", { headers: { cookie: other } })).json()) as { owner: string };
+      expect(theirs.owner).not.toBe(own.owner);
       const judge = await login(ctx.app, JUDGE);
-      expect(await (await ctx.app.request("/api/session", { headers: { cookie: judge } })).json()).toEqual({ role: "judge" });
+      expect(await (await ctx.app.request("/api/session", { headers: { cookie: judge } })).json()).toMatchObject({ role: "judge", owner: expect.stringMatching(/^judge-/) });
       const bad = await ctx.app.request("/api/session", json({ password: "nope-nope-nope" }));
       expect(bad.status).toBe(401);
       expect(await bad.json()).toEqual({ error: "password incorrect" });

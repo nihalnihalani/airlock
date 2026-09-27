@@ -50,6 +50,9 @@ export interface GeneralBundleInput {
   events: RunEvent[];
 }
 
+/** The label of a bundle produced by a scripted driver: a replayed script, not a model run. */
+export const DIAGNOSTIC_LABEL = "DIAGNOSTIC (scripted, not a model)";
+
 const enc = new TextEncoder();
 const json = (v: unknown) => enc.encode(`${JSON.stringify(v, null, 2)}\n`);
 const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
@@ -75,7 +78,17 @@ export function buildGeneralBundle(input: GeneralBundleInput): { files: { path: 
       inputs: input.inputs.map((a) => ({ artifactId: a.id, filename: a.filename, mediaType: a.mediaType, byteLength: a.byteLength, sha256: a.sha256 })),
     }),
   });
-  files.push({ path: "result.json", bytes: json({ outcome: task.outcome, label: partial ? "PARTIAL: some completion checks failed; see checks" : "VERIFIED: every completion check of the profile passed", cleanup: task.cleanup ?? null, result: task.result ?? null }) });
+  const outcomeLabel = partial ? "PARTIAL: some completion checks failed; see checks" : "VERIFIED: every completion check of the profile passed";
+  // A scripted diagnostic is labelled in the sealed bytes themselves, not only in the UI.
+  const diagnostic = task.scriptedDriver !== undefined;
+  files.push({
+    path: "result.json",
+    bytes: json(
+      diagnostic
+        ? { label: DIAGNOSTIC_LABEL, diagnostic: true, scriptedDriver: task.scriptedDriver, outcome: task.outcome, outcomeLabel, cleanup: task.cleanup ?? null, result: task.result ?? null }
+        : { outcome: task.outcome, label: outcomeLabel, cleanup: task.cleanup ?? null, result: task.result ?? null },
+    ),
+  });
 
   // Output paths as collected (from the "Output stored" events), else the stored filename.
   const outputPath = new Map<string, string>();
@@ -138,6 +151,9 @@ function readme(task: Task, profile: TaskProfile, input: GeneralBundleInput, mod
   const checks = task.result?.checks ?? [];
   const partial = task.outcome === "RESULT_PARTIAL";
   return [
+    ...(task.scriptedDriver !== undefined
+      ? [`${DIAGNOSTIC_LABEL}: this bundle was produced by the scripted driver "${task.scriptedDriver}", which replays fixed tool calls. No model ran; it is not evidence of what a model can do.`, ""]
+      : []),
     `Airlock evidence bundle for task ${task.id}`,
     "",
     partial ? "*** PARTIAL RESULT: not every completion check passed. Read the checks below before using any output. ***" : "Result: every completion check of the task profile passed (RESULT_VERIFIED).",

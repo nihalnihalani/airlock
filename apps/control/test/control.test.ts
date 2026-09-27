@@ -9,13 +9,14 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ActionProposal, BrowserAnyOp, BrowserOpResult, RunEvent, Task } from "@airlock/contracts";
-import { verifyApprovalCode } from "@airlock/fixtures";
+import { APPROVAL_FIELD, verifyApprovalCode } from "@airlock/fixtures";
 import { createApp, type ApiDeps } from "../src/api.ts";
 import { zipFiles } from "../src/artifacts/index.ts";
 import { ControlService } from "../src/browser-control.ts";
 import { ConfigError, loadConfig } from "../src/config.ts";
 import { approvalCodeFor, formPayloadDigest, normalizeFields, parseFormsOrigins, readReceipt, resolveFormUrl } from "../src/forms-adapter.ts";
 import type { GeneralDeps } from "../src/general-handler.ts";
+import { STORE_KIND_GENERAL_USAGE, type GeneralUsage } from "../src/general-handler.ts";
 import { STORE_KIND_PROPOSALS } from "../src/proposals.ts";
 import { DEFAULT_FIXTURES_ORIGIN, openScriptedCatalog } from "../src/scripted.ts";
 import { SessionService } from "../src/sessions.ts";
@@ -184,6 +185,8 @@ describe("exclusive control (C23/C24)", () => {
       expect([...order].sort((a, b) => a - b)).toEqual(order);
       const human = events.find((e) => e.data?.actor === "human" && e.data?.opState === "completed")!;
       expect(human.data?.op).toBe("observe");
+      // Who acted: the session's own opaque owner id and role (the actor kind stays "human").
+      expect(human.data?.humanActor).toMatchObject({ role: "operator", owner: expect.stringMatching(/^operator-/) });
       expect(human.data?.visitedUrl).toBeUndefined();
       expect(events.some((e) => e.data?.opState === "allowed" && e.data?.policy === "egress")).toBe(true);
       expect(events.some((e) => e.data?.actor === "human" && e.data?.policy === "egress" && e.data?.opState === "failed")).toBe(true);
@@ -401,6 +404,12 @@ describe("live view (C22)", () => {
       const events = await ctx.h.events(done.id);
       expect(titled(events, "Live frame")).toHaveLength(2);
       expect(events.filter((e) => e.kind === "artifact" && e.data?.frame === true)).toHaveLength(3);
+      // Each stored frame carries the operationId of the started screenshot operation it answers.
+      for (const frame of events.filter((e) => e.kind === "artifact" && e.data?.frame === true)) {
+        const started = events.find((e) => e.kind === "tool" && e.data?.opState === "started" && e.data?.operationId === frame.data?.operationId);
+        expect(started && started.seq < frame.seq).toBe(true);
+      }
+      expect(events.find((e) => e.kind === "artifact" && e.data?.actor === "human")!.data?.humanActor).toMatchObject({ role: "operator" });
       // Frames and human screenshots are stored but are not the agent's screenshot evidence.
       expect(done.result!.checks.find((c) => c.name === "screenshot-evidence")!.passed).toBe(false);
       expect(ctx.supervisor.browserRequests.filter((r) => r.request.op === "screenshot")).toHaveLength(3);
@@ -528,6 +537,163 @@ describe("supported final actions (C25–C27)", () => {
       expect(unknown.seq).toBeLessThan(confirmed.seq);
       expect(unknown.detail).toContain("NOT re-submitted");
       expect(events.some((e) => e.data?.tool === "approved_submit" && e.data?.opState === "unknown")).toBe(true);
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  test("S1: cancel during the receipt reads after a sent click → outcome_unknown, then confirmed only by reading the receipt (never re-submitted)", async () => {
+    let ctx!: Ctx;
+    let cancelled = false;
+    const receiptFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (!cancelled) {
+        cancelled = true;
+        const res = await post(ctx, "/cancel");
+        expect(res.status).toBe(200);
+        throw new TypeError("connection reset during cancellation");
+      }
+      return ctx.forms.fetch(input, init);
+    }) as typeof fetch;
+    const driver = recordingDriver(proposeTurns());
+    ctx = await makeCtx(driver, { egressAllow: [FORMS_HOST], general: { forms: { origins: [FORMS_ORIGIN], secret: FORMS_SECRET, fetch: receiptFetch, receiptTimeoutMs: 2000 } } });
+    try {
+      ctx.h.worker.start();
+      const pending = await waitProposal(ctx);
+      expect((await post(ctx, `/approvals/${pending.id}/decide`, { decision: "approve", payloadDigest: pending.payloadDigest })).status).toBe(200);
+      const done = await ctx.h.waitFor(ctx.task.id, 20_000);
+      expect(done.status).toBe("cancelled");
+      const final = (await ctx.h.store.get<ActionProposal>(OWNER, STORE_KIND_PROPOSALS, pending.id))!;
+      expect(final.status).toBe("confirmed");
+      expect(final.receipt?.payloadDigest).toBe(pending.payloadDigest);
+      expect(ctx.forms.submissions).toHaveLength(1);
+      const events = await ctx.h.events(done.id);
+      const unknown = titled(events, "Final action outcome unknown").find((e) => e.data?.proposalId === pending.id)!;
+      expect(unknown.data).toMatchObject({ previousStatus: "submitted", status: "outcome_unknown" });
+      expect(unknown.detail).toContain("NOT re-submitted");
+      const confirmed = titled(events, "Final action confirmed by the destination")[0]!;
+      expect(confirmed.data?.reconciled).toBe(true);
+      expect(unknown.seq).toBeLessThan(confirmed.seq);
+      expect(events.some((e) => e.data?.reconciliation === true && e.data?.receiptRead === "confirmed")).toBe(true);
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  test("S1: a controller restart after the click but before 'submitted': claimed → outcome_unknown, reconciled by receipt reads only; pending → expired", async () => {
+    const driver = recordingDriver([{ toolCalls: [{ name: "submit_result", args: { summary: "recovered" } }] }]);
+    const ctx = await makeCtx(driver, { egressAllow: [FORMS_HOST] });
+    try {
+      const digest = await formPayloadDigest(FORMS_ORIGIN, "contact-request", CONTACT_FIELDS);
+      const at = new Date().toISOString();
+      const proposal = (id: string, status: ActionProposal["status"]): ActionProposal => ({
+        schemaVersion: 1,
+        id,
+        owner: OWNER,
+        taskId: ctx.task.id,
+        attemptId: "att-earlier",
+        browserGeneration: 3,
+        destination: FORMS_ORIGIN,
+        adapter: "airlock-forms-v1",
+        formId: "contact-request",
+        fields: CONTACT_FIELDS,
+        payloadDigest: digest,
+        summary: "call Ada back",
+        createdAt: at,
+        expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+        status,
+        ...(status !== "pending" ? { decidedBy: "operator-x", decidedAt: at } : {}),
+      });
+      const clicked = proposal("prop-clicked0001", "claimed");
+      const notClicked = proposal("prop-unclicked01", "claimed");
+      const waiting = proposal("prop-waiting0001", "pending");
+      for (const p of [clicked, notClicked, waiting]) expect(await ctx.h.store.insertImmutable(OWNER, STORE_KIND_PROPOSALS, p)).toBe(true);
+      // The earlier run's click reached the destination (with the approval code) before it crashed.
+      const body = new URLSearchParams({ ...CONTACT_FIELDS, [APPROVAL_FIELD]: approvalCodeFor(ctx.forms.config(), { proposalId: clicked.id, payloadDigest: clicked.payloadDigest, expiresAt: clicked.expiresAt }) });
+      const res = await ctx.forms.app.fetch(new Request(`${FORMS_ORIGIN}/f/contact-request/submit`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: body.toString() }), "10.0.0.8");
+      expect(res.status).toBe(200);
+      // A recovering run: the earlier run's usage is on record.
+      await ctx.h.store.put(OWNER, STORE_KIND_GENERAL_USAGE, { id: ctx.task.id, taskId: ctx.task.id, startedAtMs: Date.now(), browserOps: 5, codeRuns: 0, browserSessions: 1, browserInterruptions: 0, codeSandboxes: 0, unavailableToolCalls: 0 } satisfies GeneralUsage);
+      const done = await run(ctx);
+      expect(done.budget.recoveries).toBe(1);
+      const get = async (id: string) => (await ctx.h.store.get<ActionProposal>(OWNER, STORE_KIND_PROPOSALS, id))!;
+      expect((await get(clicked.id)).status).toBe("confirmed");
+      expect((await get(clicked.id)).receipt?.payloadDigest).toBe(digest);
+      expect((await get(notClicked.id)).status).toBe("outcome_unknown");
+      expect((await get(waiting.id)).status).toBe("expired");
+      // Reads only: nothing was (re-)submitted by the recovery, and no browser was started for it.
+      expect(ctx.forms.submissions).toHaveLength(0);
+      expect(ctx.forms.receipts.get(notClicked.id)).toBeUndefined();
+      expect(ctx.supervisor.browserRequests).toHaveLength(0);
+      const events = await ctx.h.events(done.id);
+      const unknown = titled(events, "Final action outcome unknown");
+      expect(unknown.map((e) => e.data?.proposalId).sort()).toEqual([clicked.id, notClicked.id].sort());
+      expect(unknown.every((e) => e.data?.previousStatus === "claimed")).toBe(true);
+      expect(titled(events, "Proposal expired")[0]!.data).toMatchObject({ proposalId: waiting.id, previousStatus: "pending" });
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  test("S2: a failure after the approval code was typed clears it before control returns; observations redact approval inputs", async () => {
+    let ctx!: Ctx;
+    const values = new Map<string, string>();
+    let clicked = false;
+    let typedCode = "";
+    const hook: Hook = async (attempt, request) => {
+      if (request.op === "navigate") values.clear();
+      if (request.op === "type") {
+        values.set(request.args.ref, request.args.text);
+        if (request.args.ref === "fa") typedCode = request.args.text;
+      }
+      if (request.op === "click" && request.args.ref === "fs") {
+        clicked = true;
+        // The click never reaches the page: not sent.
+        return { response: { schemaVersion: 1, id: null, op: "click", ok: false, error: "stale_reference", message: "ref/generation is not from the latest observe" }, status: "completed", durationMs: 1, generationBefore: null };
+      }
+      if (request.op === "observe") {
+        const r = await ctx.forms.browserOp(attempt, request);
+        if (!r?.response?.ok) return r;
+        const result = r.response.result as { controls: { ref: string; role: string; name: string; value?: string }[] };
+        // The page reports what is typed into its inputs; after the click, a second approval input
+        // (named like the fixtures field) shows a value to test the controller's own redaction.
+        result.controls = result.controls.map((c) => (values.has(c.ref) ? { ...c, value: values.get(c.ref)! } : c));
+        if (clicked) result.controls.push({ ref: "zz", role: "textbox", name: APPROVAL_FIELD, value: "SENTINEL-APPROVAL-VALUE" });
+        return r;
+      }
+      return undefined;
+    };
+    const driver = recordingDriver(proposeTurns([{ toolCalls: [{ name: "browser_observe", args: {} }] }]));
+    ctx = await makeCtx(driver, { egressAllow: [FORMS_HOST], hook });
+    try {
+      ctx.h.worker.start();
+      const pending = await waitProposal(ctx);
+      expect((await post(ctx, `/approvals/${pending.id}/decide`, { decision: "approve", payloadDigest: pending.payloadDigest })).status).toBe(200);
+      const done = await ctx.h.waitFor(ctx.task.id, 20_000);
+      const final = (await ctx.h.store.get<ActionProposal>(OWNER, STORE_KIND_PROPOSALS, pending.id))!;
+      expect(final.status).toBe("failed");
+      const code = approvalCodeFor(ctx.forms.config(), { proposalId: final.id, payloadDigest: final.payloadDigest, expiresAt: final.expiresAt });
+      expect(typedCode).toBe(code);
+      expect(ctx.forms.submissions).toHaveLength(0);
+      // The form was reloaded (inputs reset) after the failed click and before the model's next op.
+      const ops = ctx.supervisor.browserRequests.map((r) => r.request.op);
+      const click = ops.lastIndexOf("click");
+      expect(ops.slice(click + 1)).toEqual(["navigate", "observe"]);
+      const results = toolResults(driver);
+      const observed = results[3]!;
+      expect(observed).not.toContain(code);
+      expect(observed).not.toContain(code.split(".")[2]!);
+      expect(observed).not.toContain("SENTINEL-APPROVAL-VALUE");
+      expect(observed).toContain("[redacted]");
+      expect(observed).toContain('"ref":"fa","role":"textbox","name":"Approval code"}');
+      const events = await ctx.h.events(done.id);
+      expect(titled(events, "Approval code cleared")[0]!.data).toMatchObject({ proposalId: pending.id, scrub: "reloaded" });
+      expect(JSON.stringify(events)).not.toContain(code.split(".")[2]!);
+      expect(JSON.stringify(events)).not.toContain("SENTINEL-APPROVAL-VALUE");
+      // Each approved-submission step's started intent is answered under the same operationId.
+      for (const s of events.filter((e) => e.data?.tool === "approved_submit" && e.data?.opState === "started")) {
+        const answer = events.find((e) => e.seq > s.seq && e.kind === "tool" && e.data?.operationId === s.data?.operationId && e.data?.opState !== "started");
+        expect(answer).toBeDefined();
+      }
     } finally {
       await ctx.close();
     }

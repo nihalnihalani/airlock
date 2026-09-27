@@ -134,6 +134,12 @@ export interface ApiDeps {
   ssePollMs?: number;
   /** Exclusive browser control, live view and approvals (shared with the general handler). */
   control?: ControlService;
+  /**
+   * Destination policy for general tasks: the deployment's own public host(s) (AIRLOCK_PUBLIC_HOST)
+   * are refused, as is the host a creating request was addressed to; the configured fixtures/forms
+   * hostnames are allowed even under a wildcard-DNS suffix.
+   */
+  egressPolicy?: { publicHosts?: string[]; exemptHosts?: string[] };
 }
 
 /** A human action: contracts HumanBrowserAction, or a file operation naming the caller's artifact (never bytes or paths). */
@@ -384,7 +390,11 @@ export function createApp(deps: ApiDeps) {
     c.header("set-cookie", deps.sessions.clearCookie());
     return c.json({ role: "viewer" });
   });
-  app.get("/api/session", (c) => c.json({ role: c.get("role") }));
+  // The caller's own opaque owner id (never anyone else's): the web marks the caller's own actions with it.
+  app.get("/api/session", (c) => {
+    const session = c.get("session");
+    return c.json({ role: c.get("role"), ...(session ? { owner: session.owner } : {}) });
+  });
 
   // ---- profiles, host ---------------------------------------------------------------------------
   app.get("/api/profiles", (c) => c.json([...deps.profiles.values()].map((p) => publicManifest(p.manifest))));
@@ -481,6 +491,27 @@ export function createApp(deps: ApiDeps) {
    * and validated (no IP literals, localhost, `.internal`…), empty otherwise. The controller, not the
    * request, decides images, tools, limits and checks.
    */
+  /** The host(s) this request was addressed to: the URL's host and a proxy's X-Forwarded-Host. */
+  function requestHosts(c: Context<Env>): string[] {
+    const hosts: string[] = [];
+    const add = (raw: string | undefined) => {
+      if (!raw) return;
+      try {
+        const h = new URL(`http://${raw.split(",")[0]!.trim()}`).hostname.toLowerCase().replace(/^\[|\]$/g, "");
+        if (h && !hosts.includes(h)) hosts.push(h);
+      } catch {
+        // not a host
+      }
+    };
+    try {
+      add(new URL(c.req.url).host);
+    } catch {
+      // no URL
+    }
+    add(c.req.header("host"));
+    add(c.req.header("x-forwarded-host"));
+    return hosts;
+  }
   async function createGeneralTask(c: Context<Env>, session: SessionRecord, body: z.infer<typeof CreateTaskRequest>) {
     const profile = taskProfiles.get(body.profileId);
     if (!profile) throw new AppError(`general task profile "${body.profileId}" is not supported; available: ${[...taskProfiles.keys()].join(", ")}`, 422);
@@ -488,7 +519,7 @@ export function createApp(deps: ApiDeps) {
     if (body.scriptedDriver !== undefined) {
       if (!deps.scriptedDrivers || !deps.scriptedDrivers.includes(body.scriptedDriver)) throw new AppError(`scripted driver "${body.scriptedDriver}" is not available`, 422);
     }
-    const egress = validateEgressAllow(body.egressAllow, profile);
+    const egress = validateEgressAllow(body.egressAllow, profile, { ownHosts: [...(deps.egressPolicy?.publicHosts ?? []), ...requestHosts(c)], exemptHosts: deps.egressPolicy?.exemptHosts ?? [] });
     if (!egress.ok) throw new AppError(`egressAllow refused: ${egress.reasons.join("; ")}`, 422);
     const inputIds = [...new Set(body.inputArtifactIds ?? [])];
     if (inputIds.length > 0 && !profile.acceptsUploads) throw new AppError(`profile "${profile.id}" does not accept input files`, 422);
@@ -788,7 +819,7 @@ export function createApp(deps: ApiDeps) {
       request = body.request as BrowserAnyOp;
       tool = `human_${request.op.replace(/[^a-z]+/g, "_")}`;
     }
-    const outcome = await controlService().humanAction(task.id, { owner: session.owner }, request, request.op === "screenshot" ? "human_screenshot" : tool);
+    const outcome = await controlService().humanAction(task.id, { owner: session.owner, role: session.role }, request, request.op === "screenshot" ? "human_screenshot" : tool);
     if (!outcome.ok && !outcome.raw) return c.json({ ok: false, error: outcome.error, detail: outcome.payload }, 422);
     return c.json({ ok: outcome.ok, ...(outcome.ok ? {} : { error: outcome.error }), ...(outcome.ok && outcome.artifactId ? { artifactId: outcome.artifactId } : {}), result: redactBrowserResult(outcome.raw!) });
   });
