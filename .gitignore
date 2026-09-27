@@ -16,3 +16,7 @@ data/
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# Agent worktrees and orchestration state (never source)
+.claude/worktrees/
+.omc/
