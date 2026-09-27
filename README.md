@@ -287,7 +287,7 @@ It does not mean the patch is safe, certified, correct in general, or free of ot
 
 ## Testing
 
-Current counts on this branch (Colima for the real-Docker tests): control 398, supervisor 207 (all real-Docker integration tests ran), web 132, egress 35, fixtures 41, scripts 11, browser runner 27, Node probe parity 2, Python runtime and output collector 135 (+2 skipped on macOS). `bun run test` runs the owned Bun suites (it lists paths so upstream reference trees are not collected); `bun run test:python` and `bun run test:browser` run the others. The independent acceptance driver is `bun scripts/acceptance/local.ts` against a running `scripts/dev-up.sh` stack.
+Current counts on `main` (Colima for the real-Docker tests): control 398, supervisor 207 (all real-Docker integration tests ran), web 132, egress 35, fixtures 41, scripts 11, browser runner 27, Node probe parity 2, Python runtime and output collector 135 (+2 skipped on macOS). `bun run test` runs the owned Bun suites (it lists paths so upstream reference trees are not collected); `bun run test:python` and `bun run test:browser` run the others. The independent acceptance driver is `bun scripts/acceptance/local.ts` against a running `scripts/dev-up.sh` stack.
 
 The original four suites plus the smoke:
 
