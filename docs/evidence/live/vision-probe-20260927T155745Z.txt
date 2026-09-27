@@ -1,0 +1,9 @@
+# Vision round trip (C20) — 20260927T155745Z — revision d76b3b1
+# command: bun scripts/probe-model.ts --vision <models>   (key from .env; never printed)
+# endpoint: https://api.vultrinference.com/v1 (pinned; redirects refused)
+probe-model: vision round trip on https://api.vultrinference.com/v1 for 1 model(s)
+model    ok   recognized  color  reply  ms    error
+-------  ---  ----------  -----  -----  ----  -----
+glm-5.3  yes  yes         red    "red"  1540       
+
+Vision round trip passed: glm-5.3. AIRLOCK_MODEL_VISION=1 is supported for it.
