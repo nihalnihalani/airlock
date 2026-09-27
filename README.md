@@ -76,7 +76,7 @@ Secrets come from the environment only. `.env.example` lists the deployment shap
 | `AIRLOCK_PROFILES_DIR` | no | `<repo>/profiles` | Profiles; each needs a verified `base/`. |
 | `AIRLOCK_RUNTIME_DIR` | no | `<repo>/runtime/python` | Where `adapter.py` lives (part of the adapter digest). |
 | `AIRLOCK_WEB_DIST` | no | `<repo>/apps/web/dist` | Built web UI served at `/`; `/api/*` always takes precedence; `none` disables. |
-| `AIRLOCK_OPERATOR_PASSWORD`, `AIRLOCK_JUDGE_PASSWORD` | no (≥8 chars, must differ) | — | Role passwords. Without both, only the read-only viewer role exists. |
+| `AIRLOCK_OPERATOR_PASSWORD`, `AIRLOCK_JUDGE_PASSWORD` | no (≥8 chars, must differ) | — | Role passwords. Without both, only the read-only viewer role exists. The viewer role needs no password and can read every task, its pasted issue text and its event stream (never the sealed candidate bytes, which leave only through an export grant): do not paste text into a public deployment that must not be public; gating the URL is the optional NetBird add-on. |
 | `PORT`, `CONTROL_BIND` | no | `3000`, `0.0.0.0` | Listener. |
 | `AIRLOCK_INSECURE_COOKIES` | no | unset | `1` drops the cookie `Secure` flag for plain-http local development only. |
 | `AIRLOCK_SESSION_TTL_MS`, `AIRLOCK_EXPORT_GRANT_TTL_MS`, `AIRLOCK_HOSTILE_MIN_INTERVAL_MS` | no | 12 h, 24 h, 10 s | Session lifetime, export grant lifetime, per-session hostile-run rate limit. |
