@@ -4,6 +4,7 @@
  * Nothing here is caller-selectable at runtime: the image, runtime, caps and profiles come from
  * this configuration plus the profile directory. Requests only name attempts and operations.
  */
+import { readFileSync } from "node:fs";
 import { isIPv4, isIPv6 } from "node:net";
 import { totalmem } from "node:os";
 import { resolve } from "node:path";
@@ -38,6 +39,37 @@ export interface SupervisorConfig {
   instanceId: string | undefined;
   /** Host admission budget (see capacity.ts). */
   capacity: CapacityBudget;
+  /**
+   * The browser plane (Chromium sandbox + per-attempt egress proxy). Undefined when
+   * AIRLOCK_BROWSER_IMAGE is not set: `role: "browser"` is then refused as unsupported.
+   */
+  browser: BrowserPlaneConfig | undefined;
+}
+
+/**
+ * The browser runtime profile. It is not a repository profile: there is exactly one, it is fixed by
+ * this configuration, and a request selects it with `profileId: "browser"` and `role: "browser"`.
+ */
+export interface BrowserPlaneConfig {
+  image: string;
+  /** Pinned `sha256:` image ID (AIRLOCK_BROWSER_IMAGE_ID); required outside dev-unsafe. */
+  imageId: string | undefined;
+  egressImage: string;
+  /** Pinned `sha256:` image ID (AIRLOCK_EGRESS_IMAGE_ID); required outside dev-unsafe. */
+  egressImageId: string | undefined;
+  /** Path of the Chromium seccomp profile (AIRLOCK_BROWSER_SECCOMP) and its compact JSON. */
+  seccompPath: string;
+  seccompJson: string;
+  memoryBytes: number;
+  pidsLimit: number;
+  shmBytes: number;
+  tmpBytes: number;
+  cpus: number;
+  egressMemoryBytes: number;
+  egressPidsLimit: number;
+  egressCpus: number;
+  /** Upper bound on a browser attempt's absolute deadline. */
+  attemptTimeoutMs: number;
 }
 
 export interface CapacityBudget {
@@ -174,6 +206,9 @@ export function loadConfig(env: Record<string, string | undefined>, repoRoot: st
   const vmOverhead = parseBytes(env.AIRLOCK_VM_OVERHEAD_BYTES, runtime.data === "kata" ? 160 * 1024 * 1024 : 0, true);
   if (vmOverhead === undefined) return { ok: false, reason: "AIRLOCK_VM_OVERHEAD_BYTES must be a non-negative integer." };
 
+  const browser = loadBrowserPlane(env, repoRoot, { production, devUnsafe: effectiveDevUnsafe });
+  if (!browser.ok) return browser;
+
   return {
     ok: true,
     config: {
@@ -194,7 +229,68 @@ export function loadConfig(env: Record<string, string | undefined>, repoRoot: st
       runtimeImageId,
       instanceId,
       capacity: { memoryBytes: memoryBudget, pids: pidsBudget, scratchBytes: scratchBudget, maxSandboxes, vmOverheadBytes: vmOverhead },
+      browser: browser.value,
     },
+  };
+}
+
+const IMAGE_REF = /^[a-z0-9][a-z0-9._\/-]{0,200}(:[A-Za-z0-9._-]{1,128})?(@sha256:[a-f0-9]{64})?$/;
+const IMAGE_ID = /^sha256:[a-f0-9]{64}$/;
+
+function loadBrowserPlane(
+  env: Record<string, string | undefined>,
+  repoRoot: string,
+  mode: { production: boolean; devUnsafe: boolean },
+): { ok: true; value: BrowserPlaneConfig | undefined } | { ok: false; reason: string } {
+  const image = env.AIRLOCK_BROWSER_IMAGE?.trim();
+  if (!image) return { ok: true, value: undefined };
+  const egressImage = env.AIRLOCK_EGRESS_IMAGE?.trim() || "airlock-egress:dev";
+  for (const [name, value] of [["AIRLOCK_BROWSER_IMAGE", image], ["AIRLOCK_EGRESS_IMAGE", egressImage]] as const) {
+    if (!IMAGE_REF.test(value)) return { ok: false, reason: `${name} is not an image reference.` };
+  }
+  const imageId = env.AIRLOCK_BROWSER_IMAGE_ID?.trim() || undefined;
+  const egressImageId = env.AIRLOCK_EGRESS_IMAGE_ID?.trim() || undefined;
+  for (const [name, value] of [["AIRLOCK_BROWSER_IMAGE_ID", imageId], ["AIRLOCK_EGRESS_IMAGE_ID", egressImageId]] as const) {
+    if (value !== undefined && !IMAGE_ID.test(value)) return { ok: false, reason: `${name} must be a \`sha256:<64 hex>\` image ID.` };
+    if (value === undefined && (mode.production || !mode.devUnsafe)) {
+      return { ok: false, reason: `${name} is not set. Outside dev-unsafe the supervisor enforces the built browser/egress image IDs on every inspection; deploy captures them after the build.` };
+    }
+  }
+  const seccompPath = resolve(repoRoot, env.AIRLOCK_BROWSER_SECCOMP?.trim() || "runtime/browser/seccomp/chromium.json");
+  let seccompJson: string;
+  try {
+    const parsed = JSON.parse(readFileSync(seccompPath, "utf8")) as { defaultAction?: unknown; syscalls?: unknown };
+    if (typeof parsed.defaultAction !== "string" || !Array.isArray(parsed.syscalls)) throw new Error("not a seccomp profile (defaultAction/syscalls)");
+    if (parsed.defaultAction === "SCMP_ACT_ALLOW") throw new Error("defaultAction SCMP_ACT_ALLOW is not a restricting profile");
+    seccompJson = JSON.stringify(parsed);
+  } catch (error) {
+    return { ok: false, reason: `AIRLOCK_BROWSER_SECCOMP ${seccompPath} is not a usable seccomp profile (${(error as Error).message}).` };
+  }
+  const n = (name: string, fallback: number, min: number): number | string => {
+    const value = parseBytes(env[name], fallback);
+    return value === undefined || value < min ? `${name} must be an integer >= ${min}.` : value;
+  };
+  const f = (name: string, fallback: number): number | string => {
+    const raw = env[name]?.trim();
+    if (!raw) return fallback;
+    const value = Number(raw);
+    return /^\d+(\.\d+)?$/.test(raw) && value >= 0.1 && value <= 64 ? value : `${name} must be a CPU count between 0.1 and 64.`;
+  };
+  const values = {
+    memoryBytes: n("AIRLOCK_BROWSER_MEMORY_BYTES", 2 * 1024 ** 3, 256 * 1024 ** 2),
+    pidsLimit: n("AIRLOCK_BROWSER_PIDS", 256, 64),
+    shmBytes: n("AIRLOCK_BROWSER_SHM_BYTES", 256 * 1024 ** 2, 64 * 1024 ** 2),
+    tmpBytes: n("AIRLOCK_BROWSER_TMP_BYTES", 512 * 1024 ** 2, 64 * 1024 ** 2),
+    cpus: f("AIRLOCK_BROWSER_CPUS", 1),
+    egressMemoryBytes: n("AIRLOCK_EGRESS_MEMORY_BYTES", 128 * 1024 ** 2, 64 * 1024 ** 2),
+    egressPidsLimit: n("AIRLOCK_EGRESS_PIDS", 64, 16),
+    egressCpus: f("AIRLOCK_EGRESS_CPUS", 0.5),
+    attemptTimeoutMs: n("AIRLOCK_BROWSER_ATTEMPT_TIMEOUT_MS", 30 * 60_000, 60_000),
+  };
+  for (const value of Object.values(values)) if (typeof value === "string") return { ok: false, reason: value };
+  return {
+    ok: true,
+    value: { image, imageId, egressImage, egressImageId, seccompPath, seccompJson, ...(values as { [K in keyof typeof values]: number }) },
   };
 }
 

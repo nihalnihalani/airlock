@@ -20,10 +20,12 @@ export interface ContainerCreateSpec {
   hostname: string;
   hostConfig: {
     runtime: string;
-    networkMode: "none";
+    /** `none` for every task role; a supervisor-created per-attempt network for the browser plane. */
+    networkMode: string;
     readonlyRootfs: true;
     capDrop: ["ALL"];
-    securityOpt: ["no-new-privileges"];
+    /** Always `no-new-privileges`; the browser adds its own `seccomp=<profile JSON>`. */
+    securityOpt: string[];
     pidsLimit: number;
     memory: number;
     memorySwap: number;
@@ -32,7 +34,35 @@ export interface ContainerCreateSpec {
     restartPolicy: { Name: "no" };
     tmpfs: Record<string, string>;
     mounts: { type: "volume"; source: string; target: string; readOnly: boolean }[];
+    /** /dev/shm size in bytes (browser only). */
+    shmSize?: number;
   };
+}
+
+/** A per-attempt bridge network (browser plane). Options are fixed by the supervisor. */
+export interface NetworkCreateSpec {
+  name: string;
+  labels: Record<string, string>;
+  internal: boolean;
+  /** Driver options, e.g. the fixed bridge interface name the host firewall matches on. */
+  options: Record<string, string>;
+}
+
+export interface NetworkDetail {
+  id: string;
+  name: string;
+  driver: string;
+  internal: boolean;
+  enableIPv6: boolean;
+  labels: Record<string, string>;
+  options: Record<string, string>;
+  /** Container names attached right now. */
+  containers: string[];
+}
+
+export interface NetworkSummary {
+  name: string;
+  labels: Record<string, string>;
 }
 
 export interface ContainerSummary {
@@ -57,7 +87,7 @@ export interface ContainerDetail {
   id: string;
   name: string;
   image: string;
-  state: { status: string; running: boolean; exitCode: number; oomKilled: boolean; startedAt: string; finishedAt: string };
+  state: { status: string; running: boolean; exitCode: number; oomKilled: boolean; startedAt: string; finishedAt: string; health?: string | undefined };
   config: {
     user: string;
     workingDir: string;
@@ -78,6 +108,11 @@ export interface ExecSpec {
   user: string;
   workingDir: string;
   env?: string[];
+  /**
+   * Bytes written to the process's stdin. Stdin is never closed (half-close is not reliable on every
+   * client transport), so the command itself must read exactly `stdin.byteLength` bytes (for
+   * example `head -c <n> | ...`); the supervisor always builds such a command.
+   */
   stdin?: Uint8Array;
 }
 
@@ -114,4 +149,16 @@ export interface DockerApi {
    */
   putArchive(name: string, tar: Uint8Array, path: string, signal?: AbortSignal): Promise<void>;
   exec(name: string, spec: ExecSpec, signal: AbortSignal): Promise<ExecSession>;
+
+  // Browser plane: per-attempt networks and the egress proxy's decision log.
+  /** Create a bridge network; never adopts an existing one (409 → name_held). */
+  createNetwork(spec: NetworkCreateSpec): Promise<void>;
+  inspectNetwork(name: string): Promise<NetworkDetail | null>;
+  /** Remove a network; a missing one is not an error. */
+  removeNetwork(name: string): Promise<void>;
+  listNetworks(labelFilters: string[]): Promise<NetworkSummary[]>;
+  /** Attach a created (not yet started) container to a second network. */
+  connectNetwork(network: string, container: string): Promise<void>;
+  /** The container's stdout, last `tail` lines, capped at `maxBytes` (demultiplexed). */
+  containerLogs(name: string, options: { tail: number; maxBytes: number }): Promise<string | null>;
 }

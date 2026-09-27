@@ -12,9 +12,10 @@
 #      `bun install --frozen-lockfile`, build airlock-runtime-python:tabulate-365 on the host and capture
 #      its image ID (AIRLOCK_RUNTIME_IMAGE_ID, enforced by the supervisor on every inspection), write
 #      /etc/airlock/supervisor.env (root, 0600; also AIRLOCK_INSTANCE_ID = the sandbox instance id from
-#      state.json), restart airlock-supervisor, wait for /health on the VPC address, log the /host check.
+#      state.json), build airlock-egress:dev and airlock-browser:dev and pin their IDs
+#      (AIRLOCK_EGRESS_IMAGE_ID / AIRLOCK_BROWSER_IMAGE_ID), (re)apply the egress guard, restart airlock-supervisor, wait for /health on the VPC address, log the /host check.
 #   4. VM A: deploy/host/control-host.sh (caddy, bun, service user, unit), `bun install --frozen-lockfile`,
-#      `bun run --cwd apps/web build`, write /etc/airlock/control.env (root, 0600), restart airlock-control,
+#      `bun run --cwd apps/web build`, write /etc/airlock/control.env (root, 0600; AIRLOCK_PRODUCTION=1, AIRLOCK_INSTANCE_ID, AIRLOCK_DIAGNOSTIC_SCRIPTS_DIR), restart airlock-control,
 #      wait for /api/session on 127.0.0.1:3000 and then over https on the public name.
 #   5. print the public URL and where the passwords are.
 #
@@ -127,6 +128,16 @@ if [[ -z "$ONLY" || "$ONLY" == "sandbox" ]]; then
   RUNTIME_IMAGE_ID="$("${SSH[@]}" "root@$SANDBOX_IP" "docker image inspect --format '{{.Id}}' airlock-runtime-python:tabulate-365")"
   [[ "$RUNTIME_IMAGE_ID" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "deploy: could not read the runtime image ID on VM B (got '$RUNTIME_IMAGE_ID')" >&2; exit 1; }
   log "runtime image ID: $RUNTIME_IMAGE_ID (AIRLOCK_RUNTIME_IMAGE_ID; a retag fails every inspection)"
+  # Browser plane (milestone 3): the egress proxy and the Chromium runner images, built on the host and
+  # pinned by ID like the runtime image; the seccomp profile ships in the tree.
+  log "building the browser-plane images on VM B (apps/egress, runtime/browser)"
+  "${SSH[@]}" "root@$SANDBOX_IP" "cd /opt/airlock/app && docker build -q -t airlock-egress:dev apps/egress >/dev/null && docker build -q -t airlock-browser:dev runtime/browser >/dev/null"
+  EGRESS_IMAGE_ID="$("${SSH[@]}" "root@$SANDBOX_IP" "docker image inspect --format '{{.Id}}' airlock-egress:dev")"
+  BROWSER_IMAGE_ID="$("${SSH[@]}" "root@$SANDBOX_IP" "docker image inspect --format '{{.Id}}' airlock-browser:dev")"
+  [[ "$EGRESS_IMAGE_ID" =~ ^sha256:[a-f0-9]{64}$ && "$BROWSER_IMAGE_ID" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "deploy: could not read the browser/egress image IDs on VM B" >&2; exit 1; }
+  log "browser image ID: $BROWSER_IMAGE_ID; egress image ID: $EGRESS_IMAGE_ID"
+  # the host firewall for the per-attempt bridges (installed by sandbox-host.sh; the tree now has the script)
+  "${SSH[@]}" "root@$SANDBOX_IP" "install -m 0755 /opt/airlock/app/deploy/host/airlock-egress-guard.sh /usr/local/sbin/airlock-egress-guard && systemctl enable airlock-egress-guard.service >/dev/null 2>&1; systemctl restart airlock-egress-guard.service && iptables -S AIRLOCK-FWD | head -3"
   log "writing /etc/airlock/supervisor.env (root, 0600)"
   write_env "$SANDBOX_IP" /etc/airlock/supervisor.env <<EOF
 PORT=4300
@@ -145,6 +156,15 @@ AIRLOCK_HOST_PIDS=${AIRLOCK_HOST_PIDS:-}
 AIRLOCK_HOST_SCRATCH_BYTES=${AIRLOCK_HOST_SCRATCH_BYTES:-}
 AIRLOCK_MAX_SANDBOXES=${AIRLOCK_MAX_SANDBOXES:-}
 AIRLOCK_VM_OVERHEAD_BYTES=${AIRLOCK_VM_OVERHEAD_BYTES:-}
+AIRLOCK_BROWSER_IMAGE=airlock-browser:dev
+AIRLOCK_BROWSER_IMAGE_ID=$BROWSER_IMAGE_ID
+AIRLOCK_EGRESS_IMAGE=airlock-egress:dev
+AIRLOCK_EGRESS_IMAGE_ID=$EGRESS_IMAGE_ID
+AIRLOCK_BROWSER_SECCOMP=/opt/airlock/app/runtime/browser/seccomp/chromium.json
+AIRLOCK_BROWSER_MEMORY_BYTES=${AIRLOCK_BROWSER_MEMORY_BYTES:-}
+AIRLOCK_BROWSER_PIDS=${AIRLOCK_BROWSER_PIDS:-}
+AIRLOCK_BROWSER_SHM_BYTES=${AIRLOCK_BROWSER_SHM_BYTES:-}
+AIRLOCK_BROWSER_TMP_BYTES=${AIRLOCK_BROWSER_TMP_BYTES:-}
 EOF
   "${SSH[@]}" "root@$SANDBOX_IP" "systemctl daemon-reload && systemctl restart airlock-supervisor.service"
   log "waiting for the supervisor on http://$SANDBOX_VPC_IP:4300/health (VPC only)"
@@ -179,8 +199,15 @@ if [[ -z "$ONLY" || "$ONLY" == "control" ]]; then
   else
     DRIVER_VALUE="vultr"
   fi
-  log "writing /etc/airlock/control.env (root, 0600; driver=$DRIVER_VALUE model=$MODEL)"
+  # VM A's own Vultr instance id (shown as "the instance" on repair availability), read the same
+  # way as the sandbox's above. The scripted fixtures are the labelled diagnostic catalog.
+  CONTROL_INSTANCE_ID="$(jq -r '.control.id // empty' "$STATE")"
+  DIAGNOSTIC_SCRIPTS_DIR="/opt/airlock/app/apps/control/test/fixtures/scripted"
+  log "writing /etc/airlock/control.env (root, 0600; driver=$DRIVER_VALUE model=$MODEL production=1 instance=${CONTROL_INSTANCE_ID:-unknown})"
   write_env "$CONTROL_IP" /etc/airlock/control.env <<EOF
+AIRLOCK_PRODUCTION=1
+AIRLOCK_INSTANCE_ID=$CONTROL_INSTANCE_ID
+AIRLOCK_DIAGNOSTIC_SCRIPTS_DIR=$DIAGNOSTIC_SCRIPTS_DIR
 PORT=3000
 CONTROL_BIND=127.0.0.1
 AIRLOCK_TRUST_PROXY=1

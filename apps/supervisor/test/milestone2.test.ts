@@ -208,10 +208,10 @@ describe("M2 host admission", () => {
 
   test("memory (with VM overhead), PIDs and scratch each bound admission; invoke and hostile are admitted too", async () => {
     const docker = new FakeDocker(defaultHandler());
-    // one sandbox costs 512 MiB + 160 MiB overhead; the budget fits one
+    // one sandbox costs 512 MiB + 160 MiB overhead + 192 MiB of tmpfs (/tmp + workspace are RAM); the budget fits one
     const { core: c, dir } = core(docker, TIGHT({ maxSandboxes: 10, memoryBytes: 1024 ** 3, vmOverheadBytes: 160 * 1024 ** 2 }));
     await create(c, REF);
-    expect(c.capacity.used().memoryBytes).toBe(PROFILE.caps.memoryBytes + 160 * 1024 ** 2);
+    expect(c.capacity.used().memoryBytes).toBe(PROFILE.caps.memoryBytes + 160 * 1024 ** 2 + 64 * 1024 ** 2 + 128 * 1024 ** 2);
     const before = docker.calls.length;
     const body = { taskId: "task1", profileId: PROFILE.id, role: "baseline" as const, request: { schemaVersion: 1 as const, cases: [{ id: "c1", input: {} }] }, absoluteDeadline: future(60_000) };
     const inv = await invoke(c, { ...body, operation: await operationFor("inv-full", body) }).catch(err);

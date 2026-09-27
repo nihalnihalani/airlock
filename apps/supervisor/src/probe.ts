@@ -12,6 +12,8 @@ import { SANDBOX_USER, runExec, timedCommand } from "./exec";
 
 const PROBE_PATH = "/opt/airlock/probe.sh";
 const PROBE_TIMEOUT_SECONDS = 25;
+/** Task sandboxes get Docker's default /dev/shm (no ShmSize is set): 64 MiB. */
+export const SHM_BYTES = 67_108_864;
 
 const probeOutput = z.object({
   metadataEndpoint: ProbeResult,
@@ -60,7 +62,7 @@ export async function runProbe(api: DockerApi, container: string, workingDir: st
   const outcome = await runExec(
     api,
     container,
-    { cmd: timedCommand(["/bin/bash", "--noprofile", "--norc", PROBE_PATH, "--workspace-bytes", String(workspaceBytes)], PROBE_TIMEOUT_SECONDS), user: SANDBOX_USER, workingDir },
+    { cmd: timedCommand(["/bin/bash", "--noprofile", "--norc", PROBE_PATH, "--workspace-bytes", String(workspaceBytes), "--shm-bytes", String(SHM_BYTES)], PROBE_TIMEOUT_SECONDS), user: SANDBOX_USER, workingDir },
     { timeoutMs: (PROBE_TIMEOUT_SECONDS + 7) * 1000, outputBytes: 16_384, ...(signal ? { signal } : {}) },
   );
   if (outcome.result.status !== "succeeded") return parseProbeOutput("", probedAt);

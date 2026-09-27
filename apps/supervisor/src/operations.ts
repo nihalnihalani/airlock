@@ -85,7 +85,38 @@ interface OperationRow {
   status: string;
   http_status: number | null;
   result_json: string | null;
+  task_id: string | null;
+  attempt_id: string | null;
+  generation: number | null;
+  created_at: string;
+  updated_at: string;
 }
+
+/** What an operation was about, recorded when it began (nullable for rows from older journals). */
+export interface OperationBinding {
+  taskId?: string;
+  attemptId?: string;
+  generation?: number;
+}
+
+/** GET /operations/:id — the journal's record of one operation, for controller reconciliation (M8). */
+export interface OperationRecord {
+  operationId: string;
+  kind: string;
+  /** pending: begun, no receipt yet (in flight). completed: a receipt is recorded (possibly an error). */
+  state: "pending" | "completed";
+  httpStatus: number | null;
+  resultRecorded: boolean;
+  /** True when the receipt is the restart marker: the operation was cut off and its effect is unknown. */
+  interruptedByRestart: boolean;
+  taskId: string | null;
+  attemptId: string | null;
+  generation: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+const RESTART_CODE = "interrupted_by_restart";
 
 interface EphemeralRow {
   container: string;
@@ -132,6 +163,13 @@ CREATE TABLE IF NOT EXISTS tombstones (
   task_id TEXT NOT NULL,
   reason TEXT NOT NULL,
   at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS browser_evidence (
+  attempt_id TEXT PRIMARY KEY,
+  egress_allow_json TEXT NOT NULL,
+  evidence_json TEXT,
+  egress_json TEXT,
+  updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS ephemerals (
   container TEXT PRIMARY KEY,
@@ -200,6 +238,11 @@ export class Journal {
     const columns = this.db.query<{ name: string }, []>("PRAGMA table_info(attempts)").all().map((c) => c.name);
     if (!columns.includes("authorized_until")) this.db.exec("ALTER TABLE attempts ADD COLUMN authorized_until TEXT");
     this.db.exec("UPDATE attempts SET authorized_until = deadline WHERE authorized_until IS NULL");
+    // M8: bind each operation to its task/attempt/generation (nullable: older rows stay unbound).
+    const opColumns = this.db.query<{ name: string }, []>("PRAGMA table_info(operations)").all().map((c) => c.name);
+    if (!opColumns.includes("task_id")) this.db.exec("ALTER TABLE operations ADD COLUMN task_id TEXT");
+    if (!opColumns.includes("attempt_id")) this.db.exec("ALTER TABLE operations ADD COLUMN attempt_id TEXT");
+    if (!opColumns.includes("generation")) this.db.exec("ALTER TABLE operations ADD COLUMN generation INTEGER");
   }
 
   close(): void {
@@ -210,7 +253,7 @@ export class Journal {
   // Operations
   // ---------------------------------------------------------------------------------------------
 
-  beginOperation(operation: Operation, kind: string): BeginOutcome {
+  beginOperation(operation: Operation, kind: string, binding: OperationBinding = {}): BeginOutcome {
     const now = new Date().toISOString();
     const tx = this.db.transaction((): BeginOutcome => {
       const existing = this.db
@@ -218,8 +261,8 @@ export class Journal {
         .get(operation.operationId);
       if (!existing) {
         this.db
-          .query("INSERT INTO operations (operation_id, request_digest, kind, status, created_at, updated_at) VALUES (?, ?, ?, 'pending', ?, ?)")
-          .run(operation.operationId, operation.requestDigest, kind, now, now);
+          .query("INSERT INTO operations (operation_id, request_digest, kind, status, task_id, attempt_id, generation, created_at, updated_at) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?)")
+          .run(operation.operationId, operation.requestDigest, kind, binding.taskId ?? null, binding.attemptId ?? null, binding.generation ?? null, now, now);
         return { kind: "new" };
       }
       if (existing.request_digest !== operation.requestDigest || existing.kind !== kind) return { kind: "conflict" };
@@ -253,8 +296,35 @@ export class Journal {
       .query(
         "UPDATE operations SET status = 'completed', http_status = 409, result_json = ?, updated_at = ? WHERE status = 'pending'",
       )
-      .run(JSON.stringify({ error: "Operation was interrupted by a supervisor restart; its effect is unknown. Start a fresh attempt." }), new Date().toISOString());
+      .run(JSON.stringify({ error: "Operation was interrupted by a supervisor restart; its effect is unknown. Start a fresh attempt.", code: RESTART_CODE }), new Date().toISOString());
     return result.changes;
+  }
+
+  getOperation(operationId: string): OperationRecord | null {
+    const row = this.db.query<OperationRow, [string]>("SELECT * FROM operations WHERE operation_id = ?").get(operationId);
+    if (!row) return null;
+    let interruptedByRestart = false;
+    if (row.result_json) {
+      try {
+        const result = JSON.parse(row.result_json) as { code?: unknown; error?: unknown };
+        interruptedByRestart = result?.code === RESTART_CODE || (typeof result?.error === "string" && result.error.startsWith("Operation was interrupted by a supervisor restart"));
+      } catch {
+        // an unparseable receipt is still a recorded one
+      }
+    }
+    return {
+      operationId: row.operation_id,
+      kind: row.kind,
+      state: row.status === "completed" ? "completed" : "pending",
+      httpStatus: row.http_status,
+      resultRecorded: row.status === "completed" && row.result_json !== null,
+      interruptedByRestart,
+      taskId: row.task_id,
+      attemptId: row.attempt_id,
+      generation: row.generation,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -410,6 +480,38 @@ export class Journal {
 
   countRunning(excludeAttemptId?: string): number {
     return this.listAttempts().filter((a) => a.status === "running" && a.attemptId !== excludeAttemptId).length;
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Browser attempts: the controller's egress allowlist, the sandbox evidence taken at create, and
+  // the newest egress decisions (kept after teardown so the evidence outlives the proxy container).
+  // ---------------------------------------------------------------------------------------------
+
+  insertBrowser(attemptId: string, egressAllow: string[]): void {
+    this.db
+      .query("INSERT OR REPLACE INTO browser_evidence (attempt_id, egress_allow_json, evidence_json, egress_json, updated_at) VALUES (?, ?, NULL, NULL, ?)")
+      .run(attemptId, JSON.stringify(egressAllow), new Date().toISOString());
+  }
+
+  updateBrowser(attemptId: string, patch: { evidence?: unknown; egress?: unknown }): void {
+    if (patch.evidence !== undefined) {
+      this.db.query("UPDATE browser_evidence SET evidence_json = ?, updated_at = ? WHERE attempt_id = ?").run(JSON.stringify(patch.evidence), new Date().toISOString(), attemptId);
+    }
+    if (patch.egress !== undefined) {
+      this.db.query("UPDATE browser_evidence SET egress_json = ?, updated_at = ? WHERE attempt_id = ?").run(JSON.stringify(patch.egress), new Date().toISOString(), attemptId);
+    }
+  }
+
+  getBrowser(attemptId: string): { egressAllow: string[]; evidence: unknown; egress: unknown } | null {
+    const row = this.db
+      .query<{ egress_allow_json: string; evidence_json: string | null; egress_json: string | null }, [string]>("SELECT egress_allow_json, evidence_json, egress_json FROM browser_evidence WHERE attempt_id = ?")
+      .get(attemptId);
+    if (!row) return null;
+    return {
+      egressAllow: JSON.parse(row.egress_allow_json) as string[],
+      evidence: row.evidence_json ? JSON.parse(row.evidence_json) : null,
+      egress: row.egress_json ? JSON.parse(row.egress_json) : null,
+    };
   }
 
   // ---------------------------------------------------------------------------------------------

@@ -89,7 +89,7 @@ def test_collector_candidate_mount_is_blocked(runtime_dir: Path, tmp_path: Path)
 def test_kata_virtiofs_workspace_is_blocked(runtime_dir: Path, tmp_path: Path):
     info = RUNC_MOUNTINFO.replace(
         "315 305 0:46 / /workspace rw,relatime master:211 - tmpfs tmpfs rw,size=131072k,mode=755,uid=1000,gid=1000,inode64",
-        "315 305 0:46 /abc /workspace rw,relatime - virtiofs kataShared rw",
+        "315 305 0:46 / /workspace rw,relatime - virtiofs kataShared rw",
     )
     assert _mounts(runtime_dir, tmp_path, info)["hostMounts"] == "BLOCKED"
 
@@ -118,6 +118,26 @@ REACHED_VARIANTS = {
     "both workspace and candidate": RUNC_MOUNTINFO + "408 305 0:72 / /candidate ro - tmpfs tmpfs ro,size=1k\n",
     "rootfs is a host disk": RUNC_MOUNTINFO.replace("/ / ro,relatime - overlay overlay", "/ / ro,relatime - ext4 /dev/vdb1"),
     "bind at another /etc file": RUNC_MOUNTINFO + "409 305 253:17 /etc/shadow /etc/shadow ro - ext4 /dev/vdb1 rw\n",
+    # Review findings (milestone 2): each was reported BLOCKED before the fix.
+    "host tmpfs subtree bound at /workspace": RUNC_MOUNTINFO.replace(
+        "315 305 0:46 / /workspace rw,relatime master:211 - tmpfs tmpfs rw,size=131072k",
+        "315 305 0:46 /host/secrets /workspace rw,relatime master:211 - tmpfs tmpfs rw,size=131072k",
+    ),
+    "virtiofs host dir bound at /workspace": RUNC_MOUNTINFO.replace(
+        "315 305 0:46 / /workspace rw,relatime master:211 - tmpfs tmpfs rw,size=131072k,mode=755,uid=1000,gid=1000,inode64",
+        "315 305 0:46 /home/ubuntu /workspace rw,relatime - virtiofs kataShared rw",
+    ),
+    "host tmpfs subtree bound at /tmp": RUNC_MOUNTINFO.replace("314 305 0:58 / /tmp", "314 305 0:58 /run/user /tmp"),
+    "8 GiB /dev/shm": RUNC_MOUNTINFO.replace("/dev/shm rw,nosuid,nodev,noexec,relatime - tmpfs shm rw,size=65536k", "/dev/shm rw,nosuid,nodev,noexec,relatime - tmpfs shm rw,size=8g"),
+    "unbounded /dev/shm": RUNC_MOUNTINFO.replace("- tmpfs shm rw,size=65536k,inode64", "- tmpfs shm rw,inode64"),
+    "extra tmpfs under /dev": RUNC_MOUNTINFO + "410 308 0:73 / /dev/cache rw,nosuid - tmpfs tmpfs rw,size=1k\n",
+    "oversized /dev tmpfs": RUNC_MOUNTINFO.replace("/dev rw,nosuid - tmpfs tmpfs rw,size=65536k", "/dev rw,nosuid - tmpfs tmpfs rw,size=4g"),
+    "host /etc bound at /etc/hosts": RUNC_MOUNTINFO.replace(
+        "318 305 253:17 /docker/containers/4a9a/hosts /etc/hosts ro,relatime",
+        "318 305 253:17 /etc /etc/hosts ro,relatime",
+    ),
+    "writable /etc/hosts bind": RUNC_MOUNTINFO.replace("/docker/containers/4a9a/hosts /etc/hosts ro,relatime", "/docker/containers/4a9a/hosts /etc/hosts rw,relatime"),
+    "read-write cgroup2": RUNC_MOUNTINFO.replace("/ /sys/fs/cgroup ro,nosuid,nodev,noexec,relatime - cgroup2", "/ /sys/fs/cgroup rw,nosuid,nodev,noexec,relatime - cgroup2"),
 }
 
 
@@ -131,6 +151,11 @@ def test_unexpected_mounts_are_reached(runtime_dir: Path, tmp_path: Path, name: 
 def test_workspace_bound_follows_the_supervisor_argument(runtime_dir: Path, tmp_path: Path):
     assert _mounts(runtime_dir, tmp_path, RUNC_MOUNTINFO, "--workspace-bytes", str(134217728))["hostMounts"] == "BLOCKED"
     assert _mounts(runtime_dir, tmp_path, RUNC_MOUNTINFO, "--workspace-bytes", str(64 * 1024 * 1024))["hostMounts"] == "REACHED"
+
+
+def test_shm_bound_follows_the_supervisor_argument(runtime_dir: Path, tmp_path: Path):
+    assert _mounts(runtime_dir, tmp_path, RUNC_MOUNTINFO, "--shm-bytes", str(64 * 1024 * 1024))["hostMounts"] == "BLOCKED"
+    assert _mounts(runtime_dir, tmp_path, RUNC_MOUNTINFO, "--shm-bytes", str(32 * 1024 * 1024))["hostMounts"] == "REACHED"
 
 
 def test_no_subtree_exemption_remains(runtime_dir: Path):

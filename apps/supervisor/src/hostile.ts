@@ -165,7 +165,7 @@ export async function hostileRun(core: Supervisor, body: HostileRunRequest, sent
       await core.removeResources(n.container, n.volume);
       core.journal.deleteEphemeral(n.container);
     }
-  });
+  }, { taskId: n.taskId });
 }
 
 function describeDeath(status: string, exitCode: number | null, oomKilled: boolean, controlLost: boolean): string {

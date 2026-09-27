@@ -24,6 +24,7 @@
  * name an existing container, volume, or host resource through this API. Names are derived rather
  * than accepted: a caller says which attempt; it never says which container.
  */
+import { createHash } from "node:crypto";
 import { SandboxRole, plainId } from "@airlock/contracts";
 
 const MAX_ID = 64;
@@ -39,6 +40,14 @@ export const ROLE_LABEL = "airlock.role";
 export const NAMESPACE_LABEL = "airlock.namespace";
 /** Marks a one-shot container (invoke/hostile/collector) with the operation that made it. */
 export const OPERATION_LABEL = "airlock.operation";
+/** Marks a per-attempt browser-plane network: `internal` (browser ↔ proxy) or `egress` (proxy → out). */
+export const NETWORK_LABEL = "airlock.network";
+/**
+ * Linux bridge-name prefixes of the per-attempt networks. The host firewall
+ * (deploy/host/airlock-egress-guard.sh) matches `ali+` / `ale+` interfaces, so these are fixed.
+ */
+export const INTERNAL_BRIDGE_PREFIX = "ali";
+export const EGRESS_BRIDGE_PREFIX = "ale";
 
 export type NameResult<T> = { ok: true; value: T } | { ok: false; reason: string };
 
@@ -74,7 +83,18 @@ export type AttemptNames = {
   volume: string;
   /** The fresh container that reads the stopped volume read-only during freeze. */
   collector: string;
+  /** Browser role only: the per-attempt egress proxy container and the two networks. */
+  egress: string;
+  internalNetwork: string;
+  egressNetwork: string;
+  /** Linux bridge interface names (15 chars max): prefix + 12 hex of the network name. */
+  internalBridge: string;
+  egressBridge: string;
 };
+
+function bridgeName(prefix: string, network: string): string {
+  return `${prefix}${createHash("sha256").update(network).digest("hex").slice(0, 12)}`;
+}
 
 export function attemptNames(
   namespace: string,
@@ -99,6 +119,11 @@ export function attemptNames(
       container: `${namespace}-${r}-${task.value}-${attempt.value}`,
       volume: `${namespace}-ws-${task.value}-${attempt.value}`,
       collector: `${namespace}-collector-${task.value}-${attempt.value}`,
+      egress: `${namespace}-egress-${task.value}-${attempt.value}`,
+      internalNetwork: `${namespace}-bnet-${task.value}-${attempt.value}`,
+      egressNetwork: `${namespace}-enet-${task.value}-${attempt.value}`,
+      internalBridge: bridgeName(INTERNAL_BRIDGE_PREFIX, `${namespace}-bnet-${task.value}-${attempt.value}`),
+      egressBridge: bridgeName(EGRESS_BRIDGE_PREFIX, `${namespace}-enet-${task.value}-${attempt.value}`),
     },
   };
 }
@@ -140,7 +165,7 @@ export function oneShotNames(
 }
 
 /** Labels for an attempt-scoped resource. */
-export function attemptLabels(names: AttemptNames, role: SandboxRole | "collector" = names.role): Record<string, string> {
+export function attemptLabels(names: AttemptNames, role: SandboxRole | "collector" | "egress" = names.role): Record<string, string> {
   return {
     [OWNER_LABEL]: "true",
     [NAMESPACE_LABEL]: names.namespace,
@@ -174,4 +199,14 @@ export function ownedFilter(namespace: string, narrow?: { taskId?: string; attem
   if (narrow?.taskId) labels.push(`${TASK_LABEL}=${narrow.taskId}`);
   if (narrow?.attemptId) labels.push(`${ATTEMPT_LABEL}=${narrow.attemptId}`);
   return labels;
+}
+
+/** Every container an attempt owns: the browser role also owns its egress proxy. */
+export function attemptContainers(names: Pick<AttemptNames, "role" | "container" | "egress">): string[] {
+  return names.role === "browser" ? [names.container, names.egress] : [names.container];
+}
+
+/** Every network an attempt owns (only the browser role has any). */
+export function attemptNetworks(names: Pick<AttemptNames, "role" | "internalNetwork" | "egressNetwork">): string[] {
+  return names.role === "browser" ? [names.internalNetwork, names.egressNetwork] : [];
 }

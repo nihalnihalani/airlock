@@ -214,5 +214,5 @@ export async function invoke(core: Supervisor, body: InvokeRequest): Promise<Ope
       await core.removeResources(names.value.container, names.value.volume);
       core.journal.deleteEphemeral(names.value.container);
     }
-  });
+  }, { taskId: body.taskId });
 }
