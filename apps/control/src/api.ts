@@ -355,10 +355,6 @@ export function createApp(deps: ApiDeps) {
     const session = requireRole(c, "operator", "judge");
     const { owner, task } = await loadTask(taskId(c));
     const body = await readJson(c, PreviewRequest);
-    const lastPreview = previewLast.get(session.id) ?? 0;
-    if (now() - lastPreview < previewMinIntervalMs) throw new AppError(`previews are limited to one per ${Math.ceil(previewMinIntervalMs / 1000)} s per session`, 429);
-    previewLast.set(session.id, now());
-    if (previewLast.size > 1000) previewLast.clear();
     if (!task.candidateDigest || !task.verificationRecordId) throw new AppError("task has no verified candidate", 409);
     if (body.candidateDigest !== task.candidateDigest) throw new AppError("candidateDigest does not match the task's sealed candidate", 409);
     const verification = await deps.store.get<VerificationRecord>(owner, STORE_KIND_VERIFICATIONS, task.verificationRecordId);
@@ -372,6 +368,11 @@ export function createApp(deps: ApiDeps) {
     if (!profile) throw new AppError("profile no longer loaded", 409);
     const request: AdapterRequest = { schemaVersion: 1, cases: [{ id: "preview", input: body.input }] };
     const deadlineMs = Math.min(profile.manifest.caps.attemptTimeoutMs, profile.manifest.caps.commandTimeoutMs * 3);
+    // Only a preview that actually dispatches a sandbox run counts against the session's interval.
+    const lastPreview = previewLast.get(session.id) ?? 0;
+    if (now() - lastPreview < previewMinIntervalMs) throw new AppError(`previews are limited to one per ${Math.ceil(previewMinIntervalMs / 1000)} s per session`, 429);
+    previewLast.set(session.id, now());
+    if (previewLast.size > 1000) previewLast.clear();
     const result = await deps.supervisor.invoke(
       { taskId: task.id, profileId: task.profileId, role: "preview", bundle, request, absoluteDeadline: new Date(now() + deadlineMs).toISOString() },
       { timeoutMs: deadlineMs + 30_000 },
