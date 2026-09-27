@@ -283,3 +283,74 @@ All suites ran from the fresh export with `env -i` (`unit/`):
 | typecheck | clean |
 
 `browser-node.log` records the correct invocation, `node --test runtime/browser/test/*.test.mjs`. My first attempt passed the directory instead, which is a harness error: it matched no tests.
+
+## Live model (local runc, dev-unsafe) at `ee8d1be`: 2026-09-27, verifier_tester
+
+**Revision:** `ee8d1be7583afefb35f483d3a4b13ab254b973b5` (HEAD).
+
+**Category: live model + real local runc.** Every model call went to Vultr Serverless Inference (`api.vultrinference.com`, model `glm-5.3-normalize`, i.e. `AIRLOCK_MODEL=glm-5.3` plus the driver's `-normalize` suffix). The sandboxes ran on **plain runc on Colima (dev-unsafe)**. This is **not** Vultr compute, not gVisor or Kata, and not a deployment. The Vultr account key is IP-restricted, so nothing was deployed. The Vultr-compute rows (A11, A16, A24, D1, D9, public URL) stay **BLOCKED**.
+
+**How it was run:**
+- The stack ran from a fresh `git archive` of HEAD with `bun install`. The optional `cpu-features` native build failed; it is an unused optional dependency.
+- The `.env` in the export root held only the four inference lines from the repo `.env` (`VULTR_INFERENCE_API_KEY`, `VULTR_INFERENCE_BASE_URL`, `AIRLOCK_MODEL`, `AIRLOCK_MODEL_DRIVER`). It did not include the account key. It was deleted right after `dev-up.sh` started.
+- Stack command: `env -i … AIRLOCK_WEB_DIST=none AIRLOCK_MODEL_DRIVER=vultr AIRLOCK_MODEL_VISION=1 AIRLOCK_JUDGE_PASSWORD=live-judge-1 AIRLOCK_OPERATOR_PASSWORD=live-oper-1 scripts/dev-up.sh --detach`. The control log shows `driver: vultr, model: glm-5.3`.
+- The general tasks were driven through the public API by `driver-live-general.ts.txt`, which I wrote. The gate records were collected by `driver-gate-evidence.ts.txt`.
+- Afterwards, `scripts/dev-down.sh` printed "(no sandboxes)". No labelled containers, networks or volumes remained, and nothing listened on 3000, 3100 or 4300.
+- A script read the key from `.env` and scanned all evidence for it. It found 0 occurrences of the key, and none of the supervisor token, the forms secret or any session cookie.
+
+**Evidence:** `docs/evidence/live/local-ee8d1be/`
+
+### Rows
+
+| # | Requirement | Time (UTC) | Result | Evidence |
+|---|---|---|---|---|
+| L1 | **Live repair (hero, tabulate #365).** Command: `bun scripts/live-gate.ts --n 3 --allow-dev-unsafe`, run from the export. **3/3 `CANDIDATE_PASSED_CHECKS`** by the external comparator: the baseline reproduced `IndexError`, and verification passed 6/6 cases on each candidate. Details below. | 16:00–16:03 | PASS (**local live pass**; not a gate receipt) | `live-gate-run.log`, `live-gate-attempts.json` |
+| L1a | **No receipt on dev-unsafe.** The script printed "dev-unsafe rehearsal: no receipt written" and exited 1. The export's `docs/evidence/live-gate/` holds only `README.md`, and no JSON was created there. | 16:03 | PASS | `live-gate-run.log` |
+| L2 | **Live general `analysis`, fresh random CSV (two runs).** Goal: "find the worst-performing region by total revenue…, summary.json `answer` + chart.png". Both runs gave the correct answer for different data (details below). | 16:03–16:05 | PASS | `analysis-run1.json`, `analysis-run2.json` |
+| L3 | **Live `web-research` with vision.** Details below. | 16:06 | PASS | `web-research-run1.json` |
+| L4 | **Live `web-analysis`, combined workflow (two runs).** The source was `people.sc.fsu.edu/~jburkardt/data/csv/csv.html`, which the egress proxy could reach. The work itself was correct end to end, but both runs ended **`RESULT_PARTIAL`** because of finding LM1 (details below). | 16:07–16:10 | **PARTIAL** (work correct; completion check false negative, LM1) | `web-analysis-run1.json`, `web-analysis-run2.json` |
+| L5 | **A genuine execution error leads to bounded correction.** In three runs a failed `code_run` was followed by a corrected, successful run (details below). The dedicated malformed-row run needed no correction (details below). | see rows | PASS (live) | `analysis-run1.json`, `web-analysis-run1.json` |
+
+**L1: live repair attempts.** All three used model `glm-5.3-normalize`, and every model event's host was `https://api.vultrinference.com/v1` (the script's provenance check enforces this). Cleanup was `confirmed` for all three.
+
+| Attempt | Task | Model calls | Duration | Tokens (in/out) | Candidate digest |
+|---|---|---|---|---|---|
+| 1 | `task-b2241a11b4e06d6f` | 11 | 39 s | 57,959 / 4,351 | `f7be5b0a6783cab50d4ac4ab09adafb1f1a76e0b46ccd47390c9606f00d3a20e` |
+| 2 | `task-fee44356a430057a` | 14 | 42 s | 93,678 / 3,883 | `0fbbf34e344da73447de7e6f251783e9e7894c138fbd5fe1a62c2860ae2b0f03` |
+| 3 | `task-6774bf96f7006a8c` | 10 | 54 s | 60,506 / 7,092 | `6d4ba043dd7af94cf1b7e41e44e7ab3b05fd22a222e1bc3c7c60f2d922f25da8` |
+
+**L2: analysis runs.** Both runs ended `RESULT_VERIFIED` with cleanup `confirmed`. Output bytes fetched through both artifact routes, and the `x-airlock-sha256` header, equal the recorded sha256. The two runs' output digests differ.
+
+| Run | Task | Expected (computed locally) | Model's `answer` | Model calls | Tokens (in/out) | Output digests |
+|---|---|---|---|---|---|---|
+| 1 | `task-a24d64e4f3e7a9b3` | North, 11,171.96 (margin 5,171.09) | "North … 11,171.96", and every region total matches | 15 | 55,357 / 3,599 | `summary.json` `366d3c27…`, `chart.png` `41b32eb6…` (1200×750) |
+| 2 | `task-e61fcb806ba5bc4c` | South, 8,877.83 | "South … 8,877.83" | 10 | 26,509 / 2,466 | `summary.json` `2bdf559c…`, `chart.png` `64fc5cd2…` |
+
+**L3: web-research run.** Task `task-44bde658c315ad41`, allowlist `example.com`, `iana.org`, `www.iana.org`.
+- The model navigated to example.com (200) and observed it. It clicked "Learn more", which landed on `https://www.iana.org/help/example-domains`. It observed that page and took a screenshot (1280×800).
+- Model turn 6 has `imageAttached: true`, and its `imageSha256` equals the screenshot artifact's sha256 (`8e396907…`). So the screenshot was really sent to the model.
+- All 4 completion checks passed, and the task ended `RESULT_VERIFIED`, cleanup `confirmed`.
+- The answer "RFC 2606 and RFC 6761" is **correct**. The model took it from the text observation, one turn before the image was attached.
+- 6 model calls, 16,980 / 815 tokens.
+
+**L4: web-analysis runs.** Tasks `task-85dbf712867ef64a` and `task-be704c3bce6f3b5d`.
+- **Download:** the model clicked the `airtravel.csv` link, then used `browser_download_list` and `browser_download_save`. The stored download artifact has sha256 `f6a5fc62…`. That equals my direct fetch of the file, the "Input inputs/airtravel.csv placed" event's sha256, and the downloaded bytes.
+- **Answer:** the totals 1958 = 4,572, 1959 = 5,140 and 1960 = 5,714, and growth of 24.98%, match my offline computation in both runs. `chart.png` is valid, and all outputs match their sha256.
+- **Citation:** both the page and the CSV URL were cited. The page has a screenshot.
+- **Why `RESULT_PARTIAL`:** in both runs `sources-visited` failed with "never reached by this task's browser: …/airtravel.csv", even though that URL was fetched by this task's browser as a download.
+- **Cost:** run 1 took 21 calls and 241,993 / 11,720 tokens. Run 2 took 16 calls and 146,258 / 8,266 tokens. Each run had one vision turn.
+
+**L5: execution errors followed by correction.**
+- `analysis` run 1: the model named its script `code/inspect.py`, which shadowed the stdlib `inspect`, and matplotlib failed (exit 1, twice). It then renamed the script and succeeded (exit codes `0,1,1,0,0,0`).
+- `web-analysis` run 1: the header parse left the year columns empty (exit 1). The model inspected the raw file and rewrote the parser (exit 0).
+- `web-analysis` run 1, later: `verify.py` exited 1, was fixed, then exited 0.
+- A dedicated malformed-row run (`task-51f3bcf40a9a0938`: a 7-field row at line 41, placed in a non-worst region) needed **no** correction. The model inspected the file first, noted "line 41: 7 fields; used first 5", and answered West at 8,768.61, which is correct, ending `RESULT_VERIFIED`.
+
+### Findings
+
+- **LM1: a browser download does not count as "visited" for `sources-visited`.** The handler builds the visited set only from completed `tool` events that carry `visitedUrl` (`apps/control/src/general-handler.ts:1649-1656`), and the check is `apps/control/src/completion-checks.ts:178-186`. A file fetched through the egress proxy by `browser_download_save` is recorded as an `artifact` event whose `source.url` is the download URL (`general-handler.ts:820`), but it never enters that set.
+  - Effect: the natural combined workflow (download a CSV and cite it) ends `RESULT_PARTIAL` even when every output is correct. This reproduced in 2/2 live runs.
+  - Navigating to the CSV URL does not help: `page.goto` fails with "Download is starting" (`navigation_failed`, event #31 in run 1).
+  - It fails closed, so it is not a safety problem, but it undercuts workflow D.
+  - Reproduce: `bun driver-live-general.ts web-analysis` against a live-driver stack.
+- **Observation (not a defect):** an upload named `.csv` whose bytes do not parse as strict CSV (one ragged row) is sniffed as `text/plain` and renamed `sales-run3.txt` (`apps/control/src/artifact-service.ts:82`, `:92`). The model coped, but the owner's filename changed silently.

@@ -1655,6 +1655,15 @@ export function createGeneralHandler(deps: GeneralDeps): TaskHandler {
         }
       }
       const taskArtifacts = await deps.artifacts.listForTask(owner, task);
+      // A file the agent's browser downloaded from an allowed page is a visited source too: its bytes
+      // were stored only after the supervisor re-verified size and digest, and its URL is the one the
+      // browser fetched through the egress proxy. A human holder's downloads do not count.
+      for (const a of taskArtifacts) {
+        if (a.kind === "download" && a.source?.tool === "browser_download_save" && typeof a.source.url === "string") {
+          const n = normalizeUrl(a.source.url);
+          if (n) visited.add(n);
+        }
+      }
       // Evidence is the agent's own screenshots; live-view frames and a human holder's screenshots are kept but do not count.
       const screenshots = taskArtifacts.filter((a) => a.kind === "screenshot" && a.source?.tool !== "live_view" && a.source?.tool !== "human_screenshot");
       const checks = runCompletionChecks({ profile, claimed, collected, ...(collectionProblem ? { collectionProblem } : {}), screenshots: screenshots.map((a) => ({ url: a.source?.url ?? null })), sources: submit.sources, visited, egressAllow });

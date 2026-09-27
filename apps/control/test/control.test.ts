@@ -904,6 +904,25 @@ describe("browser downloads (M4 follow-up)", () => {
     }
   });
 
+  test("citing the downloaded CSV's URL counts as a visited source (live finding: the combined workflow ended RESULT_PARTIAL)", async () => {
+    const driver = recordingDriver([
+      { toolCalls: [{ name: "browser_navigate", args: { url: HERO_URL } }] },
+      { toolCalls: [{ name: "browser_screenshot", args: {} }, { name: "browser_download_list", args: {} }] },
+      { toolCalls: [{ name: "browser_download_save", args: { downloadId: "dl-1", name: "regions.csv" } }] },
+      { toolCalls: [{ name: "code_write", args: { path: "code/analysis.py", content: "print('x')\n" } }] },
+      { toolCalls: [{ name: "code_run", args: { language: "python", file: "code/analysis.py" } }] },
+      { toolCalls: [{ name: "submit_result", args: { summary: "South", outputs: ["outputs/summary.json", "outputs/chart.png"], sources: [HERO_URL, csvUrl] } }] },
+    ]);
+    const ctx = await makeCtx(driver, { profile: "web-analysis", egressAllow: [HERO_HOST], hook });
+    try {
+      const done = await run(ctx);
+      expect(done.outcome).toBe("RESULT_VERIFIED");
+      expect(done.result?.checks.find((c) => c.name === "sources-visited")?.passed).toBe(true);
+    } finally {
+      await ctx.close();
+    }
+  });
+
   test("a download whose bytes do not match their digest is not stored", async () => {
     const driver = recordingDriver([
       { toolCalls: [{ name: "browser_navigate", args: { url: HERO_URL } }] },

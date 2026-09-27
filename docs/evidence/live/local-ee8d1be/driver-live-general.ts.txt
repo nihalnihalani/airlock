@@ -1,0 +1,240 @@
+#!/usr/bin/env bun
+/**
+ * verifier_tester: live-model general-task probes against the local dev stack (runc, dev-unsafe,
+ * AIRLOCK_MODEL_DRIVER=vultr). Drives only the public API. Writes one JSON per scenario to OUT.
+ *   bun live-general.ts <analysis|analysis-malformed|web-research|web-analysis> [label]
+ */
+import { createHash, randomInt } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+const CONTROL = "http://127.0.0.1:3000";
+const OUT = process.env.OUT ?? join(import.meta.dir, "live-out");
+mkdirSync(OUT, { recursive: true });
+const JUDGE_PW = "<redacted>";
+const sha = (b: Uint8Array | string) => createHash("sha256").update(b).digest("hex");
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function login(): Promise<string> {
+  const r = await fetch(`${CONTROL}/api/session`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: JUDGE_PW }) });
+  if (r.status !== 200) throw new Error(`login ${r.status}`);
+  return (r.headers.get("set-cookie") ?? "").split(";")[0]!;
+}
+async function call(cookie: string, method: string, path: string, body?: unknown, extra: { raw?: Uint8Array; headers?: Record<string, string>; binary?: boolean } = {}) {
+  const r = await fetch(`${CONTROL}${path}`, { method, headers: { cookie, ...(body !== undefined ? { "content-type": "application/json" } : {}), ...(extra.headers ?? {}) }, body: (extra.raw as any) ?? (body !== undefined ? JSON.stringify(body) : null) });
+  if (extra.binary) return { status: r.status, headers: r.headers, bytes: new Uint8Array(await r.arrayBuffer()), json: null as any, text: "" };
+  const text = await r.text();
+  let json: any = null;
+  try { json = JSON.parse(text); } catch {}
+  return { status: r.status, headers: r.headers, json, text, bytes: undefined as Uint8Array | undefined };
+}
+async function events(cookie: string, id: string): Promise<any[]> {
+  const r = await fetch(`${CONTROL}/api/tasks/${id}/events?lastEventId=0`, { headers: { cookie, accept: "text/event-stream" } });
+  const out: any[] = [];
+  for (const block of (await r.text()).split("\n\n")) {
+    let name = "message", data = "";
+    for (const line of block.split("\n")) {
+      if (line.startsWith("event:")) name = line.slice(6).trim();
+      else if (line.startsWith("data:")) data += line.slice(5).trim();
+    }
+    if (!data || name === "task" || name === "end") continue;
+    try { out.push(JSON.parse(data)); } catch {}
+  }
+  return out;
+}
+async function waitTerminal(cookie: string, id: string, timeoutMs = 30 * 60_000) {
+  const t0 = Date.now();
+  for (;;) {
+    const v = (await call(cookie, "GET", `/api/tasks/${id}`)).json;
+    if (["done", "failed", "cancelled"].includes(v.task.status)) return v;
+    if (Date.now() - t0 > timeoutMs) throw new Error(`timeout ${id}`);
+    await sleep(3000);
+  }
+}
+function slim(evs: any[]) {
+  return evs.map((e) => ({
+    seq: e.seq, at: e.at, kind: e.kind, title: e.title,
+    ...(e.detail ? { detail: String(e.detail).slice(0, e.kind === "exec" ? 1500 : 600) } : {}),
+    ...(e.data?.tool ? { tool: e.data.tool } : {}),
+    ...(e.data?.opState ? { opState: e.data.opState } : {}),
+    ...(e.data?.exitCode !== undefined ? { exitCode: e.data.exitCode } : {}),
+    ...(e.kind === "model" ? { model: e.data?.model, host: e.data?.host, durationMs: e.data?.durationMs, toolCalls: e.data?.toolCalls, usage: e.data?.usage, tokensCharged: e.data?.tokensCharged, finishReason: e.data?.finishReason, imageAttached: e.data?.imageAttached, ...(e.data?.imageSha256 ? { imageSha256: e.data.imageSha256 } : {}) } : {}),
+    ...(e.data?.sha256 && e.kind === "artifact" ? { sha256: e.data.sha256 } : {}),
+  }));
+}
+function modelStats(evs: any[]) {
+  const m = evs.filter((e) => e.kind === "model");
+  const hosts = [...new Set(m.map((e) => { try { return new URL(String(e.data?.host)).hostname; } catch { return String(e.data?.host); } }))];
+  const models = [...new Set(m.map((e) => e.data?.model))];
+  const sum = (k: string) => m.reduce((a, e) => a + (Number(e.data?.usage?.[k]) || 0), 0);
+  return { modelCalls: m.length, models, hosts, inputTokens: sum("input"), outputTokens: sum("output"), reasoningTokens: sum("reasoning"), imageAttachedTurns: m.filter((e) => e.data?.imageAttached === true).length, modelErrors: evs.filter((e) => e.kind === "error" && e.title === "Model call failed").length };
+}
+function execTrail(evs: any[]) {
+  return evs.filter((e) => e.kind === "exec" && /^code_run /.test(e.title)).map((e) => ({ seq: e.seq, title: e.title, exitCode: e.data?.exitCode, stderrTail: String(e.detail ?? "").split("stderr:\n")[1]?.slice(-400) ?? "" }));
+}
+async function outputs(cookie: string, id: string) {
+  const arts = (await call(cookie, "GET", `/api/tasks/${id}/artifacts`)).json as any[];
+  const out: Record<string, any> = {};
+  for (const a of arts) {
+    const d = await call(cookie, "GET", `/api/artifacts/${a.id}?download=1`, undefined, { binary: true });
+    const d2 = await call(cookie, "GET", `/api/tasks/${id}/artifacts/${a.id}?download=1`, undefined, { binary: true });
+    const h = sha(d.bytes!);
+    out[`${a.kind}:${a.filename}:${a.id}`] = { id: a.id, kind: a.kind, filename: a.filename, mediaType: a.mediaType, byteLength: a.byteLength, recordedSha256: a.sha256, downloadedSha256: h, headerSha256: d.headers.get("x-airlock-sha256"), taskRouteSha256: sha(d2.bytes!), match: d.status === 200 && h === a.sha256 && sha(d2.bytes!) === a.sha256, source: a.source, _bytes: d.bytes };
+  }
+  return out;
+}
+function pngInfo(b?: Uint8Array) {
+  if (!b || b.length < 24) return { valid: false };
+  const sig = [137, 80, 78, 71, 13, 10, 26, 10].every((v, i) => b[i] === v);
+  const dv = new DataView(b.buffer, b.byteOffset);
+  return { valid: sig, width: sig ? dv.getUint32(16) : undefined, height: sig ? dv.getUint32(20) : undefined };
+}
+
+// --- data ---------------------------------------------------------------------------------------
+const REGIONS = ["North", "South", "East", "West", "Central"];
+const PRODUCTS = ["Widget", "Gadget", "Gizmo"];
+function freshSales(malformed: boolean) {
+  // Pick a worst region with a clear margin: its per-row revenue scale is lower.
+  const worst = REGIONS[randomInt(REGIONS.length)]!;
+  const lines = ["date,region,product,units,revenue"];
+  const totals: Record<string, number> = Object.fromEntries(REGIONS.map((r) => [r, 0]));
+  const n = 60 + randomInt(40);
+  for (let i = 0; i < n; i++) {
+    const region = REGIONS[i % REGIONS.length]!;
+    const units = 1 + randomInt(50);
+    const scale = region === worst ? 0.55 + Math.random() * 0.2 : 0.9 + Math.random() * 0.6;
+    const revenue = Math.round(units * 37.5 * scale * 100) / 100;
+    const day = String(1 + (i % 28)).padStart(2, "0");
+    lines.push(`2026-0${1 + (i % 9)}-${day},${region},${PRODUCTS[randomInt(3)]},${units},${revenue.toFixed(2)}`);
+    totals[region] = Math.round((totals[region]! + revenue) * 100) / 100;
+  }
+  let badLine: string | null = null;
+  if (malformed) {
+    // A junk row with too many fields (an export glitch), placed well after the header.
+    // Its region is never the worst one, so skipping it or keeping its first five fields cannot change the answer.
+    const other = REGIONS.find((r) => r !== worst)!;
+    badLine = `2026-03-15,${other},Widget,12,449.10,duplicate?,see ticket 4411`;
+    lines.splice(40, 0, badLine);
+  }
+  const sorted = Object.entries(totals).sort((a, b) => a[1] - b[1]);
+  return { csv: lines.join("\n") + "\n", totals, worst: sorted[0]![0], margin: Math.round((sorted[1]![1] - sorted[0]![1]) * 100) / 100, rows: n, badLine };
+}
+
+async function scenarioAnalysis(label: string, malformed: boolean) {
+  const cookie = await login();
+  const data = freshSales(malformed);
+  const bytes = new TextEncoder().encode(data.csv);
+  const up = await call(cookie, "POST", "/api/uploads", undefined, { raw: bytes, headers: { "x-filename": `sales-${label}.csv`, "content-type": "text/csv" } });
+  if (up.status !== 201) throw new Error(`upload ${up.status} ${up.text}`);
+  const goal = "The uploaded CSV has sales rows (date, region, product, units, revenue). Find the worst-performing region by total revenue. Write outputs/summary.json with an `answer` field naming that region and its total revenue (also include every region's total), and write outputs/chart.png, a bar chart of total revenue by region.";
+  const t0 = Date.now();
+  const c = await call(cookie, "POST", "/api/tasks", { kind: "general", profileId: "analysis", issueText: goal, inputArtifactIds: [up.json.id] });
+  if (c.status !== 201) throw new Error(`create ${c.status} ${c.text}`);
+  const id = c.json.id;
+  console.log(`${label}: task ${id} (expected worst=${data.worst}, total ${data.totals[data.worst]}, margin ${data.margin})`);
+  const v = await waitTerminal(cookie, id);
+  const evs = await events(cookie, id);
+  const outs = await outputs(cookie, id);
+  const sj = Object.values(outs).find((o: any) => o.kind === "output" && /summary\.json$/.test(o.filename)) as any;
+  const png = Object.values(outs).find((o: any) => o.kind === "output" && /chart\.png$/.test(o.filename)) as any;
+  let summary: any = null;
+  try { summary = JSON.parse(new TextDecoder().decode(sj?._bytes)); } catch {}
+  const answer = String(summary?.answer ?? "");
+  const answerRegions = REGIONS.filter((r) => new RegExp(`\\b${r}\\b`, "i").test(answer));
+  const totalStr = data.totals[data.worst]!.toFixed(2);
+  const answerHasTotal = answer.replace(/,/g, "").includes(totalStr) || answer.replace(/,/g, "").includes(String(Math.round(data.totals[data.worst]!)));
+  const trail = execTrail(evs);
+  const firstFail = trail.findIndex((x) => x.exitCode !== 0);
+  const correction = firstFail >= 0 && trail.slice(firstFail + 1).some((x) => x.exitCode === 0);
+  const res = {
+    scenario: malformed ? "analysis-malformed" : "analysis", label, taskId: id, durationMs: Date.now() - t0,
+    status: v.task.status, outcome: v.task.outcome, cleanup: v.task.cleanup, checks: v.task.result?.checks, resultSummary: v.task.result?.summary, error: v.task.error,
+    input: { uploadId: up.json.id, sha256: up.json.sha256, sentSha256: sha(bytes), rows: data.rows, malformedLine: data.badLine },
+    expected: { worst: data.worst, worstTotal: data.totals[data.worst], margin: data.margin, totals: data.totals },
+    summary, answer, answerRegions, answerNamesWorst: answerRegions.includes(data.worst), answerFirstRegion: answerRegions[0], answerHasTotal,
+    chart: png ? { sha256: png.recordedSha256, ...pngInfo(png._bytes) } : null,
+    artifacts: Object.values(outs).map(({ _bytes, ...o }: any) => o),
+    model: modelStats(evs), codeRuns: trail, failedThenCorrected: correction,
+    events: slim(evs),
+  };
+  writeFileSync(join(OUT, `${res.scenario}-${label}.json`), JSON.stringify(res, null, 2));
+  console.log(JSON.stringify({ id, outcome: res.outcome, cleanup: res.cleanup?.status, expected: data.worst, answer: answer.slice(0, 300), answerNamesWorst: res.answerNamesWorst, answerHasTotal, allMatch: res.artifacts.every((a: any) => a.match), chart: res.chart, model: res.model, codeRuns: trail.map((x) => x.exitCode), failedThenCorrected: correction }, null, 1));
+}
+
+async function scenarioWebResearch(label: string) {
+  const cookie = await login();
+  const goal = "Start at https://example.com and follow its 'Learn more' link to IANA. On the IANA page, find which two RFCs describe the reserved example domains. Answer with both RFC numbers, take a screenshot of the IANA page, and cite that page as your source.";
+  const t0 = Date.now();
+  const c = await call(cookie, "POST", "/api/tasks", { kind: "general", profileId: "web-research", issueText: goal, egressAllow: ["example.com", "iana.org", "www.iana.org"] });
+  if (c.status !== 201) throw new Error(`create ${c.status} ${c.text}`);
+  const id = c.json.id;
+  console.log(`${label}: task ${id}`);
+  const v = await waitTerminal(cookie, id);
+  const evs = await events(cookie, id);
+  const outs = await outputs(cookie, id);
+  const shots = Object.values(outs).filter((o: any) => o.kind === "screenshot").map(({ _bytes, ...o }: any) => ({ ...o, png: pngInfo(_bytes) }));
+  const summaryText = String(v.task.result?.summary ?? "");
+  const nav = evs.filter((e) => e.kind === "tool" && e.data?.tool === "browser_navigate" && e.data?.opState === "completed").map((e) => ({ seq: e.seq, detail: String(e.detail).slice(0, 200), status: e.data?.status }));
+  const imgTurns = evs.filter((e) => e.kind === "model" && e.data?.imageAttached === true).map((e) => ({ seq: e.seq, imageArtifactId: e.data?.imageArtifactId, imageSha256: e.data?.imageSha256 }));
+  const res = {
+    scenario: "web-research", label, taskId: id, durationMs: Date.now() - t0, status: v.task.status, outcome: v.task.outcome, cleanup: v.task.cleanup,
+    checks: v.task.result?.checks, sources: v.task.result?.sources, resultSummary: summaryText, error: v.task.error,
+    answerCorrect: /2606/.test(summaryText) && /6761/.test(summaryText),
+    screenshots: shots, imageTurns: imgTurns, imageShaMatchesScreenshot: imgTurns.every((t) => shots.some((s: any) => s.recordedSha256 === t.imageSha256)),
+    navigations: nav, model: modelStats(evs), events: slim(evs),
+  };
+  writeFileSync(join(OUT, `web-research-${label}.json`), JSON.stringify(res, null, 2));
+  console.log(JSON.stringify({ id, outcome: res.outcome, cleanup: res.cleanup?.status, checks: res.checks, sources: res.sources, summary: summaryText.slice(0, 500), answerCorrect: res.answerCorrect, imageTurns: imgTurns.length, imageShaMatchesScreenshot: res.imageShaMatchesScreenshot, model: res.model }, null, 1));
+}
+
+async function scenarioWebAnalysis(label: string) {
+  const cookie = await login();
+  const SRC = "https://people.sc.fsu.edu/~jburkardt/data/csv/airtravel.csv";
+  const direct = new Uint8Array(await (await fetch(SRC)).arrayBuffer());
+  const directSha = sha(direct);
+  // Offline expected: annual totals per year column.
+  const lines = new TextDecoder().decode(direct).trim().split("\n").map((l) => l.split(",").map((x) => x.trim().replace(/"/g, "")));
+  const years = lines[0]!.slice(1);
+  const totals: Record<string, number> = {};
+  years.forEach((y, i) => (totals[y] = lines.slice(1).reduce((a, r) => a + Number(r[i + 1]), 0)));
+  const goal = "Open https://people.sc.fsu.edu/~jburkardt/data/csv/csv.html, find the airtravel.csv dataset (monthly transatlantic air travel) and download the CSV file itself. Using code on the downloaded file, compute the total passengers for each year column and the percentage growth from the first year to the last year. Write outputs/summary.json with an `answer` field stating each year's total and the growth, write outputs/chart.png (bar chart of the annual totals), take a screenshot of the page you got the data from, and cite the CSV's source URL.";
+  const t0 = Date.now();
+  const c = await call(cookie, "POST", "/api/tasks", { kind: "general", profileId: "web-analysis", issueText: goal, egressAllow: ["people.sc.fsu.edu"] });
+  if (c.status !== 201) throw new Error(`create ${c.status} ${c.text}`);
+  const id = c.json.id;
+  console.log(`${label}: task ${id}; expected totals ${JSON.stringify(totals)}; source sha ${directSha.slice(0, 16)}`);
+  const v = await waitTerminal(cookie, id);
+  const evs = await events(cookie, id);
+  const outs = await outputs(cookie, id);
+  const all = Object.values(outs) as any[];
+  const dls = all.filter((o) => o.kind === "download" || o.kind === "page-text" || o.kind === "input").map(({ _bytes, ...o }) => ({ ...o, equalsDirectFetch: o.recordedSha256 === directSha }));
+  const dlEvents = evs.filter((e) => e.kind === "artifact" && /^(Download stored|Page text saved)/.test(e.title)).map((e) => ({ seq: e.seq, title: e.title, detail: e.detail, sha256: e.data?.sha256 }));
+  const sj = all.find((o) => o.kind === "output" && /summary\.json$/.test(o.filename));
+  const png = all.find((o) => o.kind === "output" && /chart\.png$/.test(o.filename));
+  let summary: any = null;
+  try { summary = JSON.parse(new TextDecoder().decode(sj?._bytes)); } catch {}
+  const answer = String(summary?.answer ?? "");
+  const totalsInAnswer = Object.fromEntries(Object.entries(totals).map(([y, t]) => [y, answer.replace(/,/g, "").includes(String(t))]));
+  const first = totals[years[0]!]!, last = totals[years[years.length - 1]!]!;
+  const growth = Math.round(((last - first) / first) * 10000) / 100;
+  const res = {
+    scenario: "web-analysis", label, taskId: id, durationMs: Date.now() - t0, status: v.task.status, outcome: v.task.outcome, cleanup: v.task.cleanup,
+    checks: v.task.result?.checks, sources: v.task.result?.sources, resultSummary: v.task.result?.summary, error: v.task.error,
+    source: { url: SRC, directFetchSha256: directSha, bytes: direct.byteLength },
+    expected: { totals, growthPct: growth },
+    summary, answer, totalsInAnswer, growthInAnswer: answer.includes(growth.toFixed(1)) || answer.includes(growth.toFixed(2)),
+    downloads: dls, downloadEvents: dlEvents,
+    chart: png ? { sha256: png.recordedSha256, ...pngInfo(png._bytes) } : null,
+    artifacts: all.map(({ _bytes, ...o }) => o),
+    model: modelStats(evs), codeRuns: execTrail(evs), events: slim(evs),
+  };
+  writeFileSync(join(OUT, `web-analysis-${label}.json`), JSON.stringify(res, null, 2));
+  console.log(JSON.stringify({ id, outcome: res.outcome, cleanup: res.cleanup?.status, checks: res.checks, sources: res.sources, answer: answer.slice(0, 400), totalsInAnswer, growth, growthInAnswer: res.growthInAnswer, downloads: dls.map((d) => ({ f: d.filename, kind: d.kind, eq: d.equalsDirectFetch })), downloadEvents: dlEvents.map((d) => d.detail), chart: res.chart, allMatch: res.artifacts.every((a: any) => a.match), model: res.model, codeRuns: res.codeRuns.map((x) => x.exitCode) }, null, 1));
+}
+
+const [scenario, label = "run1"] = process.argv.slice(2);
+if (scenario === "analysis") await scenarioAnalysis(label, false);
+else if (scenario === "analysis-malformed") await scenarioAnalysis(label, true);
+else if (scenario === "web-research") await scenarioWebResearch(label);
+else if (scenario === "web-analysis") await scenarioWebAnalysis(label);
+else throw new Error("unknown scenario");

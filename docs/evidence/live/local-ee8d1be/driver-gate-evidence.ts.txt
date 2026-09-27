@@ -1,0 +1,41 @@
+#!/usr/bin/env bun
+// Collect sanitized TaskView + event excerpts for the live-gate tasks (operator view). No issue text is written.
+import { writeFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+const CONTROL = "http://127.0.0.1:3000";
+const OUT = process.env.OUT ?? join(import.meta.dir, "live-out");
+mkdirSync(OUT, { recursive: true });
+const ids = process.argv.slice(2);
+const login = await fetch(`${CONTROL}/api/session`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: "<redacted>" }) });
+const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0]!;
+const attempts: any[] = [];
+for (const id of ids) {
+  const view = await (await fetch(`${CONTROL}/api/tasks/${id}`, { headers: { cookie } })).json() as any;
+  const text = await (await fetch(`${CONTROL}/api/tasks/${id}/events?lastEventId=0`, { headers: { cookie, accept: "text/event-stream" } })).text();
+  const evs: any[] = [];
+  for (const block of text.split("\n\n")) {
+    let name = "message", data = "";
+    for (const l of block.split("\n")) { if (l.startsWith("event:")) name = l.slice(6).trim(); else if (l.startsWith("data:")) data += l.slice(5).trim(); }
+    if (!data || name === "task" || name === "end") continue;
+    try { evs.push(JSON.parse(data)); } catch {}
+  }
+  const model = evs.filter((e) => e.kind === "model");
+  const hosts = [...new Set(model.map((e) => { try { return new URL(String(e.data?.host)).hostname; } catch { return String(e.data?.host); } }))];
+  const t = view.task;
+  const { issueText, ...taskNoIssue } = t;
+  const dur = Date.parse(evs[evs.length - 1]?.at ?? t.updatedAt) - Date.parse(t.createdAt);
+  attempts.push({
+    taskId: id,
+    status: t.status, outcome: t.outcome, phase: t.phase, candidateDigest: t.candidateDigest, cleanup: t.cleanup,
+    durationMsFromEvents: dur,
+    modelCalls: model.length, models: [...new Set(model.map((e) => e.data?.model))], modelHosts: hosts,
+    tokens: model.reduce((a, e) => ({ input: a.input + (Number(e.data?.usage?.input) || 0), output: a.output + (Number(e.data?.usage?.output) || 0) }), { input: 0, output: 0 }),
+    modelTurns: model.map((e) => ({ seq: e.seq, model: e.data?.model, host: e.data?.host, durationMs: e.data?.durationMs, toolCalls: (e.data?.toolCalls ?? []).map((c: any) => c.name), usage: e.data?.usage, finishReason: e.data?.finishReason })),
+    verification: view.verification ? { passed: view.verification.passed, candidateDigest: view.verification.candidateDigest, contractDigest: view.verification.contractDigest, adapterDigest: view.verification.adapterDigest, runtime: view.verification.runtimeProfile?.inspection?.runtime, devUnsafe: view.verification.runtimeProfile?.inspection?.devUnsafe, cases: view.verification.cases?.map?.((c: any) => ({ caseId: c.caseId, kind: c.kind, passed: c.passed, reason: c.reason })) } : null,
+    baseline: view.baseline ? { passed: view.baseline.passed, cases: view.baseline.cases?.map?.((c: any) => ({ caseId: c.caseId, kind: c.kind, passed: c.passed, reason: c.reason })) } : null,
+    task: { ...taskNoIssue, issueText: "<omitted: the tracked fixture profiles/tabulate-365/issue.md>" },
+    events: evs.map((e) => ({ seq: e.seq, at: e.at, kind: e.kind, title: e.title, ...(e.kind === "exec" || e.kind === "check" || e.kind === "phase" || e.kind === "error" ? { detail: String(e.detail ?? "").slice(0, 800) } : {}), ...(e.data?.exitCode !== undefined ? { exitCode: e.data.exitCode } : {}), ...(e.kind === "model" ? { host: e.data?.host, model: e.data?.model } : {}) })),
+  });
+}
+writeFileSync(join(OUT, "live-gate-attempts.json"), JSON.stringify({ attempts }, null, 2));
+console.log(JSON.stringify(attempts.map((a) => ({ id: a.taskId, outcome: a.outcome, digest: a.candidateDigest, calls: a.modelCalls, hosts: a.modelHosts, models: a.models, tokens: a.tokens, dur: a.durationMsFromEvents, verification: a.verification && { passed: a.verification.passed, runtime: a.verification.runtime, devUnsafe: a.verification.devUnsafe, cases: a.verification.cases }, baseline: a.baseline })), null, 1));
