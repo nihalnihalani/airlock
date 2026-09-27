@@ -13,7 +13,6 @@
 [![Vultr VX1](https://img.shields.io/badge/Vultr-VX1%20sandbox%20host-007BFC?style=flat-square&logo=vultr&logoColor=white)](https://docs.vultr.com/how-to-set-up-agent-sandboxing-on-vultr-cloud-compute)
 [![Kata Containers](https://img.shields.io/badge/Kata-guest%20kernel%20per%20sandbox-f59e0b?style=flat-square)](https://katacontainers.io/)
 [![gVisor](https://img.shields.io/badge/gVisor-runsc%20installed%20floor-4285F4?style=flat-square)](https://gvisor.dev/)
-[![CopilotKit](https://img.shields.io/badge/CopilotKit-OpenMuse%20%C2%B7%20OpenBot%20modules-6366f1?style=flat-square)](THIRD_PARTY_NOTICES.md)
 
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6?style=flat-square&logo=typescript&logoColor=white)
 ![Bun](https://img.shields.io/badge/Bun-1.3-000000?style=flat-square&logo=bun)
