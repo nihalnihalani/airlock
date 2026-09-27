@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Airlock — Project Analysis</title>
+<style>
+  @page {
+    size: A4;
+    margin: 18mm 16mm 18mm 16mm;
+  }
+  :root {
+    --ink: #15202b;
+    --muted: #4a5a68;
+    --line: #d7dee5;
+    --accent: #0b6bcb;
+    --bg-soft: #f4f7fa;
+    --code-bg: #eef2f6;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    color: var(--ink);
+    font-family: "IBM Plex Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    font-size: 10.5pt;
+    line-height: 1.45;
+    background: #fff;
+  }
+  h1, h2, h3, h4 {
+    font-family: "IBM Plex Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    line-height: 1.2;
+    margin: 0 0 0.45em;
+    page-break-after: avoid;
+  }
+  h1 {
+    font-size: 26pt;
+    letter-spacing: -0.02em;
+    margin-bottom: 0.15em;
+  }
+  h2 {
+    font-size: 15pt;
+    margin-top: 1.4em;
+    padding-bottom: 0.25em;
+    border-bottom: 1.5px solid var(--line);
+  }
+  h3 {
+    font-size: 12pt;
+    margin-top: 1.1em;
+    color: #1a2a38;
+  }
+  h4 {
+    font-size: 10.5pt;
+    margin-top: 0.9em;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  p { margin: 0 0 0.7em; }
+  ul, ol { margin: 0 0 0.8em; padding-left: 1.25em; }
+  li { margin-bottom: 0.25em; }
+  a { color: var(--accent); text-decoration: none; }
+  .cover {
+    page-break-after: always;
+    min-height: 240mm;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 8mm 0 4mm;
+  }
+  .cover-top .eyebrow {
+    color: var(--accent);
+    font-weight: 600;
+    font-size: 10pt;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 1.2em;
+  }
+  .cover .tagline {
+    font-size: 14pt;
+    color: var(--muted);
+    max-width: 34em;
+    margin: 0.6em 0 1.4em;
+  }
+  .cover .lede {
+    font-size: 11.5pt;
+    max-width: 38em;
+  }
+  .meta-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px 24px;
+    margin-top: 2em;
+    padding: 14px 16px;
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+  }
+  .meta-grid dt {
+    font-size: 8.5pt;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+    margin: 0;
+  }
+  .meta-grid dd {
+    margin: 0 0 0.55em;
+    font-weight: 600;
+  }
+  .cover-foot {
+    border-top: 1px solid var(--line);
+    padding-top: 12px;
+    color: var(--muted);
+    font-size: 9pt;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.6em 0 1em;
+    font-size: 9.5pt;
+    page-break-inside: avoid;
+  }
+  th, td {
+    border: 1px solid var(--line);
+    padding: 6px 8px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th {
+    background: var(--bg-soft);
+    font-weight: 600;
+  }
+  code, .mono {
+    font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+    font-size: 8.8pt;
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--line);
+    padding: 10px 12px;
+    overflow: hidden;
+    white-space: pre-wrap;
+    font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+    font-size: 8.5pt;
+    line-height: 1.4;
+    page-break-inside: avoid;
+  }
+  .callout {
+    background: var(--bg-soft);
+    border-left: 3px solid var(--accent);
+    padding: 10px 12px;
+    margin: 0.8em 0 1em;
+    page-break-inside: avoid;
+  }
+  .toc ol { padding-left: 1.3em; }
+  .toc li { margin-bottom: 0.35em; }
+  .section { page-break-inside: auto; }
+  .keep { page-break-inside: avoid; }
+  .footer-note {
+    margin-top: 2em;
+    padding-top: 10px;
+    border-top: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 8.5pt;
+  }
+  .small { font-size: 9pt; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<!-- COVER -->
+<section class="cover">
+  <div class="cover-top">
+    <div class="eyebrow">Internal briefing</div>
+    <h1>Airlock</h1>
+    <p class="tagline">Project analysis · Worker, Store &amp; Supervisor</p>
+    <p class="lede">
+      Airlock is a web agent that does real repair, browsing, and analysis work inside disposable
+      Kata microVMs on Vultr — while the agent never declares its own success. This document
+      summarizes the product, architecture, maturity, and the durable orchestration spine:
+      <strong>Store</strong>, <strong>Worker</strong>, and <strong>Supervisor</strong>.
+    </p>
+    <dl class="meta-grid">
+      <div>
+        <dt>Challenge</dt>
+        <dd>Blast Radius Zero (Vultr Agent Arena)</dd>
+        <dt>Live demo</dt>
+        <dd>https://96-30-198-46.sslip.io</dd>
+      </div>
+      <div>
+        <dt>Stack</dt>
+        <dd>Bun · TypeScript · Hono · PGlite · React · Kata</dd>
+        <dt>Model</dt>
+        <dd>Vultr Serverless Inference · glm-5.3</dd>
+      </div>
+    </dl>
+  </div>
+  <div class="cover-foot">
+    Generated from the Airlock repository · based on README, CLAUDE.md, implementation-status,
+    and source under <span class="mono">apps/control</span> and <span class="mono">apps/supervisor</span>.
+  </div>
+</section>
+
+<!-- TOC -->
+<section class="section toc">
+  <h2>Contents</h2>
+  <ol>
+    <li>What Airlock is</li>
+    <li>Architecture overview</li>
+    <li>Repository map</li>
+    <li>Trust model &amp; checkpoints</li>
+    <li>Maturity &amp; evidence</li>
+    <li>Worker, Store &amp; Supervisor</li>
+    <li>How the three pieces fit together</li>
+  </ol>
+</section>
+
+<!-- 1 -->
+<section class="section">
+  <h2>1. What Airlock is</h2>
+  <p>
+    <strong>Tagline:</strong> Let the agent do anything. Nothing it does can touch you.
+  </p>
+  <p>
+    Airlock is built for Challenge 1 at The Agent Arena Hackathon (Vultr, San Francisco, Sep 2026):
+    a web agent that performs real work — writing and running code, or driving a real browser —
+    where every action is contained in a sandbox on Vultr, and a central control layer plans,
+    dispatches, and returns verifiable output.
+  </p>
+
+  <h3>Two task kinds, one control plane</h3>
+  <table>
+    <thead>
+      <tr><th>Kind</th><th>What it does</th><th>How success is decided</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Repair</strong></td>
+        <td>
+          Takes an untrusted bug report for a supported library (hero: <span class="mono">tabulate-365</span> /
+          python-tabulate #365), reproduces the failure, attempts a minimal repair, returns a patch.
+        </td>
+        <td>
+          External comparator on sealed candidate bytes in fresh sandboxes.
+          Outcomes include <span class="mono">CANDIDATE_PASSED_CHECKS</span>,
+          <span class="mono">CHECKS_FAILED</span>, <span class="mono">NOT_REPRODUCED</span>, etc.
+        </td>
+      </tr>
+      <tr>
+        <td><strong>General</strong></td>
+        <td>
+          Profiles <span class="mono">analysis</span>, <span class="mono">web-research</span>,
+          <span class="mono">web-analysis</span>: Chromium, offline Python/Node, uploads, screenshots,
+          human takeover, digest-bound form approvals.
+        </td>
+        <td>
+          Controller-owned completion checks on collected outputs/evidence
+          (<span class="mono">RESULT_VERIFIED</span> / <span class="mono">RESULT_PARTIAL</span> / …).
+        </td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    The agent cannot mark its own homework. A forged “all tests passed” log still fails.
+    “Passed these checks” means exactly the frozen cases passed — not safe, certified, or generally correct.
+  </div>
+</section>
+
+<!-- 2 -->
+<section class="section">
+  <h2>2. Architecture overview</h2>
+  <p>Two Vultr VMs in region <span class="mono">atl</span>, linked by VPC:</p>
+  <table>
+    <thead>
+      <tr><th>Plane</th><th>Where</th><th>Owns</th><th>Never</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Control</strong><br/><span class="small">apps/control, apps/web</span></td>
+        <td>VM A · Cloud Compute</td>
+        <td>Identities, contracts, phases, budgets, sessions, export, Vultr model client, comparator, artifacts</td>
+        <td>Holds Docker socket; runs candidate code; trusts sandbox “passed” fields</td>
+      </tr>
+      <tr>
+        <td><strong>Supervisor</strong><br/><span class="small">apps/supervisor</span></td>
+        <td>VM B · VX1 (/dev/kvm)</td>
+        <td>Container identity, execution, deadlines, termination, cleanup, isolation checks</td>
+        <td>Accepts caller-chosen image, mount, network, runtime, or host path</td>
+      </tr>
+      <tr>
+        <td><strong>Comparator</strong></td>
+        <td>Control plane</td>
+        <td>Required case IDs, expected behaviour, verdict</td>
+        <td>Imports or executes candidate code</td>
+      </tr>
+      <tr>
+        <td><strong>Model</strong></td>
+        <td>Vultr Serverless Inference</td>
+        <td>Proposes edits and tool calls</td>
+        <td>Declares success, grants privileges, publishes</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Repair loop (phases)</h3>
+  <p class="mono" style="margin-bottom:0.6em">
+    prepare → baseline → reproduce → repair → freeze → verify → ready
+  </p>
+  <ul>
+    <li><strong>Baseline / verify:</strong> one fresh one-shot sandbox per contract case.</li>
+    <li><strong>Freeze:</strong> revoke → stop → collect allowed files → seal <span class="mono">SourceManifest</span>.</li>
+    <li><strong>submit_candidate:</strong> only advances to freeze; does not mean pass.</li>
+  </ul>
+
+  <h3>Reuse</h3>
+  <p>
+    Adapted modules from OpenMuse (worker, store patterns) and OpenBot (narrow supervisor).
+    Neither upstream app is the composition root; CopilotKit / AG-UI are not dependencies.
+    Pins and modifications are recorded in <span class="mono">THIRD_PARTY_NOTICES.md</span>.
+  </p>
+</section>
+
+<!-- 3 -->
+<section class="section">
+  <h2>3. Repository map</h2>
+  <pre>apps/control      API, RepairHandler, GeneralHandler, verifier, store, worker
+apps/supervisor   Narrow Docker/Kata service (execution plane)
+apps/web          Repair + general UI, evidence, checkpoints, approvals
+apps/egress       Per-attempt browser egress proxy (allowlist, DNS pin)
+apps/fixtures     Demo data / airlock-forms-v1 destination
+packages/contracts Shared Zod schemas at every boundary
+profiles/         Supported repair cases (tabulate-365)
+runtime/          Pinned Python, browser, analysis, node images + collectors
+deploy/           Vultr provision + host setup scripts
+docs/             Status ledger, evidence, runbook, decisions
+research/         Design history (35 / 37 / 38 / 40 / 42)</pre>
+  <p class="small">
+    Stack: Bun workspaces, TypeScript (strict), Hono, PGlite, dockerode, React/Vite, Playwright/Chromium,
+    Python 3.12 pinned runtime image.
+  </p>
+</section>
+
+<!-- 4 -->
+<section class="section">
+  <h2>4. Trust model &amp; checkpoints</h2>
+  <h3>Standing invariants (CLAUDE.md §3)</h3>
+  <ol>
+    <li><strong>One authority per concern</strong> — controller, supervisor, comparator, artifacts; model owns none.</li>
+    <li><strong>Untrusted code only in its sandbox</strong> — report text, generated code, candidate library never run on VM A.</li>
+    <li><strong>Candidate identity is immutable</strong> — verify / preview / export share one sealed digest.</li>
+    <li><strong>Worker cannot declare success</strong> — sandbox exit codes and forged logs carry no authority.</li>
+    <li><strong>Cancellation has an execution effect</strong> — revoke → stop → confirm → fence late results.</li>
+    <li><strong>Ownership checked at every access</strong> — IDs are not bearer tokens.</li>
+    <li><strong>No secrets / network / host in code sandboxes</strong> — browser reaches only its allowlisting egress proxy.</li>
+    <li><strong>Runtime tier inspected, never assumed</strong> — Kata target; gVisor floor; runc is <span class="mono">dev-unsafe</span> only.</li>
+    <li><strong>Five checkpoints on every run record.</strong></li>
+    <li><strong>All runtime model calls go through Vultr Serverless Inference.</strong></li>
+  </ol>
+
+  <h3 class="keep">The five checkpoints</h3>
+  <table>
+    <thead><tr><th>#</th><th>Checkpoint</th><th>Proves</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>Host check</td><td>CPU virt, /dev/kvm, runtimes, selected runtime, not dev-unsafe</td></tr>
+      <tr><td>2</td><td>Execution log</td><td>Every command with exit code, duration, bounded output</td></tr>
+      <tr><td>3</td><td>In-sandbox identity</td><td>hostname + uname from inside (Kata guest ≠ host)</td></tr>
+      <tr><td>4</td><td>Isolation probe</td><td>metadata · DNS · TCP · Docker socket · mounts all BLOCKED before agent work</td></tr>
+      <tr><td>5</td><td>Teardown</td><td>Host-wide listing reads “(no sandboxes)”</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- 5 -->
+<section class="section">
+  <h2>5. Maturity &amp; evidence</h2>
+  <table>
+    <thead><tr><th>Gate</th><th>Result</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td>Preflight on VX1</td><td><strong>49/49</strong></td><td>KVM, Kata, hardening, probe, quota, Chromium under Kata, egress, empty host</td></tr>
+      <tr><td>Live repair gate</td><td><strong>3/3</strong></td><td>Fresh tabulate #365 repairs through public URL, comparator-judged</td></tr>
+      <tr><td>Vultr acceptance</td><td><strong>9/9</strong></td><td>Analysis, research, repair+export, hero, approvals, takeover, containment</td></tr>
+      <tr><td>Findings ledger</td><td>~95 items</td><td>Nearly all closed (1 conditional, NetBird optional)</td></tr>
+    </tbody>
+  </table>
+  <p class="small">
+    Evidence lives under <span class="mono">docs/evidence/</span>. Demo video:
+    <span class="mono">docs/demo/vultr-demo.mp4</span>. Documented limitations include: GET to
+    allowlisted hosts can carry data; pages needing web workers may not run;
+    <span class="mono">RESULT_VERIFIED</span> is structural; single control-plane process.
+  </p>
+</section>
+
+<!-- 6 -->
+<section class="section">
+  <h2>6. Worker, Store &amp; Supervisor</h2>
+  <p>
+    These three pieces form the durable orchestration spine. The <strong>Store</strong> remembers;
+    the <strong>Worker</strong> drives tasks from that memory; the <strong>Supervisor</strong> is the
+    only place that actually executes.
+  </p>
+  <pre>UI / API  →  Store (PGlite on VM A)
+                ↑↓
+            TaskWorker  →  RepairHandler / GeneralHandler
+                                ↓ journaled HTTP over VPC
+                          Supervisor (VM B, Docker/Kata)</pre>
+  <p>
+    The model and handlers never touch Docker. The supervisor never owns task identity or outcomes.
+  </p>
+
+  <!-- STORE -->
+  <h3>6.1 Store — <span class="mono">apps/control/src/store</span></h3>
+  <p>
+    Control-plane database on <strong>VM A</strong>, adapted from OpenMuse’s <span class="mono">db.ts</span>,
+    running <strong>PGlite</strong> (Postgres-compatible, in-process).
+  </p>
+
+  <h4>Tables</h4>
+  <table>
+    <thead><tr><th>Table</th><th>Role</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><span class="mono">records</span></td>
+        <td>Generic JSON documents keyed by <span class="mono">(owner, kind, id)</span> — tasks, manifests, grants, worker status</td>
+      </tr>
+      <tr>
+        <td><span class="mono">events</span></td>
+        <td>Append-only run log with per-task monotonic <span class="mono">seq</span> (SSE replay via Last-Event-ID)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h4>Key write paths</h4>
+  <ul>
+    <li><strong><span class="mono">put</span></strong> — upsert (mutable things like task progress).</li>
+    <li><strong><span class="mono">compareAndSwap</span></strong> — atomic claim/update only if expected fields match (leases, approvals).</li>
+    <li><strong><span class="mono">insertImmutable</span></strong> — insert-or-refuse; used for verification records, manifests, export grants (no overwrite).</li>
+    <li><strong><span class="mono">appendEvent</span> / <span class="mono">listEvents</span></strong> — durable, ordered event stream.</li>
+    <li><strong><span class="mono">scanWhere</span></strong> — worker polling by status without loading every record.</li>
+  </ul>
+
+  <div class="callout">
+    Ownership is first-class: every record is scoped to an owner. Task IDs are not bearer tokens;
+    cross-owner access reads as 404. Generic upsert is forbidden for artifacts — immutable identity
+    is a trust invariant.
+  </div>
+
+  <!-- WORKER -->
+  <h3>6.2 Worker — <span class="mono">apps/control/src/worker</span></h3>
+  <p>
+    <span class="mono">TaskWorker</span> is the durable lease loop on <strong>VM A</strong>, adapted from
+    OpenMuse’s <span class="mono">engine/worker.ts</span>. It does <em>not</em> know how to repair or browse —
+    it only claims work and calls a <span class="mono">TaskHandler</span>.
+  </p>
+
+  <h4>Tick cycle (~1s)</h4>
+  <ol>
+    <li>Scan Store for <span class="mono">queued</span>, expired-lease <span class="mono">running</span>, or <span class="mono">cancelling</span> tasks.</li>
+    <li><strong>CAS-claim</strong> with a fresh <span class="mono">leaseId</span> + <span class="mono">leaseUntil</span>.</li>
+    <li>Invoke the handler with a <span class="mono">TaskContext</span>:
+      <ul>
+        <li><span class="mono">mode</span>: <span class="mono">"run"</span> or <span class="mono">"cancel"</span></li>
+        <li><span class="mono">guard()</span> / <span class="mono">checkpoint()</span> — throw <span class="mono">LostLeaseError</span> if the lease is gone</li>
+        <li><span class="mono">event()</span> — append to Store’s event log</li>
+      </ul>
+    </li>
+    <li>Heartbeat renews the lease while the handler runs.</li>
+    <li>On finish: clear lease, apply the handler’s terminal patch.</li>
+  </ol>
+
+  <h4>Handlers plugged at startup</h4>
+  <table>
+    <thead><tr><th>Handler</th><th>Role</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><span class="mono">RepairHandler</span></td>
+        <td>Deterministic phases: prepare → baseline → reproduce → repair → freeze → verify → ready</td>
+      </tr>
+      <tr>
+        <td><span class="mono">GeneralHandler</span></td>
+        <td>Browser/code tools + controller-owned completion checks</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h4>Cancellation</h4>
+  <p>
+    Not a DB flag alone. The API sets <span class="mono">cancelling</span> → worker runs cancel mode →
+    revoke/stop/confirm on the supervisor → only then <span class="mono">cancelled</span>.
+    Unconfirmed teardown stays <span class="mono">cancelling</span> and retries (bounded);
+    past the bound the task is recorded <span class="mono">failed</span> with an honest unconfirmed teardown —
+    never a forged <span class="mono">cancelled</span>.
+  </p>
+
+  <!-- SUPERVISOR -->
+  <h3>6.3 Supervisor — <span class="mono">apps/supervisor</span></h3>
+  <p>
+    Narrow HTTP service on <strong>VM B</strong> — the <strong>only</strong> process with the Docker socket.
+    Forked from OpenBot’s supervisor idea, extended with execution, freeze, invoke, fencing, capacity, and janitor.
+  </p>
+
+  <h4>The real boundary</h4>
+  <p>
+    A bearer token keeps strangers off the port. The <strong>API vocabulary</strong> is the wall:
+    callers can say create attempt / run tool / freeze / revoke / destroy — never “use this image /
+    mount / network / runtime / host path,” because those are not expressible in the API.
+  </p>
+
+  <h4>Local journal (SQLite on VM B)</h4>
+  <p>Separate from the control Store. Guarantees:</p>
+  <ul>
+    <li>Operation id + request digest → replay the same result, or conflict if digest differs.</li>
+    <li>Pending ops after a crash become <span class="mono">interrupted</span>, never a forged receipt.</li>
+    <li><strong>Generation fencing</strong> — stale or revoked generations get 409 before every exec.</li>
+  </ul>
+
+  <h4>Lifecycle</h4>
+  <p class="mono">create → inspect hardening → isolation probe → tools → freeze → destroy</p>
+  <p>
+    Freeze ordering: revoke → provision collector with volume read-only → stop author → settle outstanding
+    execs → collect. Host <strong>capacity admission</strong> returns 429 before any Docker call if the budget is full.
+  </p>
+
+  <h4>Main routes</h4>
+  <table>
+    <thead><tr><th>Route</th><th>Purpose</th></tr></thead>
+    <tbody>
+      <tr><td><span class="mono">POST /attempts</span></td><td>Create disposable attempt (author / hostile / …)</td></tr>
+      <tr><td><span class="mono">POST …/tool</span></td><td>Bounded read / write / exec inside the attempt</td></tr>
+      <tr><td><span class="mono">POST …/renew</span></td><td>Extend renewable execution authorization</td></tr>
+      <tr><td><span class="mono">POST …/freeze</span></td><td>Stop and collect sealed file envelope</td></tr>
+      <tr><td><span class="mono">POST …/revoke</span> · <span class="mono">/destroy</span></td><td>Stop authority; remove container + volume</td></tr>
+      <tr><td><span class="mono">POST /invoke</span></td><td>Fresh one-shot verify/baseline/preview sandbox</td></tr>
+      <tr><td><span class="mono">POST /hostile</span></td><td>Containment demo (rm -rf / fork bomb) with survival card</td></tr>
+      <tr><td><span class="mono">GET /host</span> · <span class="mono">/capacity</span> · <span class="mono">/listing</span></td><td>Host check, admission budget, host-wide inventory</td></tr>
+    </tbody>
+  </table>
+
+  <h4>Sandbox roles</h4>
+  <p>
+    <span class="mono">author</span>, one-shot invoke roles (baseline / candidate / preview),
+    <span class="mono">hostile</span>, <span class="mono">analysis</span>, <span class="mono">node</span>,
+    plus browser + egress pair. Code roles use <span class="mono">--network none</span>; the browser
+    reaches only its per-attempt egress proxy.
+  </p>
+</section>
+
+<!-- 7 -->
+<section class="section">
+  <h2>7. How the three pieces fit together</h2>
+  <table>
+    <thead>
+      <tr><th>Piece</th><th>Owns</th><th>Never</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Store</strong></td>
+        <td>Task identity, leases, events, sealed artifacts on VM A</td>
+        <td>Execution or Docker</td>
+      </tr>
+      <tr>
+        <td><strong>Worker</strong></td>
+        <td>Claiming, heartbeats, cancel retries, calling handlers</td>
+        <td>Declaring pass/fail or creating containers</td>
+      </tr>
+      <tr>
+        <td><strong>Supervisor</strong></td>
+        <td>Containers, deadlines, isolation, cleanup on VX1</td>
+        <td>Trusting caller-chosen mounts/images, or deciding task outcomes</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    Handlers (Repair / General) sit between Worker and Supervisor: they read and write the Store
+    through the worker context, and every supervisor mutation is journaled on the control side
+    <em>before</em> the HTTP call goes out. Crashes surface as <span class="mono">unknown</span> /
+    <span class="mono">interrupted</span>, never as invented receipts.
+  </p>
+
+  <div class="footer-note">
+    End of briefing. For day-to-day development rules see <span class="mono">CLAUDE.md</span>;
+    for the findings ledger see <span class="mono">docs/implementation-status.md</span>;
+    for deployment see <span class="mono">README.md</span> and <span class="mono">docs/runbook.md</span>.
+  </div>
+</section>
+
+</body>
+</html>
