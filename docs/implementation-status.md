@@ -113,7 +113,7 @@ Status vocabulary: `open`, `in progress`, `implemented-unverified`, `verified (l
 | C38 | 6 | execution/control/web | verified (local, real Chromium) | hostile targets refused (disallowed, metadata, private, POST); prompt-injection has no authority path (DA review) — e6a4b9a, 31bf40f |
 | C39 | 6 | execution/control/web | verified (local, real Docker runc) | teardown of containers/networks/profiles confirmed; janitor — b2de0d6, d8450d3 |
 | C40 | 6 | execution/control/web | verified (fakes) | two-owner authorization tests across task/event/artifact/control/approval APIs — 1fbeae2, fde81e1, 7c1ab8e |
-| C41 | 6 | execution/control/web | verified (local) / partial | runner loss → interrupted, supervisor restart reconcile, cleanup-retry sweep; controller kill mid-action not measured — e6a4b9a, e38367d |
+| C41 | 6 | execution/control/web | verified (local, real Docker runc) | kill control plane mid-navigate/code-run/takeover/claimed-proposal/download and supervisor mid-browser-op: 7/7, no replay, host empty — 3846c70; O1–O3 follow-ups 509a832 |
 
 ## Housekeeping
 
