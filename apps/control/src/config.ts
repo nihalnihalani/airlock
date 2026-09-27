@@ -3,7 +3,7 @@
  * config object and never copied into logs, events or API responses.
  */
 import { existsSync, statSync } from "node:fs";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 
 /** `scriptPath` is one script file or a directory of `<name>.json` scripts (see scripted.ts). */
 export type DriverMode = { kind: "vultr" } | { kind: "scripted"; scriptPath: string };
@@ -21,6 +21,8 @@ export interface Config {
   judgePassword: string | null;
   driver: DriverMode;
   vultr: { apiKey: string | null; baseUrl: string; model: string };
+  /** Built web UI (apps/web/dist) served at `/` behind the API; null when the directory is absent. */
+  webDist: string | null;
   /** Cookie `Secure` flag; true unless AIRLOCK_INSECURE_COOKIES=1 (local http). */
   secureCookies: boolean;
   sessionTtlMs: number;
@@ -89,6 +91,14 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   const profilesDir = resolve(env.AIRLOCK_PROFILES_DIR?.trim() || resolve(repoRoot, "profiles"));
   requireDir(profilesDir, "AIRLOCK_PROFILES_DIR");
   const runtimeDir = resolve(env.AIRLOCK_RUNTIME_DIR?.trim() || resolve(repoRoot, "runtime/python"));
+  const webDistRaw = env.AIRLOCK_WEB_DIST?.trim();
+  let webDist: string | null = null;
+  if (webDistRaw === "" || webDistRaw === "none") webDist = null;
+  else {
+    const candidate = resolve(webDistRaw || resolve(repoRoot, "apps/web/dist"));
+    if (existsSync(join(candidate, "index.html"))) webDist = candidate;
+    else if (webDistRaw) throw new ConfigError(`AIRLOCK_WEB_DIST has no index.html: ${candidate} (build with: bun run --cwd apps/web build)`);
+  }
 
   return {
     port: intEnv(env, "PORT", 3000, 1, 65535),
@@ -96,6 +106,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     dataDir: resolve(env.AIRLOCK_DATA_DIR?.trim() || "./data"),
     profilesDir,
     runtimeDir,
+    webDist,
     supervisorUrl,
     supervisorToken,
     operatorPassword,

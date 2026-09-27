@@ -99,7 +99,10 @@ async function main() {
     exportGrantTtlMs: config.exportGrantTtlMs,
     hostileMinIntervalMs: config.hostileMinIntervalMs,
     scriptedDrivers,
+    webDist: config.webDist,
   });
+  if (config.webDist) console.log({ timestamp: new Date().toISOString(), message: "serving web UI", dir: config.webDist });
+  else console.warn("no web UI directory (apps/web/dist); only /api is served. Build it with: bun run --cwd apps/web build");
 
   worker.start();
   const server = Bun.serve({ port: config.port, hostname: config.bind, fetch: app.fetch, idleTimeout: 255 });

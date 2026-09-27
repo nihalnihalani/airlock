@@ -1,4 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Task } from "@airlock/contracts";
 import { createApp, STORE_KIND_GRANTS } from "../src/api.ts";
 import { TaskEventBus } from "../src/events.ts";
@@ -30,7 +33,7 @@ interface Ctx {
   close: () => Promise<void>;
 }
 
-async function makeCtx(options: { withWorker?: boolean; now?: () => number } = {}): Promise<Ctx> {
+async function makeCtx(options: { withWorker?: boolean; now?: () => number; webDist?: string } = {}): Promise<Ctx> {
   const supervisor = new FakeSupervisor({ profile: fixture.profile, observe: fixtureObserve });
   let harness: Harness | null = null;
   let store: Store;
@@ -66,6 +69,7 @@ async function makeCtx(options: { withWorker?: boolean; now?: () => number } = {
     hostileMinIntervalMs: 10_000,
     ssePollMs: 20,
     ...(options.now ? { now: options.now } : {}),
+    ...(options.webDist ? { webDist: options.webDist } : {}),
   });
   return { app, store, supervisor, artifacts, harness, bus, close: async () => (harness ? harness.close() : store.close()) };
 }
@@ -201,6 +205,49 @@ describe("routes and roles", () => {
       expect((await ctx.app.request("/api/hostile", json({ command: "cat /etc/shadow" }, judge))).status).toBe(200);
       expect(ctx.supervisor.hostileCommands).toHaveLength(2);
       expect((await ctx.app.request("/api/hostile", json({ command: "" }, judge))).status).toBe(400);
+    } finally {
+      await ctx.close();
+    }
+  });
+});
+
+describe("static web UI", () => {
+  test("serves dist behind /api with SPA fallback; refuses traversal and dotfiles", async () => {
+    const dist = await mkdtemp(join(tmpdir(), "airlock-dist-"));
+    await mkdir(join(dist, "assets"));
+    await writeFile(join(dist, "index.html"), "<!doctype html><title>Airlock</title>");
+    await writeFile(join(dist, "assets", "app.js"), "console.log(1)");
+    await writeFile(join(dist, ".secret"), "nope");
+    const ctx = await makeCtx({ webDist: dist });
+    try {
+      const index = await ctx.app.request("/");
+      expect(index.status).toBe(200);
+      expect(index.headers.get("content-type")).toContain("text/html");
+      expect(await index.text()).toContain("Airlock");
+      const js = await ctx.app.request("/assets/app.js");
+      expect(js.status).toBe(200);
+      expect(js.headers.get("content-type")).toContain("javascript");
+      // Unknown paths fall back to the SPA shell; API misses stay JSON 404s.
+      expect((await ctx.app.request("/tasks/abc")).headers.get("content-type")).toContain("text/html");
+      const apiMiss = await ctx.app.request("/api/nope");
+      expect(apiMiss.status).toBe(404);
+      expect(await apiMiss.json()).toEqual({ error: "not found" });
+      expect((await ctx.app.request("/api/session")).status).toBe(200);
+      expect((await ctx.app.request("/.secret")).status).toBe(404);
+      const traversal = await ctx.app.request("/assets/..%2f..%2f..%2fetc%2fpasswd");
+      expect(traversal.status === 404 || (traversal.headers.get("content-type") ?? "").includes("text/html")).toBe(true);
+      expect(await traversal.text()).not.toContain("root:");
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  test("without a dist directory every non-API path is a JSON 404", async () => {
+    const ctx = await makeCtx();
+    try {
+      const res = await ctx.app.request("/");
+      expect(res.status).toBe(404);
+      expect(await res.json()).toEqual({ error: "not found" });
     } finally {
       await ctx.close();
     }

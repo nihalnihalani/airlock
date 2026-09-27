@@ -9,6 +9,7 @@
  * are Airlock's.
  */
 import { randomBytes } from "node:crypto";
+import { extname, join, resolve, sep } from "node:path";
 import { Hono, type Context } from "hono";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
@@ -71,6 +72,8 @@ export interface ApiDeps {
   hostileMinIntervalMs: number;
   /** Names a task may select with `scriptedDriver`; null (default) when the live driver is configured. */
   scriptedDrivers?: string[] | null;
+  /** Built web UI directory served for every non-/api GET (SPA fallback to index.html). */
+  webDist?: string | null;
   now?: () => number;
   /** SSE poll interval (ms) as a safety net behind the bus. */
   ssePollMs?: number;
@@ -406,5 +409,54 @@ export function createApp(deps: ApiDeps) {
     return c.json(card);
   });
 
+  // ---- web UI (last, so every /api route above takes precedence) ------------------------------
+  if (deps.webDist) mountStatic(app, deps.webDist);
+
   return app;
+}
+
+const STATIC_TYPES: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".ico": "image/x-icon",
+  ".json": "application/json; charset=utf-8",
+  ".map": "application/json; charset=utf-8",
+  ".woff2": "font/woff2",
+  ".txt": "text/plain; charset=utf-8",
+};
+
+/**
+ * Serve the built web UI. Registered after every /api route so the API always wins; `/api/*`
+ * misses stay JSON 404s. Paths are normalised and confined to the dist directory (no traversal,
+ * no dotfiles); anything unknown falls back to index.html for the hash-routed SPA.
+ */
+function mountStatic(app: Hono<Env>, dir: string) {
+  const root = resolve(dir);
+  app.get("*", async (c) => {
+    const pathname = c.req.path;
+    if (pathname === "/api" || pathname.startsWith("/api/")) return c.json({ error: "not found" }, 404);
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(pathname);
+    } catch {
+      return c.json({ error: "not found" }, 404);
+    }
+    if (decoded.includes("\0") || decoded.split("/").some((seg) => seg.startsWith(".") && seg.length > 0)) return c.json({ error: "not found" }, 404);
+    const target = resolve(root, `.${decoded.replace(/\/+$/, "") || "/index.html"}`);
+    const file = target === root || !target.startsWith(root + sep) ? null : Bun.file(target);
+    const ext = extname(target);
+    if (file && ext && (await file.exists())) {
+      c.header("content-type", STATIC_TYPES[ext] ?? "application/octet-stream");
+      c.header("cache-control", ext === ".html" ? "no-cache" : "public, max-age=31536000, immutable");
+      return c.body(await file.arrayBuffer());
+    }
+    const index = Bun.file(join(root, "index.html"));
+    if (!(await index.exists())) return c.json({ error: "not found" }, 404);
+    c.header("content-type", STATIC_TYPES[".html"]!);
+    c.header("cache-control", "no-cache");
+    return c.body(await index.arrayBuffer());
+  });
 }
