@@ -38,6 +38,7 @@ import path from "node:path";
 import { chromium } from "playwright-core";
 import { APPROVAL_INPUT_NAME, APPROVAL_NAME, isApprovalInputName, isApprovalName, parseAriaSnapshot, cutAtCodeUnits } from "./aria.mjs";
 import { DownloadLedger } from "./downloads.mjs";
+import { AIRLOCK_DISABLED_FEATURES, chromiumLaunchArgs, featureFlagFailures } from "./launch.mjs";
 import { installMutationGuard, parseMutationOrigins } from "./mutation.mjs";
 import {
   DOWNLOAD_CHUNK_BYTES,
@@ -94,21 +95,9 @@ const DOWNLOAD_DIR = fs.mkdtempSync(path.join("/tmp", "airlock-downloads-"));
 fs.mkdirSync(UPLOAD_DIR, { recursive: true, mode: 0o700 });
 const DOWNLOAD_POLL_MS = 100;
 const UPLOAD_CHOOSER_WAIT_MS = 10_000;
-const LAUNCH_ARGS = [
-  `--proxy-server=${PROXY}`,
-  // Chromium bypasses the proxy for loopback implicitly; `<-loopback>` removes that bypass.
-  "--proxy-bypass-list=<-loopback>",
-  "--disable-quic",
-  "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
-  "--webrtc-ip-handling-policy=disable_non_proxied_udp",
-  "--disable-extensions",
-  "--disable-component-extensions-with-background-pages",
-  "--disable-background-networking",
-  "--disable-sync",
-  "--no-first-run",
-  "--no-default-browser-check",
-  "--disable-features=DnsOverHttps,AsyncDns",
-];
+// Fixed flags (launch.mjs): proxy with no bypass, no QUIC, no non-proxied WebRTC UDP, one merged
+// --disable-features list (Playwright's + Airlock's, checked on the browser process after launch).
+const LAUNCH_ARGS = chromiumLaunchArgs(PROXY);
 if (LAUNCH_ARGS.some((arg) => arg.startsWith("--no-sandbox"))) fatal("refusing to launch without the Chromium sandbox");
 
 const state = new SessionState();
@@ -142,6 +131,8 @@ try {
   fatal(`mutation guard could not be installed: ${error?.message ?? error}`);
 }
 const browserVersion = context.browser()?.version() ?? "unknown";
+const featureFailures = featureFlagFailures(browserProcessArgv());
+if (featureFailures.length > 0) fatal(`Chromium feature flags are not as launched (${featureFailures.join(", ")})`);
 let stopping = false;
 context.on("close", () => stopping || fatal("browser context closed; runner lost (attempt must be treated as interrupted)"));
 
@@ -336,6 +327,17 @@ function locate(page, ref) {
   return page.locator(`aria-ref=${ref}`);
 }
 
+/** argv of the Chromium browser process Playwright launched (no --type=, driven over --remote-debugging-pipe). */
+function browserProcessArgv() {
+  for (const pid of fs.readdirSync("/proc").filter((entry) => /^[0-9]+$/.test(entry))) {
+    try {
+      const argv = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").filter(Boolean);
+      if (argv.includes("--remote-debugging-pipe") && !argv.some((a) => a.startsWith("--type="))) return argv;
+    } catch {}
+  }
+  return [];
+}
+
 function sandboxEvidence() {
   const processes = [];
   for (const pid of fs.readdirSync("/proc").filter((entry) => /^[0-9]+$/.test(entry))) {
@@ -400,7 +402,8 @@ const handlers = {
       uid: process.getuid(),
       proxy: PROXY,
       sandbox: sandboxEvidence(),
-      mutationGuard: { installed: true, origins: [...MUTATION_ORIGINS], websockets: "blocked", blocked: state.mutationsBlocked },
+      mutationGuard: { installed: true, origins: [...MUTATION_ORIGINS], websockets: "blocked", workers: "blocked", blocked: state.mutationsBlocked },
+      disabledFeatures: { required: [...AIRLOCK_DISABLED_FEATURES], failures: featureFlagFailures(browserProcessArgv()) },
     };
   },
 

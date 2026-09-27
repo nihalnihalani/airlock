@@ -85,7 +85,7 @@ export function fakeRunner(overrides: Partial<Record<string, (req: RunnerRequest
     if (custom) return custom(req, generation);
     switch (req.op) {
       case "status":
-        return ok(req, { ready: true, browserVersion: "fake-chromium", generation, activeTabId: "tab-1", tabCount: 1, uid: 1001, proxy: String(req.args?.proxy ?? PROXY_HINT.value), sandbox: { chromiumProcesses: 5, anyNoSandboxFlag: false, zygotePresent: true, renderersInNestedPidNamespace: true, renderers: 1 }, mutationGuard: { installed: true, origins: JSON.parse(MUTATION_HINT.value), websockets: "blocked", blocked: 0 } });
+        return ok(req, { ready: true, browserVersion: "fake-chromium", generation, activeTabId: "tab-1", tabCount: 1, uid: 1001, proxy: String(req.args?.proxy ?? PROXY_HINT.value), sandbox: { chromiumProcesses: 5, anyNoSandboxFlag: false, zygotePresent: true, renderersInNestedPidNamespace: true, renderers: 1 }, mutationGuard: { installed: true, origins: JSON.parse(MUTATION_HINT.value), websockets: "blocked", workers: "blocked", blocked: 0 }, disabledFeatures: { required: ["DnsOverHttps", "AsyncDns", "Reporting", "NetworkErrorLogging"], failures: [] } });
       case "navigate":
         generation += 1;
         return ok(req, { generation, tabId: "tab-1", url: String(req.args?.url), status: 200 });

@@ -494,8 +494,8 @@ function issue(result: { success: boolean; error?: { issues: { path: (string | n
 
 /**
  * The runner's own report of its mutation guard (status.mutationGuard; not in the contract schema, so
- * read from the raw result): installed, WebSockets blocked, and exactly the configured origins. An
- * image without the guard is refused.
+ * read from the raw result): installed, WebSockets and workers blocked, the feature opt-outs effective,
+ * and exactly the configured origins. An image without the guard is refused.
  */
 export function mutationGuardFailures(rawStatus: unknown, expectedOrigins: string[]): string[] {
   const guard = record(record(rawStatus).mutationGuard);
@@ -503,6 +503,10 @@ export function mutationGuardFailures(rawStatus: unknown, expectedOrigins: strin
   const failures: string[] = [];
   if (guard.installed !== true) failures.push("mutationGuardMissing");
   if (guard.websockets !== "blocked") failures.push("websocketsNotBlocked");
+  if (guard.workers !== "blocked") failures.push("workersNotBlocked");
+  // The runner checks the browser process's effective --disable-features (Reporting, NEL, DoH off).
+  const features = record(record(rawStatus).disabledFeatures);
+  if (!Array.isArray(features.failures) || features.failures.length > 0) failures.push("disabledFeaturesNotEffective");
   if (!origins || JSON.stringify([...origins].sort()) !== JSON.stringify([...expectedOrigins].sort())) failures.push("mutationOriginsMismatch");
   return failures;
 }

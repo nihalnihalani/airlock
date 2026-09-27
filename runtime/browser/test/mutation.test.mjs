@@ -11,6 +11,9 @@ import {
   parseMutationOrigins,
 } from "../src/mutation.mjs";
 import { SessionState } from "../src/state.mjs";
+import vm from "node:vm";
+import { AIRLOCK_DISABLED_FEATURES, PLAYWRIGHT_DISABLED_FEATURES, chromiumLaunchArgs, featureFlagFailures } from "../src/launch.mjs";
+import { WORKER_BLOCK_SCRIPT } from "../src/mutation.mjs";
 
 const FORMS = "https://forms.airlock.example";
 
@@ -101,4 +104,41 @@ test("approval inputs never carry their value in an observation", () => {
   assert.equal(isApprovalInputName("AIRLOCK_APPROVAL "), true);
   assert.equal(isApprovalInputName("approval"), false);
   assert.equal(isApprovalInputName(null), false);
+});
+
+test("a GET/HEAD/OPTIONS request carrying a body is a mutation", () => {
+  const none = new Set();
+  const forms = new Set([FORMS]);
+  assert.deepEqual(mutationDecision("OPTIONS", "https://example.com/x", none, true), { allowed: false, method: "OPTIONS+BODY" });
+  assert.equal(mutationDecision("options", "https://example.com/x", none, true).allowed, false);
+  assert.equal(mutationDecision("GET", "https://example.com/x", none, true).allowed, false);
+  assert.equal(mutationDecision("OPTIONS", "https://example.com/x", none, false).allowed, true);
+  assert.equal(mutationDecision("OPTIONS", `${FORMS}/f`, forms, true).allowed, true);
+});
+
+test("Worker and SharedWorker are removed from a document, non-configurably", () => {
+  const sandbox = vm.createContext({ DOMException, Worker: class {}, SharedWorker: class {} });
+  vm.runInContext(WORKER_BLOCK_SCRIPT, sandbox);
+  for (const name of ["Worker", "SharedWorker"]) {
+    assert.throws(() => vm.runInContext(`new ${name}("/w.js")`, sandbox), /Workers are disabled/);
+    assert.throws(() => vm.runInContext(`"use strict"; globalThis.${name} = function () {}`, sandbox));
+    assert.throws(() => vm.runInContext(`Object.defineProperty(globalThis, "${name}", { value: 1 })`, sandbox));
+  }
+});
+
+test("one merged --disable-features list: Playwright's plus Airlock's; overrides are detected", () => {
+  const args = chromiumLaunchArgs("http://egress:3128");
+  const lists = args.filter((a) => a.startsWith("--disable-features="));
+  assert.equal(lists.length, 1);
+  const features = lists[0].slice("--disable-features=".length).split(",");
+  for (const f of [...PLAYWRIGHT_DISABLED_FEATURES, ...AIRLOCK_DISABLED_FEATURES, "Reporting", "NetworkErrorLogging"]) assert.ok(features.includes(f), f);
+  assert.ok(args.includes("--proxy-server=http://egress:3128"));
+  assert.ok(!chromiumLaunchArgs(null).some((a) => a.startsWith("--proxy")));
+  assert.ok(!args.some((a) => a.startsWith("--no-sandbox")));
+  // Browser argv as Playwright builds it: its own list first, then ours (last wins in Chromium).
+  const playwright = `--disable-features=${PLAYWRIGHT_DISABLED_FEATURES.join(",")}`;
+  assert.deepEqual(featureFlagFailures(["chrome", playwright, ...args]), []);
+  assert.deepEqual(featureFlagFailures(["chrome", playwright, "--disable-features=DnsOverHttps,AsyncDns,Reporting,NetworkErrorLogging"]).filter((f) => f.startsWith("overridden:")).length, PLAYWRIGHT_DISABLED_FEATURES.length);
+  assert.deepEqual(featureFlagFailures(["chrome", ...args, "--disable-features=Translate"]).includes("missing:Reporting"), true);
+  assert.deepEqual(featureFlagFailures(["chrome"]), ["noDisableFeatures"]);
 });

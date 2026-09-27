@@ -5,11 +5,19 @@
 // browser context makes is routed through Playwright's interception (the page cannot opt out), and
 // any request whose method is not GET/HEAD/OPTIONS is aborted unless its origin is one of the exact
 // https origins the supervisor configured in AIRLOCK_BROWSER_MUTATION_ORIGINS (the controlled form
-// destination; empty = none). WebSockets are refused outright (no origin exception): a socket is a
-// bidirectional channel whose frames the guard cannot classify.
+// destination; empty = none). A GET/HEAD/OPTIONS request that carries a body (e.g. `fetch(url,
+// { method: "OPTIONS", body })`) is treated as a mutation too. WebSockets are refused outright (no
+// origin exception): a socket is a bidirectional channel whose frames the guard cannot classify.
+//
+// Workers: Playwright's WebSocket routing (like every init script) reaches documents only, not
+// workers, and CDP URL blocking does not apply to WebSockets; and a SHARED worker's HTTP requests are
+// not seen by the context route at all (a dedicated worker's are). All verified in the image
+// (apps/supervisor/test/browser-mutation-integration.test.ts, in-image harness). So `Worker` and
+// `SharedWorker` are removed from every document by an init script (constructing one throws a
+// SecurityError); service workers are blocked at launch. No worker can start.
 //
 // Covered by the route: form submissions (any target, including new tabs), fetch/XHR, fetch
-// keepalive, navigator.sendBeacon, <a ping>, requests from dedicated workers, and upload
+// keepalive, navigator.sendBeacon, <a ping>, CSP report-uri reports, and upload
 // submissions (an `upload` op only sets files on an input; the POST that submits them is a mutation
 // like any other). Service workers are blocked at launch, so none can bypass the context route.
 //
@@ -65,12 +73,14 @@ export function boundedRequestUrl(raw) {
 }
 
 /**
- * The decision for one HTTP(S) request: GET/HEAD/OPTIONS pass; every other method passes only to an
- * exact origin in `origins` over https. Returns { allowed, method } (method upper-cased, bounded).
+ * The decision for one HTTP(S) request: GET/HEAD/OPTIONS without a body pass; anything else (another
+ * method, or a safe method carrying a body) passes only to an exact origin in `origins` over https.
+ * Returns { allowed, method } (method upper-cased, bounded; `+BODY` marks a safe method with a body).
  */
-export function mutationDecision(method, rawUrl, origins) {
-  const m = String(method ?? "").toUpperCase().slice(0, 16);
-  if (SAFE_METHODS.has(m)) return { allowed: true, method: m };
+export function mutationDecision(method, rawUrl, origins, hasBody = false) {
+  const upper = String(method ?? "").toUpperCase().slice(0, 16);
+  if (SAFE_METHODS.has(upper) && !hasBody) return { allowed: true, method: upper };
+  const m = SAFE_METHODS.has(upper) ? `${upper}+BODY` : upper;
   let url;
   try { url = new URL(rawUrl); } catch { return { allowed: false, method: m }; }
   return { allowed: url.protocol === "https:" && origins.has(url.origin), method: m };
@@ -78,11 +88,27 @@ export function mutationDecision(method, rawUrl, origins) {
 
 /**
  * Install the guard on a Playwright BrowserContext. `onBlocked({ method, url, page })` is called for
- * each refusal (url already bounded; page null when unknown). Resolves once both routes are registered.
+ * each refusal (url already bounded; page null when unknown). Resolves once the worker block and
+ * both routes are registered.
  */
-export async function installMutationGuard(context, origins, onBlocked) {
+/**
+ * Runs before any page script in every document (all frames, including about:blank children):
+ * removes the Worker and SharedWorker constructors, non-configurably.
+ */
+export const WORKER_BLOCK_SCRIPT = `(() => {
+  const refuse = function Worker() { throw new DOMException("Workers are disabled in this browser (Airlock)", "SecurityError"); };
+  for (const name of ["Worker", "SharedWorker"]) {
+    try { Object.defineProperty(globalThis, name, { value: refuse, writable: false, configurable: false, enumerable: false }); } catch {}
+  }
+})();`;
+
+export async function installMutationGuard(context, origins, onBlocked, { blockWorkers = true } = {}) {
+  // blockWorkers:false exists only for the in-image harness's control run (proves the block is needed).
+  if (blockWorkers) await context.addInitScript({ content: WORKER_BLOCK_SCRIPT });
   await context.route("**/*", async (route, request) => {
-    const decision = mutationDecision(request.method(), request.url(), origins);
+    let hasBody = false;
+    try { hasBody = (request.postDataBuffer()?.length ?? 0) > 0; } catch { hasBody = true; } // unreadable body: treat as present
+    const decision = mutationDecision(request.method(), request.url(), origins, hasBody);
     if (decision.allowed) {
       await route.continue().catch(() => {});
       return;
