@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-09-27T16:45:49.029Z",
+  "revision": "cce47193023691fcfe7e1ae5b3b6102c424fb930-dirty",
+  "profileId": "tabulate-365",
+  "contractDigest": "105cdb9790bbadb5c80e008d01292f6cb41b35dde4309335a716099fc4ecb358",
+  "driver": "vultr",
+  "model": "glm-5.3-normalize",
+  "inferenceHost": "api.vultrinference.com",
+  "runtime": "kata",
+  "devUnsafe": false,
+  "runtimeImageId": "sha256:9952f7eb8b4830391bddfcd2ec81207bfcd02dc8280bab0b8b8f25e9a19ec238",
+  "adapterDigest": "8237fedeec832e06c13096fb187c981c9faf0b09d0cdfcae7f9e3ad1120812f0",
+  "attempts": [
+    {
+      "taskId": "task-9e75876b72501112",
+      "outcome": "CANDIDATE_PASSED_CHECKS",
+      "candidateDigest": "471b4aed40e98916423a3c441c20acdfe69eb5e158470599266a44952c2e5993",
+      "modelCalls": 16,
+      "modelHosts": [
+        "api.vultrinference.com"
+      ],
+      "durationMs": 97786
+    },
+    {
+      "taskId": "task-fa46ed079f00a0d2",
+      "outcome": "CANDIDATE_PASSED_CHECKS",
+      "candidateDigest": "c90a707d0ac9bd257a9c6848eb653470d398b4fad7c38d75b08e48ec7e510ccf",
+      "modelCalls": 21,
+      "modelHosts": [
+        "api.vultrinference.com"
+      ],
+      "durationMs": 101922
+    },
+    {
+      "taskId": "task-e161eb798cb8b6d4",
+      "outcome": "CANDIDATE_PASSED_CHECKS",
+      "candidateDigest": "405e443023e79d25df0c57ebf98f78650732149f50a32a994ca4d622c92d2447",
+      "modelCalls": 8,
+      "modelHosts": [
+        "api.vultrinference.com"
+      ],
+      "durationMs": 53952
+    }
+  ],
+  "passed": 3,
+  "total": 3
+}
