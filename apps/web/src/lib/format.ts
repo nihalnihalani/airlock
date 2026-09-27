@@ -108,3 +108,19 @@ export function hostnameOf(url: string): string {
     return url;
   }
 }
+
+/** Display tone for a chip or dot. Tones restate authoritative fields; they never decide anything. */
+export type Tone = "neutral" | "ok" | "warn" | "bad" | "info";
+
+export function outcomeTone(outcome: Outcome): Tone {
+  if (outcome === "CANDIDATE_PASSED_CHECKS") return "ok";
+  if (outcome === "INCONCLUSIVE" || outcome === "STOPPED_LIMIT" || outcome === "NOT_REPRODUCED") return "warn";
+  return "bad";
+}
+
+export function statusTone(status: TaskStatus): Tone {
+  if (status === "running" || status === "queued") return "info";
+  if (status === "done") return "neutral";
+  if (status === "cancelling") return "warn";
+  return "bad";
+}
