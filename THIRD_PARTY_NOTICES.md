@@ -35,7 +35,37 @@ No files under `apps/control` copy OpenBot code. `verifier/`, `artifacts/`, `vul
 
 ## apps/web
 
-All new Airlock code; nothing copied or adapted from either upstream.
+The UI's look and layout follow OpenBot's app (`app/`, pin above). Copied or adapted files keep the MIT header:
+
+| Airlock file | Upstream path | Modifications |
+|---|---|---|
+| `apps/web/src/styles.css` | OpenBot `app/src/styles.css` | OpenBot's oklch palette (light and dark), radii, `@theme inline` block, base layer, scrollbar and `.tool-line-running` shimmer kept. Dropped the shadcn, prompt-area and streamdown imports and the websandbox rule; added a `--warning` token; dark palette and `dark:` variant follow `prefers-color-scheme` in CSS instead of a stored `.dark` class. The `data-open`/`data-closed`/`data-active`/`data-horizontal`/`data-vertical` variants and `no-scrollbar` are re-declared from `shadcn/tailwind.css` (MIT, shadcn); `scroll-fade-b` is a static simplification. |
+| `apps/web/src/components/ui/button.tsx` | OpenBot `app/src/components/ui/button.tsx` | Imports made relative. |
+| `apps/web/src/components/ui/tooltip.tsx` | OpenBot `app/src/components/ui/tooltip.tsx` | Imports made relative; `"use client"` dropped. |
+| `apps/web/src/components/ui/separator.tsx` | OpenBot `app/src/components/ui/separator.tsx` | Imports made relative. |
+| `apps/web/src/components/ui/skeleton.tsx` | OpenBot `app/src/components/ui/skeleton.tsx` | Imports made relative. |
+| `apps/web/src/components/ui/input.tsx` | OpenBot `app/src/components/ui/input.tsx` | Imports made relative. |
+| `apps/web/src/components/ui/textarea.tsx` | OpenBot `app/src/components/ui/textarea.tsx` | Imports made relative. |
+| `apps/web/src/components/ui/message.tsx` | OpenBot `app/src/components/ui/message.tsx` | Imports made relative. |
+| `apps/web/src/components/ui/bubble.tsx` | OpenBot `app/src/components/ui/bubble.tsx` | Imports made relative. |
+| `apps/web/src/components/ui/empty.tsx` | OpenBot `app/src/components/ui/empty.tsx` | Imports made relative. |
+| `apps/web/src/components/ui/item.tsx` | OpenBot `app/src/components/ui/item.tsx` | Imports made relative. |
+| `apps/web/src/components/ui/sheet.tsx` | OpenBot `app/src/components/ui/sheet.tsx` | Imports made relative. |
+| `apps/web/src/components/ui/sidebar.tsx` | OpenBot `app/src/components/ui/sidebar.tsx` | Imports made relative; `"use client"` dropped; `keyOf` inlined from `app/src/lib/hotkeys/hotkeys.ts`. |
+| `apps/web/src/components/ui/message-scroller.tsx` | OpenBot `app/src/components/ui/message-scroller.tsx` | Same slots, classes and scroll-to-end button; the `@shadcn/react/message-scroller` primitive underneath is replaced by a small stick-to-bottom hook (`useStickToBottom`), so that package is not a dependency. |
+| `apps/web/src/components/layout/sidebar-shell.tsx` | OpenBot `app/src/components/layout/sidebar-shell.tsx` | Imports made relative; localStorage access wrapped in try/catch. |
+| `apps/web/src/components/layout/sidebar-toggle.tsx` | OpenBot `app/src/components/layout/sidebar-toggle.tsx` | Imports made relative. |
+| `apps/web/src/components/layout/row-mark.tsx` | OpenBot `app/src/components/layout/row-mark.tsx` | Imports made relative. |
+| `apps/web/src/components/layout/detail-panel.tsx` | OpenBot `app/src/components/layout/detail-panel.tsx` | `motion` removed: CSS width transition and tw-animate-css fade instead; imports made relative. |
+| `apps/web/src/hooks/use-mobile.ts` | OpenBot `app/src/hooks/use-mobile.ts` | Unchanged apart from the header. |
+| `apps/web/src/lib/utils.ts` | OpenBot `app/src/lib/utils.ts` | Unchanged apart from the header (`cn`). |
+| `apps/web/src/lib/sidebar.ts` | OpenBot `app/src/lib/sidebar.ts` | Storage key renamed to `airlock-sidebar`. |
+| `apps/web/src/components/app-sidebar/app-sidebar.tsx` | OpenBot `app/src/components/app-sidebar/app-sidebar.tsx, channel-item-content.tsx` | Rewritten for Airlock data: the roster is the polled task list (issue title, profile, status dot, outcome badge, relative time, scripted tag), Hostile input as a pinned channel, role footer with sign in/out. Header/brand row, search field, row anatomy and classes, empty states and rail kept. No TanStack Router/Query, motion, dropdown or channel mutations. |
+| `apps/web/src/pages/LoginPage.tsx` | OpenBot `app/src/routes/sign.tsx` | Centred column, mark, heading and full-width outline controls kept; OAuth/SSO providers replaced by the role password form, "Continue as viewer" and the current role; CSS entrance stagger instead of motion. No better-auth. |
+
+Design only, no code copied: `components/thread/tool-card.tsx` and the row disclosures follow OpenBot's `components/channels/tool-line.tsx` (one line, native `<details>`, rotating chevron); `components/thread/composer-frame.tsx` uses the classes of OpenBot's compact composer (`components/channels/composer/composer.tsx`); `components/layout/page-header.tsx` is the 48px channel header of `routes/_authed/_app/channel/$channelId.tsx`; the thread column (`max-w-2xl`, `gap-6`, user bubble `muted`, assistant bubble `ghost`) follows `components/channels/chat-transcript.tsx`. Airlock renders no Markdown (OpenBot's Streamdown is not used) and depends on no CopilotKit, AG-UI or better-auth package.
+
+New Airlock code: `lib/thread.ts`, `lib/taskList.ts`, `lib/eventLog.ts`, `lib/eventViews.ts`, `lib/preview.ts`, `lib/api.ts`, `lib/router.ts`, `lib/format.ts`, the hooks `session.tsx`, `useTaskEvents.ts`, `useTaskList.ts`, `components/common.tsx`, `components/thread/*`, `components/detail/*`, the panels in `components/*.tsx`, the other pages and all of `apps/web/test/`.
 
 ## runtime/python and profile adapters
 
