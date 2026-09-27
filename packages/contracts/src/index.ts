@@ -85,7 +85,7 @@ export const TaskStatus = z.enum([
 export type TaskStatus = z.infer<typeof TaskStatus>;
 
 /** Container roles the supervisor may create. Each is disposable and per attempt. */
-export const SandboxRole = z.enum(["author", "baseline", "candidate", "preview", "hostile"]);
+export const SandboxRole = z.enum(["author", "baseline", "candidate", "preview", "hostile", "browser"]);
 export type SandboxRole = z.infer<typeof SandboxRole>;
 
 // ---------------------------------------------------------------------------------------------
@@ -414,6 +414,12 @@ export const CreateAttemptRequest = z.object({
    * deadline does. Absent: authorized until the deadline (older controllers).
    */
   authorizedUntil: isoDate.optional(),
+  /**
+   * Browser role only: the destinations the attempt's egress proxy allows (exact hostnames, or
+   * `.suffix` for subdomains only). Set by the controller from task policy, never by a page or the
+   * model. Empty or absent: every destination is refused.
+   */
+  egressAllow: z.array(z.string().min(1).max(253).regex(/^\.?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/)).max(64).optional(),
 });
 /** Extends an attempt's execution authorization. Never past the deadline; never revives revoked work. */
 export const RenewRequest = z.object({ ref: AttemptRef, operation: Operation, authorizedUntil: isoDate });
@@ -888,3 +894,148 @@ export function compareCodePoints(a: string, b: string): number {
     if (cx !== cy) return cx < cy ? -1 : 1;
   }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Browser runner protocol (runtime/browser/PROTOCOL.md, schemaVersion 1). The runner is a fixed
+// program inside the browser sandbox; its responses are untrusted observations, never authority.
+// ---------------------------------------------------------------------------------------------
+
+export const BROWSER_LIMITS = {
+  requestBytes: 256 * 1024,
+  responseBytes: 4 * 1024 * 1024,
+  screenshotBytes: 2 * 1024 * 1024,
+  textBytes: 32 * 1024,
+  controls: 300,
+  tabs: 5,
+  urlChars: 2048,
+  typeTextChars: 8192,
+  scrollDelta: 10_000,
+} as const;
+export const BROWSER_KEYS = ["Enter", "Tab", "Escape", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "PageUp", "PageDown", "Home", "End", "Backspace"] as const;
+
+const browserRef = z.string().regex(/^[a-z0-9]{1,16}$/i);
+const browserTabId = z.string().regex(/^tab-[0-9]{1,6}$/);
+const browserGeneration = z.number().int().nonnegative();
+const browserUrl = z
+  .string()
+  .max(BROWSER_LIMITS.urlChars)
+  .refine((u) => {
+    try {
+      const parsed = new URL(u);
+      return (parsed.protocol === "https:" || parsed.protocol === "http:") && !parsed.username && !parsed.password;
+    } catch {
+      return false;
+    }
+  }, "http(s) URL without credentials");
+
+export const BrowserOp = z.discriminatedUnion("op", [
+  z.object({ op: z.literal("status"), args: z.object({}).strict().optional() }),
+  z.object({ op: z.literal("navigate"), args: z.object({ url: browserUrl }).strict() }),
+  z.object({ op: z.literal("observe"), args: z.object({}).strict().optional() }),
+  z.object({ op: z.literal("click"), args: z.object({ ref: browserRef, generation: browserGeneration }).strict() }),
+  z.object({
+    op: z.literal("type"),
+    args: z.object({ ref: browserRef, generation: browserGeneration, text: z.string().max(BROWSER_LIMITS.typeTextChars), submit: z.boolean().optional() }).strict(),
+  }),
+  z.object({ op: z.literal("key"), args: z.object({ key: z.enum(BROWSER_KEYS), generation: browserGeneration }).strict() }),
+  z.object({
+    op: z.literal("scroll"),
+    args: z.object({ dx: z.number().int().min(-BROWSER_LIMITS.scrollDelta).max(BROWSER_LIMITS.scrollDelta).optional(), dy: z.number().int().min(-BROWSER_LIMITS.scrollDelta).max(BROWSER_LIMITS.scrollDelta).optional() }).strict(),
+  }),
+  z.object({ op: z.literal("screenshot"), args: z.object({ fullPage: z.boolean().optional() }).strict().optional() }),
+  z.object({ op: z.literal("tabs.list"), args: z.object({}).strict().optional() }),
+  z.object({ op: z.literal("tabs.switch"), args: z.object({ tabId: browserTabId }).strict() }),
+  z.object({ op: z.literal("tabs.close"), args: z.object({ tabId: browserTabId }).strict() }),
+]);
+export type BrowserOp = z.infer<typeof BrowserOp>;
+export type BrowserRequest = BrowserOp & { schemaVersion: 1; id?: string };
+
+export const BrowserErrorCode = z.enum([
+  "invalid_request",
+  "unsupported_schema",
+  "unknown_op",
+  "stale_reference",
+  "pending_review",
+  "navigation_failed",
+  "action_failed",
+  "timeout",
+  "screenshot_too_large",
+  "tab_not_found",
+  "last_tab",
+  "request_too_large",
+  "response_too_large",
+  "runner_unavailable",
+  "internal_error",
+]);
+export type BrowserErrorCode = z.infer<typeof BrowserErrorCode>;
+
+/** The runner's reply. `result` is op-specific (see the *Result schemas) and untrusted. */
+export const BrowserResponse = z.discriminatedUnion("ok", [
+  z.object({ schemaVersion: z.literal(1), id: z.string().nullable(), op: z.string().nullable(), ok: z.literal(true), result: z.unknown() }),
+  z.object({ schemaVersion: z.literal(1), id: z.string().nullable(), op: z.string().nullable(), ok: z.literal(false), error: BrowserErrorCode, message: z.string().max(512) }),
+]);
+export type BrowserResponse = z.infer<typeof BrowserResponse>;
+
+export const BrowserTab = z.object({ tabId: browserTabId, url: z.string().max(BROWSER_LIMITS.urlChars * 2), title: z.string().max(1024), active: z.boolean() });
+export const BrowserControl = z.object({
+  ref: browserRef,
+  role: z.string().max(64),
+  name: z.string().max(200),
+  value: z.string().max(200).optional(),
+  disabled: z.literal(true).optional(),
+  checked: z.boolean().optional(),
+});
+export const BrowserEvent = z.object({ at: z.string(), type: z.string().max(32) }).passthrough();
+export const BrowserObserveResult = z.object({
+  generation: browserGeneration,
+  tabId: browserTabId,
+  url: z.string(),
+  title: z.string(),
+  text: z.string(),
+  textTruncated: z.boolean(),
+  controls: z.array(BrowserControl).max(BROWSER_LIMITS.controls),
+  controlsTruncated: z.boolean(),
+  tabs: z.array(BrowserTab).max(BROWSER_LIMITS.tabs),
+  events: z.array(BrowserEvent),
+  droppedEvents: z.number().int().nonnegative(),
+  pendingReview: z.boolean(),
+});
+export type BrowserObserveResult = z.infer<typeof BrowserObserveResult>;
+export const BrowserScreenshotResult = z.object({
+  png: z.string(),
+  bytes: z.number().int().positive().max(BROWSER_LIMITS.screenshotBytes),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+  sha256: sha256Hex,
+  url: z.string(),
+  tabId: browserTabId,
+  generation: browserGeneration,
+  capturedAt: z.string(),
+});
+export type BrowserScreenshotResult = z.infer<typeof BrowserScreenshotResult>;
+export const BrowserStatusResult = z.object({
+  ready: z.literal(true),
+  browserVersion: z.string(),
+  generation: browserGeneration,
+  activeTabId: browserTabId.nullable(),
+  tabCount: z.number().int().nonnegative(),
+  uid: z.number().int(),
+  proxy: z.string(),
+  sandbox: z.object({ chromiumProcesses: z.number().int(), anyNoSandboxFlag: z.boolean(), zygotePresent: z.boolean(), renderersInNestedPidNamespace: z.boolean(), renderers: z.number().int() }),
+});
+export type BrowserStatusResult = z.infer<typeof BrowserStatusResult>;
+
+/** Supervisor route body: one runner operation on a live browser attempt. */
+export const BrowserOpRequest = z.object({ ref: AttemptRef, operation: Operation, request: BrowserOp });
+/**
+ * Supervisor reply: the runner's response plus the supervisor's own observation of the exec.
+ * `interrupted` means the runner was lost mid-operation: the outcome is unknown and the attempt
+ * is closed; the caller must never replay the operation.
+ */
+export const BrowserOpResult = z.object({
+  response: BrowserResponse.nullable(),
+  status: z.enum(["completed", "interrupted", "refused"]),
+  durationMs: z.number().int().nonnegative(),
+  generationBefore: browserGeneration.nullable(),
+});
+export type BrowserOpResult = z.infer<typeof BrowserOpResult>;
