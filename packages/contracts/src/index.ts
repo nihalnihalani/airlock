@@ -142,6 +142,8 @@ export const RuntimeInspection = z.object({
     privateIpc: z.boolean(),
     restartDisabled: z.boolean(),
     ownedLabels: z.boolean(),
+    /** Browser role: attached exactly to its per-attempt internal network (networkNone is then false by design). */
+    networkAsDesigned: z.boolean().optional(),
   }),
   allPassed: z.boolean(),
 });
@@ -170,6 +172,8 @@ export const HostListing = z.object({
   scope: z.literal("host"),
   containers: z.array(z.object({ name: z.string(), taskId: z.string().optional(), role: z.string().optional(), state: z.string().optional() })),
   volumes: z.array(z.string()),
+  /** Airlock-owned per-attempt networks (browser attempts). "(no sandboxes)" requires these empty too. */
+  networks: z.array(z.string()).optional(),
 });
 export type HostListing = z.infer<typeof HostListing>;
 
@@ -178,6 +182,8 @@ export const TeardownRecord = z.object({
   destroyedAt: isoDate,
   containersRemaining: z.array(z.string()),
   volumesRemaining: z.array(z.string()),
+  /** Browser attempts: per-attempt networks still present (clean requires none). */
+  networksRemaining: z.array(z.string()).optional(),
   clean: z.boolean(),
   /** The host-wide listing taken right after this teardown. */
   host: HostListing.optional(),
@@ -491,7 +497,14 @@ export type InvokeResult = z.infer<typeof InvokeResult>;
 
 export const RevokeRequest = z.object({ ref: AttemptRef, operation: Operation });
 export const DestroyRequest = z.object({ ref: AttemptRef, operation: Operation });
-export const DestroyResult = z.object({ teardown: TeardownRecord });
+/** One egress proxy decision (a JSON line from the per-attempt proxy). Untrusted-origin text, bounded. */
+export const EgressDecision = z
+  .object({ at: z.string().optional(), host: z.string().max(253), port: z.number().int().optional(), decision: z.enum(["allow", "deny"]), reason: z.string().max(128) })
+  .passthrough();
+export type EgressDecision = z.infer<typeof EgressDecision>;
+export const EgressSummary = z.object({ allowed: z.number().int().nonnegative(), denied: z.number().int().nonnegative() });
+
+export const DestroyResult = z.object({ teardown: TeardownRecord, egressSummary: EgressSummary.optional() });
 
 /** Hostile-input panel: one-shot author-profile sandbox, no repair pipeline. Judge role only. */
 export const HostileRunRequest = z.object({
@@ -1043,3 +1056,16 @@ export const BrowserOpResult = z.object({
   generationBefore: browserGeneration.nullable(),
 });
 export type BrowserOpResult = z.infer<typeof BrowserOpResult>;
+
+/** What the supervisor established when it handed out a browser attempt (GET /attempts/:id/browser). */
+export const BrowserEvidence = z.object({
+  status: BrowserStatusResult,
+  browserInspection: RuntimeInspection,
+  egressInspection: RuntimeInspection,
+  probe: IsolationProbe.optional(),
+  networks: z.object({ internal: z.string(), egress: z.string() }),
+  egressAllow: z.array(z.string()),
+});
+export type BrowserEvidence = z.infer<typeof BrowserEvidence>;
+export const EgressLog = z.object({ decisions: z.array(EgressDecision).max(200), summary: EgressSummary });
+export type EgressLog = z.infer<typeof EgressLog>;
