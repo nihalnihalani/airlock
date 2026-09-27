@@ -7,9 +7,9 @@ Durable state for the Airlock completion work (prompt in research/41 and the pas
 - Branch: `fix/milestone-1-guarantees` (pushed). Base: `main` @ `a1ae88d`. HEAD tracked in git.
 - Milestones 1–5 implemented and pushed; milestone 6 (independent verification, deployment) in progress.
 - Team (Claude Code subagents, Opus 5.5): control_developer, execution_developer, product_developer, verifier_tester, devils_advocate; the lead owns contracts, lockfile, integration and deploy scripts. The experimental "agent teams" feature was not used; each role ran as a separate subagent with file ownership.
-- **External blocker:** no Vultr access here (`VULTR_API_KEY` absent, no `data/deploy/` state, no inference key). Blocked: deployment, Kata/gVisor gates (D1, C4, G4, P1–P3), live repair gate and receipts (G2), vision round trip (C20), live-model evidence, demo recording. Local evidence is Colima runc, labelled dev-unsafe.
+- **Deployed on Vultr (27 Sep 2026):** this branch runs at https://155-138-198-12.sslip.io (VM A `vc2-2c-4gb`, VM B VX1 `vx1-g-4c-16g-240s`, Kata). Preflight 49/49, public smoke 67 checks, live repair gate 3/3 (receipt committed; repair available), Vultr acceptance 9/9 with the live model. The earlier deployment of `main` was replaced at the user's direction.
 - Independent review: devil's advocate R1 (non-GET mutations off the form destination) fixed and re-reviewed (31bf40f, 179542f — two further worker leaks found and closed); S1–S3, L1 fixed (ab34815, daea39e). Verifier: 20/20 local acceptance rows; F1 (fixture data untracked) a6f3b9f, F2 (non-hermetic upload test) 0d60e64, F3 (no cleanup retry for finished tasks) e38367d fixed after the run.
-- Remaining (blocked on Vultr): deployment of this branch, Kata/gVisor runtime gates, D1, live gate receipt, vision round trip, live-model evidence, demo recording. Documented limitation: GET requests to owner-allowlisted hosts can carry data; pages needing web workers do not run.
+- Remaining: the deployment demo recording (in progress). Documented limitations: GET to owner-allowlisted hosts can carry data; pages needing web workers do not run; RESULT_VERIFIED is structural; single control-plane process.
 
 Decisions: tmpfs workspace kept pending Kata measurement (D1); one live attempt per task per role family (browser, code); scripted drivers are labelled diagnostics everywhere and cannot produce live-gate receipts; RESULT_VERIFIED means the profile's structural checks passed, not that the answer is correct.
 
@@ -40,7 +40,7 @@ Status vocabulary: `open`, `in progress`, `implemented-unverified`, `verified (l
 | M11 | 2 | control | verified (local) | VerificationRecord.outcome — cf86da6 |
 | M12 | 2 | supervisor | verified (local, real Docker) | readiness exec before dispatch — 2c662a8 |
 | M13 | 2 | control | conditional | no model case-proposal tool exists |
-| D1 | 6 | supervisor+lead | blocked (deployment); decision recorded | docs/decisions/D1-workspace-storage.md: tmpfs+hold kept provisionally, fails closed; closes on VX1 preflight D1 checks |
+| D1 | 6 | supervisor+lead | verified (Vultr: Kata on VX1) | quota holds (dd stopped at 127 MiB), post-stop collection works, ~239 MiB host RAM per full workspace within the tmpfs+VM-overhead budget; decision recorded (docs/decisions/D1) — docs/evidence/vultr/preflight-*.txt (cce4719) |
 | D2 | 2 | supervisor+runtime | verified (local, real Docker) | digest-pinned base; imageId enforced; retag test — 2c662a8 |
 | D3 | 2 | control | verified (local, real Docker) | one sandbox per case — cf86da6; smoke 66/66 |
 | D4 | 2 | supervisor+control | verified (local) | AIRLOCK_PRODUCTION on both planes; deploy sets it — 2c662a8, a5f9bce |
@@ -56,9 +56,9 @@ Status vocabulary: `open`, `in progress`, `implemented-unverified`, `verified (l
 | D14 | 6 | lead | done | CLAUDE.md layout and scope updated — c42b7aa |
 | D15 | 2 | supervisor | verified (local) | public health {ok:true} on both planes — 2c662a8, 9168d5d |
 | G1 | 2 | control | verified (local) | provenance-checked live gate + receipts bound to image/adapter/store; running it needs Vultr — a5f9bce |
-| G2 | 6 | lead | blocked (deployment) | committed sanitized evidence needs a deployment run |
+| G2 | 6 | lead | verified (Vultr: Kata on VX1) | live gate receipt 3/3 (glm-5.3, kata) and public smoke 67 checks committed — f223c19 |
 | G3 | 2 | supervisor | verified (local, real Docker runc) | detached child dies on expiry/revoke/destroy — 2c662a8; Kata blocked |
-| G4 | 6 | lead | blocked (deployment) | runtime gates on Kata |
+| G4 | 6 | lead | verified (Vultr: Kata on VX1) | background child dies, destroyed id refused, quota holds on Kata — docs/evidence/vultr/preflight-*.txt (cce4719) |
 | G5 | 2 | control+web | verified (local, real Docker runc) | forged '312 passed' reaches comparator → CHECKS_FAILED; smoke asserts it |
 | G6 | 2 | web | verified (local, real browser check) | diagnostics catalog + UI launch — 9168d5d, 083d977 |
 | G7 | 2 | control | verified (local) | resume from sealed bundle — cf86da6, a5f9bce |
@@ -69,20 +69,20 @@ Status vocabulary: `open`, `in progress`, `implemented-unverified`, `verified (l
 | U5 | 2 | control+web | verified (local) | repair availability from receipts; baseline-only tasks — 9168d5d, a5f9bce |
 | U6 | 2 | control | verified (local) | CSP/nosniff/no-referrer on every response — 9168d5d |
 | U7 | 2 | web | verified (local) | all four modules imported; getHealth removed — 083d977 |
-| P1 | 6 | lead | blocked (deployment) | SSH restriction on VMs |
-| P2 | 6 | lead | blocked (deployment) | host headroom measured |
-| P3 | 6 | lead | blocked (deployment) | HTTPS/restart verification |
+| P1 | 6 | lead | done (Vultr) | SSH allowed only from the deploying machine's IPs by provision.sh firewall groups; supervisor port only from VM A's VPC address (preflight ufw check) |
+| P2 | 6 | lead | verified (Vultr) | host MemAvailable measured under a full workspace; admission budgets from capacity.ts; /capacity on the supervisor |
+| P3 | 6 | lead | verified (Vultr: Kata on VX1) | public HTTPS via Caddy/Let's Encrypt at https://155-138-198-12.sslip.io; services are systemd units with restart; smoke + acceptance through the public URL |
 | P4 | - | optional | optional | NetBird add-on; not claimed |
-| C1 | 3 | execution/control/web | verified (local, real Docker runc) | browser image/runner/egress + supervisor browser role — fcc8170, b2de0d6; gVisor/Kata + host iptables unverified |
-| C2 | 3 | execution/control/web | verified (local, real Docker runc) | browser image/runner/egress + supervisor browser role — fcc8170, b2de0d6; gVisor/Kata + host iptables unverified |
-| C3 | 3 | execution/control/web | verified (local, real Docker runc) | browser image/runner/egress + supervisor browser role — fcc8170, b2de0d6; gVisor/Kata + host iptables unverified |
-| C4 | 3 | execution/control/web | blocked (deployment) | Chromium sandbox under gVisor/Kata needs VX1 |
-| C5 | 3 | execution/control/web | verified (local, real Docker runc) | browser image/runner/egress + supervisor browser role — fcc8170, b2de0d6; gVisor/Kata + host iptables unverified |
-| C6 | 3 | execution/control/web | verified (local, real Docker runc) | browser image/runner/egress + supervisor browser role — fcc8170, b2de0d6; gVisor/Kata + host iptables unverified |
-| C7 | 3 | execution/control/web | verified (local, real Docker runc) | browser image/runner/egress + supervisor browser role — fcc8170, b2de0d6; gVisor/Kata + host iptables unverified |
-| C8 | 3 | execution/control/web | implemented-unverified | DOCKER-USER egress guard (dry-run tested); needs VX1 host |
-| C9 | 3 | execution/control/web | verified (local, real Docker runc) | browser image/runner/egress + supervisor browser role — fcc8170, b2de0d6; gVisor/Kata + host iptables unverified |
-| C10 | 3 | execution/control/web | verified (local, real Docker runc) | browser image/runner/egress + supervisor browser role — fcc8170, b2de0d6; gVisor/Kata + host iptables unverified |
+| C1 | 3 | execution/control/web | verified (Vultr: Kata on VX1) | exercised on the deployment (preflight browser/analysis/node checks and acceptance) — docs/evidence/vultr/preflight-*.txt (cce4719); docs/evidence/vultr/acceptance-f223c19 (e79f9b9) |
+| C2 | 3 | execution/control/web | verified (Vultr: Kata on VX1) | exercised on the deployment (preflight browser/analysis/node checks and acceptance) — docs/evidence/vultr/preflight-*.txt (cce4719); docs/evidence/vultr/acceptance-f223c19 (e79f9b9) |
+| C3 | 3 | execution/control/web | verified (Vultr: Kata on VX1) | exercised on the deployment (preflight browser/analysis/node checks and acceptance) — docs/evidence/vultr/preflight-*.txt (cce4719); docs/evidence/vultr/acceptance-f223c19 (e79f9b9) |
+| C4 | 3 | execution/control/web | verified (Vultr: Kata on VX1) | Chromium's own sandbox active under Kata (no --no-sandbox, zygote, nested PID ns) — docs/evidence/vultr/preflight-*.txt (cce4719) |
+| C5 | 3 | execution/control/web | verified (Vultr: Kata on VX1) | exercised on the deployment (preflight browser/analysis/node checks and acceptance) — docs/evidence/vultr/preflight-*.txt (cce4719); docs/evidence/vultr/acceptance-f223c19 (e79f9b9) |
+| C6 | 3 | execution/control/web | verified (Vultr: Kata on VX1) | exercised on the deployment (preflight browser/analysis/node checks and acceptance) — docs/evidence/vultr/preflight-*.txt (cce4719); docs/evidence/vultr/acceptance-f223c19 (e79f9b9) |
+| C7 | 3 | execution/control/web | verified (Vultr: Kata on VX1) | exercised on the deployment (preflight browser/analysis/node checks and acceptance) — docs/evidence/vultr/preflight-*.txt (cce4719); docs/evidence/vultr/acceptance-f223c19 (e79f9b9) |
+| C8 | 3 | execution/control/web | verified (Vultr) / guard rules installed | metadata refused, direct sockets blocked, egress guard unit applied by deploy; per-rule iptables audit not separately measured |
+| C9 | 3 | execution/control/web | verified (Vultr: Kata on VX1) | exercised on the deployment (preflight browser/analysis/node checks and acceptance) — docs/evidence/vultr/preflight-*.txt (cce4719); docs/evidence/vultr/acceptance-f223c19 (e79f9b9) |
+| C10 | 3 | execution/control/web | verified (Vultr: Kata on VX1) | exercised on the deployment (preflight browser/analysis/node checks and acceptance) — docs/evidence/vultr/preflight-*.txt (cce4719); docs/evidence/vultr/acceptance-f223c19 (e79f9b9) |
 | C11 | 4 | execution/control/web | verified (local, real Docker runc) | navigate/observe with ARIA controls — fcc8170, b2de0d6, fde81e1 |
 | C12 | 4 | execution/control/web | verified (local, real Docker runc) | click/type/key/scroll bound to generation — fcc8170 |
 | C13 | 4 | execution/control/web | verified (local, real Docker runc) | stale refs refused; real-Docker stale click — b2de0d6 |
@@ -92,21 +92,21 @@ Status vocabulary: `open`, `in progress`, `implemented-unverified`, `verified (l
 | C17 | 4 | execution/control/web | verified (local, real Docker runc) | uploads of sha256-checked owner artifacts; public test form — d8450d3, 7c1ab8e |
 | C18 | 4 | execution/control/web | verified (fakes) | task-profiles registry + controller-owned completion — fde81e1 |
 | C19 | 4 | execution/control/web | verified (fakes) | screenshot artifacts with url/time/dims/sha256 — fde81e1 |
-| C20 | 4 | execution/control/web | blocked (inference key) | image parts implemented and gated (AIRLOCK_MODEL_VISION); live round trip needs a Vultr key — fde81e1 |
+| C20 | 4 | execution/control/web | verified (live Vultr inference) | image round trip with glm-5.3 + 4 other models — ee8d1be; screenshot sent to the model in a live task (local run) |
 | C21 | 4 | execution/control/web | verified (fakes) | model call-site inventory in apps/control/README.md; pinned URL — fde81e1 |
 | C22 | 5 | execution/control/web | verified (fakes) | authenticated rate-limited screenshot live view — 7c1ab8e, 22dcce5 |
 | C23 | 5 | execution/control/web | verified (fakes) | exclusive take/release with settle and generation fence — 7c1ab8e |
 | C24 | 5 | execution/control/web | verified (fakes) | human actions keep egress/deadline/budget; never approvals — 7c1ab8e |
 | C25 | 5 | execution/control/web | verified (fakes) | proposals + one-use CAS decide — 9d4b94b, 7c1ab8e |
-| C26 | 5 | execution/control/web | verified (fakes + real Chromium on fixtures) | controller-driven submit, destination enforces HMAC-bound payload — 0ff1e56, 7c1ab8e |
-| C27 | 5 | execution/control/web | verified (local, real Chromium) | runner refuses non-GET/HEAD/OPTIONS and WebSockets off configured origins; workers disabled; httpbin + in-image harness — 31bf40f, 179542f |
+| C26 | 5 | execution/control/web | verified (Vultr: Kata on VX1) | approval confirmed by the destination's receipt through the public URL; code never visible to the model — docs/evidence/vultr/acceptance-f223c19 (e79f9b9) |
+| C27 | 5 | execution/control/web | verified (Vultr: Kata on VX1) | exercised on the deployment (preflight browser/analysis/node checks and acceptance) — docs/evidence/vultr/preflight-*.txt (cce4719); docs/evidence/vultr/acceptance-f223c19 (e79f9b9) |
 | C28 | 4 | execution/control/web | verified (fakes) | uploads, artifacts, owner scope, quotas, nosniff — fde81e1 |
-| C29 | 4 | execution/control/web | verified (local, real Docker runc) | collector for CSV/JSON/PNG/code outputs — dffdc55, d8450d3 |
-| C30 | 4 | execution/control/web | verified (local, real Docker runc) | offline Node image + role — dffdc55, d8450d3 |
+| C29 | 4 | execution/control/web | verified (Vultr: Kata on VX1) | exercised on the deployment (preflight browser/analysis/node checks and acceptance) — docs/evidence/vultr/preflight-*.txt (cce4719); docs/evidence/vultr/acceptance-f223c19 (e79f9b9) |
+| C30 | 4 | execution/control/web | verified (Vultr: Kata on VX1) | exercised on the deployment (preflight browser/analysis/node checks and acceptance) — docs/evidence/vultr/preflight-*.txt (cce4719); docs/evidence/vultr/acceptance-f223c19 (e79f9b9) |
 | C31 | 4 | execution/control/web | verified (fakes) | general handler + profile registry at the worker seam — fde81e1 |
 | C32 | 4 | execution/control/web | verified (fakes) | completion checks per profile — fde81e1 |
 | C33 | 4 | execution/control/web | verified (fakes) | UNSUPPORTED outcome, no simulated capability — fde81e1, 7c1ab8e |
-| C34 | 4 | execution/control/web | verified (local, real Docker runc; scripted) | hero pieces verified (fixture page, download, analysis sandbox); acceptance A1/B1; live-model run blocked — e6a4b9a |
+| C34 | 4 | execution/control/web | verified (Vultr: Kata on VX1) | hero on the public fixtures page, both data variants RESULT_VERIFIED with correct answers — docs/evidence/vultr/acceptance-f223c19 (e79f9b9) |
 | C35 | 4 | execution/control/web | verified (fakes) | workflow/result/cleanup separated in contracts/API/UI — fde81e1, a2bc7d3 |
 | C36 | 4 | execution/control/web | verified (fakes) | opState allowed/started/completed/failed/unknown — fde81e1, 7c1ab8e |
 | C37 | 4 | execution/control/web | verified (fakes) | general sealed evidence bundle — fde81e1 |

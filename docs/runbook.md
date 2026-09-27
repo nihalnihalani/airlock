@@ -58,14 +58,14 @@ Production refuses dev-unsafe hosts, runc, and unpinned images on both planes. R
 | Item | Status | Evidence / what unblocks it |
 |---|---|---|
 | Public repository with setup docs | done | README, this runbook, deploy/README.md |
-| Code-repair workflow (C) | verified locally; live gate on Vultr pending | acceptance matrix; `scripts/live-gate.ts` needs a key |
-| File analysis workflow (A) | verified locally (scripted) | acceptance A1 |
-| Browser research workflow (B) | verified locally on public sites (scripted) | acceptance B1, M1 |
-| Combined workflow (D) | components verified locally; full hero on the deployment pending | needs the public fixtures host |
-| Human takeover and approvals | verified (fakes, local API, real Chromium on fixtures) | acceptance T3–T6; end-to-end approval with receipt needs the deployment |
-| Runtime tier measured (Kata on VX1) | **blocked** | `deploy/preflight.sh` with Vultr access |
-| Live Vultr inference (repair, general, vision) | **blocked** | `VULTR_INFERENCE_API_KEY` |
-| Public demo URL on this revision | **blocked** | `deploy/deploy.sh` with Vultr access |
-| Demo video (useful work + containment + teardown) | local labelled recording done; **Vultr recording blocked** | [docs/demo/local-demo.mp4](demo/local-demo.mp4) (LOCAL DEV-UNSAFE, scripted); the deployment recording needs Vultr access |
+| Code-repair workflow (C) | verified on Vultr (live gate 3/3, acceptance) | docs/evidence/live-gate, docs/evidence/vultr |
+| File analysis workflow (A) | verified on Vultr with the live model | acceptance-f223c19 |
+| Browser research workflow (B) | verified on Vultr with the live model | acceptance-f223c19 |
+| Combined workflow (D) | verified on Vultr, two data variants | acceptance-f223c19 |
+| Human takeover and approvals | verified on Vultr (approval confirmed by the destination's receipt) | acceptance-f223c19 |
+| Runtime tier measured (Kata on VX1) | verified: preflight 49/49 | docs/evidence/vultr/preflight-*.txt |
+| Live Vultr inference (repair, general, vision) | verified (glm-5.3; vision probe) | docs/evidence/live |
+| Public demo URL on this revision | https://155-138-198-12.sslip.io (revision dfbba65) | deploy logs, acceptance |
+| Demo video (useful work + containment + teardown) | local labelled recording done; **Vultr recording in progress** | [docs/demo/local-demo.mp4](demo/local-demo.mp4) (LOCAL DEV-UNSAFE, scripted); the deployment recording needs Vultr access |
 | Independent review | verifier: local acceptance, C41 crash/restart 7/7; devil's advocate: R1, S1–S4, L1, N1 closed; L2, L3, N2 documented limitations | [acceptance-matrix.md](acceptance-matrix.md), ledger |
 | NetBird bonus | not attempted (optional) | — |
