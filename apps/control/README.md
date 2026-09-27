@@ -58,7 +58,7 @@ Cookie `airlock_session` (HttpOnly, SameSite=Strict, sha256 of the token stored)
 | `GET /api/host` | any | Supervisor `HostCheck`. |
 | `POST /api/tasks` `CreateTaskRequest` → `Task` (201) | operator, judge | Profile must be loaded (422 otherwise). |
 | `GET /api/tasks`, `GET /api/tasks/:id` | any | List / `TaskView` (task, baseline and candidate records, sealed manifest, host). |
-| `GET /api/tasks/:id/events` | any | SSE of `RunEvent` (`id` = seq, `event` = kind), replayed after `Last-Event-ID` (or `?after=`), plus `task` snapshots and a final `end`. |
+| `GET /api/tasks/:id/events` | any | Public to viewers, including every model turn and each `run` command's stdout/stderr (bounded), so candidate source printed by a command is on the stream. SSE of `RunEvent` (`id` = seq, `event` = kind), replayed after `Last-Event-ID` (or `?after=`), plus `task` snapshots and a final `end`. |
 | `POST /api/tasks/:id/cancel` → `Task` | owner or operator | queued → cancelled; running → cancelling (worker runs the teardown path); terminal → 409. |
 | `POST /api/tasks/:id/preview` `PreviewRequest` → `PreviewResult` | operator, judge (any task; intended: the judge tries the operator's passed candidate) | Refused (409) unless `candidateDigest` equals the task's sealed digest, the verification record passed, and the stored bundle still carries that digest. Runs a fresh `preview` invocation on the sealed bundle; writes nothing. One per 2 s per session (429). |
 | `POST /api/tasks/:id/export` → `{grantId,url,expiresAt}` | owner or operator | Immutable `ExportGrant` bound to (task, candidateDigest, verificationRecordId); repeated calls return the same unexpired grant. |

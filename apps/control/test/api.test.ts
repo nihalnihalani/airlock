@@ -34,14 +34,14 @@ interface Ctx {
   close: () => Promise<void>;
 }
 
-async function makeCtx(options: { withWorker?: boolean; now?: () => number; webDist?: string; trustedProxies?: string[]; realExport?: boolean } = {}): Promise<Ctx> {
+async function makeCtx(options: { withWorker?: boolean; now?: () => number; webDist?: string; trustedProxies?: string[]; realExport?: boolean; driverScript?: Parameters<typeof scriptedDriverDouble>[0] } = {}): Promise<Ctx> {
   const supervisor = new FakeSupervisor({ profile: fixture.profile, observe: fixtureObserve });
   let harness: Harness | null = null;
   let store: Store;
   let artifacts: MemoryArtifactStore;
   let bus: TaskEventBus;
   if (options.withWorker) {
-    const driver = scriptedDriverDouble([
+    const driver = scriptedDriverDouble(options.driverScript ?? [
       { toolCalls: [{ name: "write_file", args: { path: "lib/mod.py", content: FX_FIXED_SOURCE } }] },
       { toolCalls: [{ name: "submit_candidate", args: { summary: "fix" } }] },
     ]);
@@ -496,6 +496,36 @@ describe("preview and export", () => {
       const created = (await (await ctx.app.request("/api/tasks", json({ profileId: "fx-1", issueText: "x" }, op))).json()) as Task;
       expect((await ctx.app.request(`/api/tasks/${created.id}/export`, json({}, op))).status).toBe(409);
       expect((await ctx.app.request("/api/exports/grant-missing", { headers: { cookie: op } })).status).toBe(404);
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  test("the unauthenticated event stream carries the output of every command the model runs (documented viewer policy)", async () => {
+    // The READMEs say the viewer role sees command output, file contents included, and that only
+    // the sealed zip is gated by an export grant. Pin the first half: a `run` after write_file
+    // streams its stdout to a reader with no cookie.
+    const ctx = await makeCtx({
+      withWorker: true,
+      driverScript: [
+        { toolCalls: [{ name: "write_file", args: { path: "lib/mod.py", content: FX_FIXED_SOURCE } }] },
+        { toolCalls: [{ name: "run", args: { command: "cat lib/mod.py" } }] },
+        { toolCalls: [{ name: "submit_candidate", args: { summary: "fix" } }] },
+      ],
+    });
+    try {
+      const op = await login(ctx.app, OPERATOR);
+      const created = (await (await ctx.app.request("/api/tasks", json({ profileId: "fx-1", issueText: "x" }, op))).json()) as Task;
+      await ctx.harness!.waitFor(created.id);
+      const body = await (await ctx.app.request(`/api/tasks/${created.id}/events`)).text();
+      const execData = body
+        .split("\n")
+        .filter((line) => line.startsWith("data: "))
+        .map((line) => JSON.parse(line.slice(6)) as { kind?: string; data?: { tool?: string; result?: { stdout?: string } } })
+        .find((e) => e.kind === "exec" && e.data?.tool === "run");
+      expect(execData?.data?.result?.stdout).toBe("ran cat lib/mod.py");
+      // The sealed candidate zip itself is not on the stream or the task view: it needs a grant.
+      expect((await ctx.app.request(`/api/tasks/${created.id}/export`, json({}))).status).toBe(401);
     } finally {
       await ctx.close();
     }

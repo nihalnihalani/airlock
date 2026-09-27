@@ -28,7 +28,7 @@ wherever the control app serves it.
 |---|---|
 | `#/login` | Password → role (`operator` / `judge`). Viewers read without signing in. |
 | `#/new` (default) | Profile selector fed by `GET /api/profiles` (display name, issue link, baseline commit, "historical replay" label, what the agent may change/read, caps), a paste box for the issue text (the UI ships no issue text), Start. API rejections are shown verbatim. |
-| `#/tasks` | All tasks (every owner) with status, phase and outcome. Task lists, task pages and event streams are readable by the viewer role without signing in, including the pasted issue text; see the control README's route table. |
+| `#/tasks` | All tasks (every owner) with status, phase and outcome. Task lists, task pages and event streams are readable by the viewer role without signing in, including the pasted issue text, every model turn and the output of every command the model runs (which can include candidate file contents); only the sealed zip needs an export grant. See the control README's route table. |
 | `#/tasks/:id` | Task page: phase rail, status/outcome badges, runtime tier chip (with dev-unsafe warning), live stream badge, Cancel; Five checkpoints panel; Baseline vs candidate table; sealed manifest; Report Export preview and Download (only when the outcome is `CANDIDATE_PASSED_CHECKS`); Model calls; Tool/exec log; full event timeline. |
 | `#/hostile` | Judge/operator only. Command box with quick buttons; renders the `BlastRadiusCard` (Died vs Survived, execution, teardown). |
 
