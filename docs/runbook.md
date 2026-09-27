@@ -25,9 +25,11 @@ Locally the sandboxed browser can reach only public sites (the egress proxy refu
 
 ## Deployment (two Vultr VMs)
 
-Needs `VULTR_API_KEY`, an SSH key registered as `airlock-hackathon`, and `VULTR_INFERENCE_API_KEY` for live inference (never printed or committed).
+Needs `VULTR_API_KEY`, an SSH key registered as `airlock-hackathon`, and `VULTR_INFERENCE_API_KEY` for live inference (never printed or committed). If the API key has an access control list, it must allow the deploying machine's IPv4 **and** IPv6 addresses (Vultr answers `401 Unauthorized IP address: <addr>` otherwise; curl may use either family).
 
 ```sh
+bun scripts/check-keys.ts                                   # credentials by read-only calls (never printed)
+deploy/vultr/register-ssh-key.sh                            # registers ~/.ssh/airlock_ed25519.pub as airlock-hackathon (idempotent)
 deploy/vultr/provision.sh                                   # VPC, firewall groups, VM A (control) + VX1 VM B (sandbox)
 deploy/deploy.sh --driver scripted                          # hosts, images (python/browser/egress/analysis/node) pinned by id,
                                                             # egress guard, supervisor (AIRLOCK_PRODUCTION=1), control, fixtures
