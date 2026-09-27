@@ -316,6 +316,45 @@ describe("repair handler", () => {
     }
   });
 
+  test("cancel during verify: `cancelled` is recorded only after the one-shot invocation returned, with its teardown on record", async () => {
+    let harness: Harness | null = null;
+    let invokeFinished = false;
+    const supervisor = new FakeSupervisor({
+      profile: fixture.profile,
+      observe: fixtureObserve,
+      beforeInvoke: async (role, input) => {
+        if (role !== "candidate") return;
+        // The operator cancels while the candidate container is executing on VM B.
+        const next = await harness!.store.compareAndSwap<Task>(OWNER, "tasks", input.taskId, { status: "running" }, { status: "cancelling" });
+        expect(next?.status).toBe("cancelling");
+        harness!.worker.abort(input.taskId);
+        await new Promise((r) => setTimeout(r, 400));
+        invokeFinished = true;
+      },
+    });
+    const driver = scriptedDriverDouble(repairScript(FX_FIXED_SOURCE));
+    const h = await makeHarness(fixture, supervisor, driver, { leaseMs: 300 });
+    harness = h;
+    h.worker.start();
+    try {
+      const task = await h.newTask();
+      const result = await h.waitFor(task.id);
+      expect(result.status).toBe("cancelled");
+      // Recorded only once the candidate invocation had actually finished (CLAUDE.md §3.5).
+      expect(invokeFinished).toBe(true);
+      expect(result.outcome).toBeUndefined();
+      expect(result.verificationRecordId).toBeUndefined();
+      const events = await h.store.listEvents(task.id);
+      const finished = events.find((e) => /candidate invocation finished after cancellation/i.test(e.title));
+      expect(finished).toBeDefined();
+      expect((finished?.data as { teardown?: { clean: boolean } })?.teardown?.clean).toBe(true);
+      expect(events.some((e) => e.title === "Task cancelled")).toBe(true);
+      expect(supervisor.attempts.size).toBe(0);
+    } finally {
+      await h.close();
+    }
+  });
+
   test("sandbox creation refused by the supervisor → task failed, nothing left behind", async () => {
     const s = await runScenario(repairScript(FX_FIXED_SOURCE), { probeBlocked: false });
     try {

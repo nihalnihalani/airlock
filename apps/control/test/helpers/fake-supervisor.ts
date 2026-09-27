@@ -23,6 +23,7 @@ import type {
 } from "@airlock/contracts";
 import type { LoadedProfile } from "../../src/profiles.ts";
 import {
+  SupervisorError,
   SupervisorFenceError,
   SupervisorNotFoundError,
   type CallOptions,
@@ -105,6 +106,8 @@ export interface FakeSupervisorOptions {
   observe: (role: "baseline" | "candidate" | "preview", files: Map<string, string>, request: AdapterRequest) => Observation[] | { exec: Partial<ExecResult>; observations: Observation[]; protocolErrors?: string[] };
   /** Author exec behaviour. Default: succeed with stdout "ran <command>". */
   exec?: (command: string, files: Map<string, string>, signal?: AbortSignal) => Promise<ExecResult>;
+  /** Runs at the start of every one-shot invocation (before observations are produced); may delay it. */
+  beforeInvoke?: (role: "baseline" | "candidate" | "preview", input: { taskId: string }) => Promise<void>;
   probeBlocked?: boolean;
   inspectionPassed?: boolean;
   freezeConfirmed?: boolean;
@@ -226,7 +229,17 @@ export class FakeSupervisor implements SupervisorClient {
     bundle?: CandidateBundle;
     request: AdapterRequest;
     absoluteDeadline: string;
-  }): Promise<InvokeResult> {
+  }, opts?: { signal?: AbortSignal }): Promise<InvokeResult> {
+    // Like HttpSupervisorClient: an aborted signal drops the client side of the call only; the
+    // supervisor-side run (modelled by beforeInvoke) carries on regardless.
+    if (this.options.beforeInvoke) {
+      const run = this.options.beforeInvoke(input.role, { taskId: input.taskId });
+      const aborted = new Promise<never>((_, reject) => {
+        if (opts?.signal?.aborted) reject(new SupervisorError("Call aborted", 0));
+        opts?.signal?.addEventListener("abort", () => reject(new SupervisorError("Call aborted", 0)), { once: true });
+      });
+      await (opts?.signal ? Promise.race([run, aborted]) : run);
+    }
     const files = new Map<string, string>();
     for (const [path, text] of Object.entries(this.options.profile.baseFiles)) files.set(path, text);
     if (input.role !== "baseline") {

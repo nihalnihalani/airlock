@@ -407,10 +407,28 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
         await ctx.guard();
         const request: AdapterRequest = { schemaVersion: 1, cases: contract.cases.map((c) => ({ id: c.id, input: c.input })) };
         const budgetMs = Math.min(manifest.caps.attemptTimeoutMs, manifest.caps.commandTimeoutMs * (contract.cases.length + 2));
+        // No abort signal on purpose: aborting the HTTP call would drop the client side only while
+        // the one-shot container kept running on VM B, and the control plane holds no handle it could
+        // revoke. The run is bounded by the supervisor's own deadline; a cancellation that arrives
+        // meanwhile waits for it, records its teardown, and only then lets the cancel pass finalize
+        // (CLAUDE.md §3.5: an aborted HTTP request is not termination).
         const result = await deps.supervisor.invoke(
           { taskId: task.id, profileId: manifest.id, role, ...(bundle ? { bundle } : {}), request, absoluteDeadline: new Date(now() + budgetMs).toISOString() },
-          { signal: ctx.signal, timeoutMs: budgetMs + 30_000 },
+          { timeoutMs: budgetMs + 30_000 },
         );
+        if (ctx.signal.aborted) {
+          // Unguarded on purpose: this is the one-shot container's teardown record, not a result, and
+          // the guarded ctx.event would refuse it now that the lease is gone.
+          await deps.store.appendEvent(owner, task.id, {
+            id: newId("evt"),
+            at: iso(),
+            kind: "lifecycle",
+            title: `${role} invocation finished after cancellation`,
+            detail: `${result.exec.status} exit=${result.exec.exitCode} ${result.exec.durationMs}ms; container ${result.container}; teardown ${result.teardown.clean ? "clean" : "incomplete"}; observations discarded`,
+            data: { role, container: result.container, teardown: result.teardown, exitCode: result.exec.exitCode, status: result.exec.status },
+          });
+          throw new LostLeaseError();
+        }
         await ctx.event("exec", `${role} invocation ${result.exec.status}`, `exit=${result.exec.exitCode} ${result.exec.durationMs}ms observations=${result.observations.length} protocolErrors=${result.protocolErrors.length}${result.exec.stderr ? `\nstderr:\n${bounded(result.exec.stderr, 4096)}` : ""}`, {
           tool: role,
           command: "/opt/airlock/materialize.py; /opt/airlock/adapter.py --request /workspace/request.json",

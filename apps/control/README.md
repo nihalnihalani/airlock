@@ -97,8 +97,11 @@ supervisor cannot confirm the teardown (unreachable, stop not confirmed) the tas
 `cancelling`**: the lease is released with a retry-after (5 s) and a later tick runs the cancel
 pass again, up to 5 retries counted from the durable `runs` records. Only a confirmed teardown
 records `cancelled`; past the bound the task is recorded `failed` with the incomplete-teardown
-error and its `attemptId` kept, never a `cancelled` receipt. Any failure destroys the attempt;
-incomplete teardown stays visible on the task.
+error and its `attemptId` kept, never a `cancelled` receipt. A cancel that arrives while a one-shot
+`baseline`/`candidate` invocation is running does not abort the supervisor call (that would drop
+only the client side): the invocation finishes within its own deadline, its teardown is recorded as
+"<role> invocation finished after cancellation", its observations are discarded, and only then does
+the cancel pass run. Any failure destroys the attempt; incomplete teardown stays visible on the task.
 
 ## Driver modes
 
