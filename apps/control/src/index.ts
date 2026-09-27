@@ -78,6 +78,8 @@ async function main() {
     validateEnvelope,
     buildManifest,
     runtimeDir: config.runtimeDir,
+    maxTokens: config.modelMaxTokens,
+    ...(config.modelReasoningEffort ? { reasoningEffort: config.modelReasoningEffort } : {}),
   });
   const worker = new TaskWorker(store, handler, { bus, leaseMs: 60_000, pollMs: 1000, concurrency: 2 });
   const sessions = new SessionService(store, {

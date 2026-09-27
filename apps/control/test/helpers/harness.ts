@@ -20,7 +20,13 @@ export interface Harness {
 
 export const OWNER = "operator";
 
-export async function makeHarness(fixture: Fixture, supervisor: FakeSupervisor, driver: ModelDriver, options: { leaseMs?: number; cancelRetries?: number; cancelRetryDelayMs?: number } = {}): Promise<Harness> {
+export async function makeHarness(
+  fixture: Fixture,
+  supervisor: FakeSupervisor,
+  driver: ModelDriver,
+  options: { leaseMs?: number; cancelRetries?: number; cancelRetryDelayMs?: number } = {},
+  handlerOptions: { maxTokens?: number; reasoningEffort?: string } = {},
+): Promise<Harness> {
   const store = await createStore();
   const bus = new TaskEventBus();
   const artifacts = new MemoryArtifactStore();
@@ -36,6 +42,7 @@ export async function makeHarness(fixture: Fixture, supervisor: FakeSupervisor, 
     validateEnvelope: validateEnvelopeDouble,
     buildManifest: buildManifestDouble,
     runtimeDir: fixture.runtimeDir,
+    ...handlerOptions,
   });
   const terminal = new Set(["done", "failed", "cancelled"]);
   const worker = new TaskWorker(store, handler, {

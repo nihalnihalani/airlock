@@ -157,6 +157,107 @@ describe("repair handler", () => {
     }
   });
 
+  test("a tool call cut off by the output limit gets the cut-off explanation, not a validation error, and the loop continues", async () => {
+    const seen: string[] = [];
+    const driver = scriptedDriverDouble(
+      [
+        // max_tokens ran out while the arguments were being written: `command` is missing.
+        { finishReason: "length", toolCalls: [{ name: "run", args: {} }] },
+        { toolCalls: [{ name: "write_file", args: { path: "lib/mod.py", content: FX_FIXED_SOURCE } }] },
+        { toolCalls: [{ name: "submit_candidate", args: { summary: "done" } }] },
+      ],
+      { onChat: (messages) => { const last = messages[messages.length - 1]; if (last?.role === "tool") seen.push(last.content); } },
+    );
+    const supervisor = new FakeSupervisor({ profile: fixture.profile, observe: fixtureObserve });
+    const h = await makeHarness(fixture, supervisor, driver, {}, { maxTokens: 512 });
+    h.worker.start();
+    try {
+      const task = await h.newTask();
+      const result = await h.waitFor(task.id);
+      expect(result.outcome).toBe("CANDIDATE_PASSED_CHECKS");
+      expect(seen[0]).toContain("cut off by the output limit of 512 tokens");
+      expect(seen[0]).toContain("smaller command or edit");
+      expect(seen[0]).not.toContain("invalid tool call");
+      const events = await h.store.listEvents(task.id);
+      expect(events.some((e) => e.kind === "tool" && /cut off by output limit/.test(e.title))).toBe(true);
+      // Nothing reached the supervisor for the truncated call.
+      expect(supervisor.toolCalls.filter((c) => c.args.kind === "exec")).toHaveLength(0);
+    } finally {
+      await h.close();
+    }
+  });
+
+  test("turns cut by the output limit with no action are nudged, not counted as giving up; three in a row → STOPPED_LIMIT", async () => {
+    const seenUser: string[] = [];
+    const driver = scriptedDriverDouble(
+      [
+        { toolCalls: [{ name: "read_file", args: { path: "lib/mod.py" } }] },
+        { finishReason: "length", reasoning: "thinking...", reasoningTokens: 512 },
+        { finishReason: "length", reasoning: "still thinking...", reasoningTokens: 512 },
+        { finishReason: "length", reasoning: "and more...", reasoningTokens: 512 },
+        { toolCalls: [{ name: "submit_candidate", args: { summary: "never reached" } }] },
+      ],
+      { onChat: (messages) => { const last = messages[messages.length - 1]; if (last?.role === "user") seenUser.push(last.content); } },
+    );
+    const supervisor = new FakeSupervisor({ profile: fixture.profile, observe: fixtureObserve });
+    const h = await makeHarness(fixture, supervisor, driver);
+    h.worker.start();
+    try {
+      const task = await h.newTask();
+      const result = await h.waitFor(task.id);
+      expect(result.outcome).toBe("STOPPED_LIMIT");
+      expect(result.status).toBe("done");
+      expect(result.budget.modelCallsUsed).toBe(4);
+      expect(seenUser.filter((m) => m.includes("hit the output limit before any action"))).toHaveLength(2);
+      const events = await h.store.listEvents(task.id);
+      const outcome = events.find((e) => e.kind === "phase" && e.title === "Outcome STOPPED_LIMIT");
+      expect(outcome?.detail).toContain("output limit hit on 3 consecutive turns");
+      const cut = events.filter((e) => e.kind === "model" && (e.data as { finishReason?: string })?.finishReason === "length");
+      expect(cut).toHaveLength(3);
+      expect(cut[0]?.detail).toContain("output limit hit");
+      expect(supervisor.attempts.size).toBe(0);
+    } finally {
+      await h.close();
+    }
+  });
+
+  test("a text-only turn gets one nudge before the gave-up logic; the reasoning excerpt and finish reason are on the model event", async () => {
+    const seenUser: string[] = [];
+    const longReasoning = "r".repeat(4000);
+    const driver = scriptedDriverDouble(
+      [
+        { text: "I have applied the fix.", reasoning: longReasoning, reasoningTokens: 900 },
+        { toolCalls: [{ name: "write_file", args: { path: "lib/mod.py", content: FX_FIXED_SOURCE } }], reasoning: "short" },
+        { toolCalls: [{ name: "submit_candidate", args: { summary: "done" } }] },
+      ],
+      { onChat: (messages) => { const last = messages[messages.length - 1]; if (last?.role === "user") seenUser.push(last.content); } },
+    );
+    const supervisor = new FakeSupervisor({ profile: fixture.profile, observe: fixtureObserve });
+    const h = await makeHarness(fixture, supervisor, driver);
+    h.worker.start();
+    try {
+      const task = await h.newTask();
+      const result = await h.waitFor(task.id);
+      expect(result.outcome).toBe("CANDIDATE_PASSED_CHECKS");
+      expect(seenUser[1]).toBe("If the fix is applied, call submit_candidate; otherwise continue or say why you cannot fix it.");
+      const events = await h.store.listEvents(task.id);
+      const model = events.filter((e) => e.kind === "model");
+      const first = model[0]?.data as { finishReason: string; reasoning: string; reasoningTruncated: boolean; reasoningTokens: number; maxTokens: number };
+      expect(first.finishReason).toBe("stop");
+      expect(first.reasoning).toBe("r".repeat(600));
+      expect(first.reasoningTruncated).toBe(true);
+      expect(first.reasoningTokens).toBe(900);
+      expect(first.maxTokens).toBe(16384);
+      const second = model[1]?.data as { finishReason: string; reasoning: string; reasoningTruncated: boolean; reasoningTokens?: number };
+      expect(second.finishReason).toBe("tool_calls");
+      expect(second.reasoning).toBe("short");
+      expect(second.reasoningTruncated).toBe(false);
+      expect(second.reasoningTokens).toBeUndefined();
+    } finally {
+      await h.close();
+    }
+  });
+
   test("tool errors are fed back to the model as results, not fatal", async () => {
     const seen: string[] = [];
     const driver = scriptedDriverDouble(

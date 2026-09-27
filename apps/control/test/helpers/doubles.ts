@@ -146,7 +146,14 @@ export const zipFilesDouble: ZipFilesFn = (files) => {
 };
 
 // ---- scripted driver double ------------------------------------------------------------------------
-export type ScriptedTurn = { toolCalls?: { name: string; args: unknown }[]; text?: string };
+export type ScriptedTurn = {
+  toolCalls?: { name: string; args: unknown }[];
+  text?: string;
+  /** Default: "tool_calls" when calls are present, else "stop". "length" models a turn cut by max_tokens. */
+  finishReason?: "stop" | "tool_calls" | "length" | "other";
+  reasoning?: string;
+  reasoningTokens?: number;
+};
 
 export function scriptedDriverDouble(script: ScriptedTurn[], options: { onChat?: (messages: ChatMessage[]) => void; repeatLast?: boolean } = {}): ModelDriver & { calls: number } {
   let cursor = 0;
@@ -159,11 +166,14 @@ export function scriptedDriverDouble(script: ScriptedTurn[], options: { onChat?:
       options.onChat?.(input.messages);
       const turn = script[cursor] ?? (options.repeatLast ? script[script.length - 1] : undefined);
       cursor = Math.min(cursor + 1, script.length);
-      if (!turn) return { text: "", toolCalls: [], usage: { input: 0, output: 0 } };
+      if (!turn) return { text: "", toolCalls: [], finishReason: "stop" as const, reasoning: "", usage: { input: 0, output: 0 } };
+      const toolCalls = (turn.toolCalls ?? []).map((tc) => ({ id: `call-${++counter}`, name: tc.name, args: tc.args }));
       return {
         text: turn.text ?? "",
-        toolCalls: (turn.toolCalls ?? []).map((tc) => ({ id: `call-${++counter}`, name: tc.name, args: tc.args })),
-        usage: { input: 10, output: 5 },
+        toolCalls,
+        finishReason: turn.finishReason ?? (toolCalls.length > 0 ? ("tool_calls" as const) : ("stop" as const)),
+        reasoning: turn.reasoning ?? "",
+        usage: { input: 10, output: 5, ...(turn.reasoningTokens !== undefined ? { reasoning: turn.reasoningTokens } : {}) },
       };
     },
   };

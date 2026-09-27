@@ -21,6 +21,8 @@ bunx tsc --noEmit -p tsconfig.json  # from apps/control
 | `VULTR_INFERENCE_API_KEY` | with `vultr` | — | Never logged, never in an event, never in a sandbox. |
 | `VULTR_INFERENCE_BASE_URL` | no | `https://api.vultrinference.com/v1` | Must be https. |
 | `AIRLOCK_MODEL` | with `vultr` | — | Model name chosen by the measured tool-call probe. |
+| `AIRLOCK_MODEL_MAX_TOKENS` | no | `16384` | `max_tokens` per model turn (256–131072). Reasoning tokens count against it: glm-5.3 spent a whole 4096-token turn thinking in the first live gate, so the default is generous. |
+| `AIRLOCK_MODEL_REASONING_EFFORT` | no | unset | Sent as `reasoning_effort` only when set (e.g. `low`, `medium`, `high`); Vultr accepted it on 2026-09-26. |
 | `AIRLOCK_DATA_DIR` | no | `./data` | PGlite database (`pglite/`) and content-addressed artifacts (`artifacts/`). |
 | `AIRLOCK_PROFILES_DIR` | no | `<repo>/profiles` | Profiles; each needs a verified `base/` tree (see below). |
 | `AIRLOCK_RUNTIME_DIR` | no | `<repo>/runtime/python` | Where `adapter.py` lives (part of the adapter digest). |
@@ -80,7 +82,13 @@ lease, and runs the `RepairHandler`:
 4. **repair** — one model loop with `read_file`, `write_file`, `run`, `submit_candidate`, each bound
    to the attempt through the supervisor. Tool errors return to the model as tool results. Ends on
    `submit_candidate`, `caps.maxModelCalls` / `attemptTimeoutMs` (**STOPPED_LIMIT**), or the model
-   giving up (**REPRODUCED_UNRESOLVED**).
+   giving up (**REPRODUCED_UNRESOLVED**). The driver's `finish_reason` steers the loop: a turn cut
+   by `max_tokens` (`length`) with no tool call is answered with "take the next action now" and is
+   not counted as giving up, but three such turns in a row end as **STOPPED_LIMIT**; a tool call
+   whose arguments were cut off gets a tool result saying so (not a schema error); an ordinary
+   text-only turn gets one nudge to call `submit_candidate` before the gave-up count starts. Every
+   model event records `finishReason`, `maxTokens`, `reasoningTokens` and a 600-char `reasoning`
+   excerpt so the UI can show why a turn produced nothing.
 5. **freeze** — supervisor freeze (revoke → stop → settle → collect), `validateEnvelope`,
    `buildManifest`, `candidateDigestOf`; bundle stored immutably; `task.candidateDigest` set;
    author sandbox destroyed. An unconfirmed stop is **INCONCLUSIVE**; a rejected envelope is

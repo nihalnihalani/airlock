@@ -22,6 +22,10 @@ export interface Config {
   judgePassword: string | null;
   driver: DriverMode;
   vultr: { apiKey: string | null; baseUrl: string; model: string };
+  /** max_tokens per model turn (AIRLOCK_MODEL_MAX_TOKENS, default 16384; reasoning counts against it). */
+  modelMaxTokens: number;
+  /** Sent as reasoning_effort only when set (AIRLOCK_MODEL_REASONING_EFFORT). */
+  modelReasoningEffort: string | null;
   /** Built web UI (apps/web/dist) served at `/` behind the API; null when the directory is absent. */
   webDist: string | null;
   /** Cookie `Secure` flag; true unless AIRLOCK_INSECURE_COOKIES=1 (local http). */
@@ -46,6 +50,8 @@ export class ConfigError extends Error {
 }
 
 const DEFAULT_VULTR_BASE = "https://api.vultrinference.com/v1";
+export const DEFAULT_MODEL_MAX_TOKENS = 16384;
+const MAX_MODEL_MAX_TOKENS = 131072;
 
 function intEnv(env: Record<string, string | undefined>, name: string, fallback: number, min: number, max: number): number {
   const raw = env[name];
@@ -85,6 +91,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   }
   const baseUrl = env.VULTR_INFERENCE_BASE_URL?.trim() || DEFAULT_VULTR_BASE;
   if (!/^https:\/\//.test(baseUrl)) throw new ConfigError("VULTR_INFERENCE_BASE_URL must be https");
+  const modelMaxTokens = intEnv(env, "AIRLOCK_MODEL_MAX_TOKENS", DEFAULT_MODEL_MAX_TOKENS, 256, MAX_MODEL_MAX_TOKENS);
+  const modelReasoningEffort = parseReasoningEffort(env.AIRLOCK_MODEL_REASONING_EFFORT);
 
   const operatorPassword = env.AIRLOCK_OPERATOR_PASSWORD?.trim() || null;
   const judgePassword = env.AIRLOCK_JUDGE_PASSWORD?.trim() || null;
@@ -121,6 +129,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     judgePassword,
     driver,
     vultr: { apiKey, baseUrl, model },
+    modelMaxTokens,
+    modelReasoningEffort,
     secureCookies: env.AIRLOCK_INSECURE_COOKIES !== "1",
     trustedProxies: parseTrustedProxies(env.AIRLOCK_TRUST_PROXY),
     sessionTtlMs: intEnv(env, "AIRLOCK_SESSION_TTL_MS", 12 * 60 * 60 * 1000, 60_000, 30 * 24 * 60 * 60 * 1000),
@@ -146,6 +156,17 @@ export function parseTrustedProxies(raw: string | undefined): string[] {
     else throw new ConfigError(`AIRLOCK_TRUST_PROXY must be 1 (loopback proxy) or a comma-separated list of proxy IP addresses; got "${part}"`);
   }
   return out;
+}
+
+/**
+ * AIRLOCK_MODEL_REASONING_EFFORT: unset or empty sends nothing; otherwise a short identifier such
+ * as "low", "medium" or "high" passed through as `reasoning_effort` (the provider decides its meaning).
+ */
+export function parseReasoningEffort(raw: string | undefined): string | null {
+  const value = raw?.trim() ?? "";
+  if (value === "") return null;
+  if (!/^[a-z][a-z0-9_-]{0,31}$/.test(value)) throw new ConfigError('AIRLOCK_MODEL_REASONING_EFFORT must be a short lowercase identifier such as "low", "medium" or "high"');
+  return value;
 }
 
 /** A copy of the config safe to print: secrets replaced. */

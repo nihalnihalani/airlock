@@ -35,6 +35,7 @@ import {
 } from "@airlock/contracts";
 import type { LoadedProfile } from "./profiles.ts";
 import { MODEL_TOOLS, systemPrompt, taskMessage, type ToolSpec } from "./prompts.ts";
+import { DEFAULT_MAX_TOKENS as DRIVER_DEFAULT_MAX_TOKENS } from "./vultr-client.ts";
 import type { Store } from "./store/index.ts";
 import { SupervisorFenceError, SupervisorNotFoundError, type SupervisorClient } from "./supervisor-client.ts";
 import { LostLeaseError, TeardownIncompleteError, type TaskContext, type TaskHandler } from "./worker/index.ts";
@@ -47,11 +48,16 @@ export type ChatMessage = {
   toolCallId?: string;
   toolCalls?: { id: string; name: string; args: unknown }[];
 };
+export type FinishReason = "stop" | "tool_calls" | "length" | "other";
 export interface ModelDriver {
-  chat(input: { system: string; messages: ChatMessage[]; tools: ToolSpec[]; signal?: AbortSignal; maxTokens?: number }): Promise<{
+  chat(input: { system: string; messages: ChatMessage[]; tools: ToolSpec[]; signal?: AbortSignal; maxTokens?: number; reasoningEffort?: string }): Promise<{
     text: string;
     toolCalls: { id: string; name: string; args: unknown }[];
-    usage: { input: number; output: number };
+    /** Why the turn ended; absent means "tool_calls" when calls are present, else "stop". */
+    finishReason?: FinishReason;
+    /** The model's thinking, bounded by the driver; recorded as a short excerpt on the model event. */
+    reasoning?: string;
+    usage: { input: number; output: number; reasoning?: number };
   }>;
   /** Identity recorded on every model event (model name, serving host). */
   describe?(): { model: string; host: string };
@@ -95,8 +101,10 @@ export interface RepairDeps {
   /** Directory containing adapter.py (runtime/python). */
   runtimeDir: string;
   now?: () => number;
-  /** Max tokens per model turn. */
+  /** Max tokens per model turn (reasoning counts against it); the driver default when unset. */
   maxTokens?: number;
+  /** Passed through as reasoning_effort only when set. */
+  reasoningEffort?: string;
 }
 
 export const STORE_KIND_VERIFICATIONS = "verifications";
@@ -107,6 +115,11 @@ const DETAIL_CAP = 16 * 1024;
 const TOOL_RESULT_CAP = 24 * 1024;
 const MAX_TEXT_ONLY_TURNS = 2;
 const MAX_CONSECUTIVE_DRIVER_ERRORS = 3;
+/** Turns cut by max_tokens with no action are not "giving up"; but a run of them is a limit. */
+const MAX_CONSECUTIVE_LENGTH_TURNS = 3;
+const REASONING_EXCERPT_CHARS = 600;
+const NUDGE_TEXT_ONLY = "If the fix is applied, call submit_candidate; otherwise continue or say why you cannot fix it.";
+const NUDGE_OUTPUT_LIMIT = "Your last turn hit the output limit before any action. Take the next action now with a tool call.";
 
 class AttemptLostError extends Error {
   constructor(message: string) {
@@ -329,7 +342,7 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
       const loop = await modelLoop(ref, attemptStartedAt + manifest.caps.attemptTimeoutMs);
       if (loop.end !== "submitted") {
         await destroyLive(loop.end);
-        if (loop.end === "budget" || loop.end === "deadline") return finish("STOPPED_LIMIT", loop.reason);
+        if (loop.end === "budget" || loop.end === "deadline" || loop.end === "output-limit") return finish("STOPPED_LIMIT", loop.reason);
         return finish("REPRODUCED_UNRESOLVED", loop.reason);
       }
 
@@ -446,13 +459,16 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
         return result;
       }
 
-      async function modelLoop(attemptRef: AttemptRef, deadlineMs: number): Promise<{ end: "submitted" | "budget" | "deadline" | "unresolved"; reason: string }> {
+      async function modelLoop(attemptRef: AttemptRef, deadlineMs: number): Promise<{ end: "submitted" | "budget" | "deadline" | "output-limit" | "unresolved"; reason: string }> {
         const driver: ModelDriver = typeof deps.driver === "function" ? await deps.driver(task) : deps.driver;
         const identity = driver.describe?.() ?? { model: "unknown", host: "unknown" };
         const reported = contract.cases.find((c) => c.kind === "reported");
         const system = systemPrompt(manifest);
         const messages: ChatMessage[] = [{ role: "user", content: taskMessage(task.issueText, reported) }];
+        const maxTokens = deps.maxTokens ?? DRIVER_DEFAULT_MAX_TOKENS;
         let textOnlyTurns = 0;
+        let nudged = false;
+        let lengthTurns = 0;
         let driverErrors = 0;
         for (;;) {
           await ctx.guard();
@@ -463,7 +479,7 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
           let turn: Awaited<ReturnType<ModelDriver["chat"]>>;
           const startedAt = now();
           try {
-            turn = await driver.chat({ system, messages, tools: MODEL_TOOLS, signal: ctx.signal, ...(deps.maxTokens ? { maxTokens: deps.maxTokens } : {}) });
+            turn = await driver.chat({ system, messages, tools: MODEL_TOOLS, signal: ctx.signal, maxTokens, ...(deps.reasoningEffort ? { reasoningEffort: deps.reasoningEffort } : {}) });
             driverErrors = 0;
           } catch (error) {
             if (ctx.signal.aborted) throw new LostLeaseError();
@@ -474,27 +490,48 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
           }
           const toolCalls = Array.isArray(turn.toolCalls) ? turn.toolCalls.slice(0, 16) : [];
           const text = typeof turn.text === "string" ? turn.text : "";
-          await ctx.event("model", `Model turn ${task.budget.modelCallsUsed}`, bounded(text || "(no text)"), {
+          const finishReason: FinishReason = turn.finishReason ?? (toolCalls.length > 0 ? "tool_calls" : "stop");
+          const cutOff = finishReason === "length";
+          const reasoning = typeof turn.reasoning === "string" ? turn.reasoning : "";
+          const reasoningTokens = turn.usage?.reasoning;
+          await ctx.event("model", `Model turn ${task.budget.modelCallsUsed}`, bounded(text || (cutOff ? "(no text: output limit hit)" : "(no text)")), {
             model: identity.model,
             host: identity.host,
             durationMs: now() - startedAt,
             toolCalls: toolCalls.map((c) => ({ name: String(c.name).slice(0, 64) })),
             usage: turn.usage,
+            finishReason,
+            maxTokens,
+            ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
+            ...(reasoning ? { reasoning: reasoning.slice(0, REASONING_EXCERPT_CHARS), reasoningTruncated: reasoning.length > REASONING_EXCERPT_CHARS } : {}),
           });
           messages.push({ role: "assistant", content: text.slice(0, 65536), ...(toolCalls.length ? { toolCalls } : {}) });
+          lengthTurns = cutOff ? lengthTurns + 1 : 0;
           if (toolCalls.length === 0) {
+            if (cutOff) {
+              // The output limit ate the whole turn (typically all reasoning): not a gave-up turn.
+              if (lengthTurns >= MAX_CONSECUTIVE_LENGTH_TURNS) return { end: "output-limit", reason: `output limit hit on ${lengthTurns} consecutive turns (max_tokens ${maxTokens})` };
+              messages.push({ role: "user", content: NUDGE_OUTPUT_LIMIT });
+              continue;
+            }
+            if (!nudged) {
+              nudged = true;
+              messages.push({ role: "user", content: NUDGE_TEXT_ONLY });
+              continue;
+            }
             textOnlyTurns++;
             if (textOnlyTurns > MAX_TEXT_ONLY_TURNS) return { end: "unresolved", reason: "the model ended without submitting a candidate" };
             messages.push({ role: "user", content: "Continue. Use the tools to reproduce and fix the issue, then call submit_candidate; if you cannot fix it, reply with a short explanation and no tool calls." });
             continue;
           }
+          if (lengthTurns >= MAX_CONSECUTIVE_LENGTH_TURNS) return { end: "output-limit", reason: `output limit hit on ${lengthTurns} consecutive turns (max_tokens ${maxTokens})` };
           textOnlyTurns = 0;
           let submitted = false;
           for (const call of toolCalls) {
             const toolCallId = String(call.id ?? "").slice(0, 128) || newId("call");
             const result: { payload: unknown; submitted?: boolean } = submitted
               ? { payload: { error: "The candidate was already submitted in this turn; no further actions are executed." } }
-              : await runTool(attemptRef, call.name, call.args);
+              : await runTool(attemptRef, call.name, call.args, { cutOff, maxTokens });
             if (result.submitted) submitted = true;
             messages.push({ role: "tool", toolCallId, content: bounded(JSON.stringify(result.payload), TOOL_RESULT_CAP) });
           }
@@ -502,10 +539,17 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
         }
       }
 
-      async function runTool(attemptRef: AttemptRef, name: unknown, args: unknown): Promise<{ payload: unknown; submitted?: boolean }> {
+      async function runTool(attemptRef: AttemptRef, name: unknown, args: unknown, turn: { cutOff: boolean; maxTokens: number }): Promise<{ payload: unknown; submitted?: boolean }> {
         const parsed = ModelToolCall.safeParse({ name, args });
         if (!parsed.success) {
-          const reason = `invalid tool call: ${parsed.error.issues.map((i) => `${i.path.join(".")} ${i.message}`).join("; ").slice(0, 500)}`;
+          const issues = parsed.error.issues.map((i) => `${i.path.join(".")} ${i.message}`).join("; ").slice(0, 500);
+          if (turn.cutOff) {
+            // A call whose arguments were still being written when max_tokens ran out.
+            const reason = `This tool call was cut off by the output limit of ${turn.maxTokens} tokens before its arguments were complete (${issues}). Retry with a smaller command or edit: a shorter heredoc, or edit_file with a small old_text instead of rewriting a whole file.`;
+            await ctx.event("tool", `${String(name).slice(0, 32)} cut off by output limit`, reason, { tool: String(name).slice(0, 32), finishReason: "length", maxTokens: turn.maxTokens });
+            return { payload: { error: reason } };
+          }
+          const reason = `invalid tool call: ${issues}`;
           await ctx.event("tool", `${String(name).slice(0, 32)} rejected`, reason);
           return { payload: { error: reason } };
         }
