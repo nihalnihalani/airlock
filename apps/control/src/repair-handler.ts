@@ -354,7 +354,17 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
       // ---- freeze: seal the candidate -------------------------------------------------------
       await checkpoint({ phase: "freeze" });
       await ctx.event("phase", "freeze", "revoking dispatch, stopping the author sandbox and collecting allowed files");
-      const frozen = await deps.supervisor.freeze({ ref }, { signal: ctx.signal });
+      let frozen: Awaited<ReturnType<typeof deps.supervisor.freeze>>;
+      try {
+        frozen = await deps.supervisor.freeze({ ref }, { signal: ctx.signal });
+      } catch (error) {
+        // The supervisor refuses to collect when it cannot vouch for the workspace (outstanding
+        // operations did not settle, or the attempt was interrupted): nothing was sealed.
+        if (!(error instanceof SupervisorFenceError) || ctx.signal.aborted) throw error;
+        await ctx.event("error", "Freeze refused by the supervisor", bounded(errorMessage(error), 2000));
+        await destroyLive("freeze refused");
+        return finish("INCONCLUSIVE", `the supervisor refused to collect the author workspace (${errorMessage(error).slice(0, 300)}); no candidate was sealed`);
+      }
       await ctx.event("lifecycle", "Author sandbox frozen", `stopConfirmed=${frozen.stopConfirmed} settled=${frozen.outstandingOperationsSettled} files=${frozen.envelope.files.length} rejected=${frozen.envelope.rejected.length}`, {
         stoppedAt: frozen.stoppedAt,
         stopConfirmed: frozen.stopConfirmed,
@@ -726,6 +736,20 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
         liveAttempt = null;
         const result = await teardown(ref);
         if (!(error instanceof LostLeaseError)) await ctx.event("lifecycle", result.clean ? "Attempt destroyed after failure" : "Teardown incomplete after failure", result.detail, result.data).catch(() => undefined);
+        else
+          // Unguarded on purpose (the lease is gone, so ctx.event would refuse): the teardown outcome
+          // of a lost-lease run stays on the record, clean or not. The task keeps its attemptId, so
+          // the next claim, or a cancel pass, tears the attempt down again and confirms it.
+          await deps.store
+            .appendEvent(owner, task.id, {
+              id: newId("evt"),
+              at: iso(),
+              kind: "lifecycle",
+              title: result.clean ? "Attempt destroyed after the lease was lost" : "Teardown incomplete after the lease was lost",
+              detail: result.detail,
+              ...(result.data ? { data: result.data } : {}),
+            })
+            .catch((e) => log.error("record lost-lease teardown failed", { taskId: task.id, attemptId: ref.attemptId, error: e }));
         if (!result.clean && !(error instanceof LostLeaseError)) throw new Error(`${errorMessage(error)}; additionally teardown incomplete: ${result.detail}`);
       }
       throw error;

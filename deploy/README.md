@@ -160,8 +160,9 @@ Not enforced (known limits of this deployment):
   as `airlock-supervisor` separates its files, journal and crash surface from root's but does not
   make a compromise of the supervisor process less than a compromise of VM B. That is the reason the
   supervisor's API is as narrow as it is and why nothing on VM B holds a provider credential.
-- The viewer role needs no password and can read every task and event stream (see `../README.md`,
-  "Sessions and roles"). Do not paste private text into this public deployment.
+- Task data needs a session: a judge reads only its own session's cases and the operator reads all
+  (see `../README.md`, "Sessions and roles"). The judge password is shared, so anyone given it can
+  start cases; do not paste text that must stay private into a public deployment.
 - `sslip.io` is a public wildcard DNS service; the certificate is issued by Let's Encrypt/ZeroSSL for
   the IP-derived name. There is no custom domain.
 - TLS to VM A only; VM A → VM B is plain HTTP inside the VPC.

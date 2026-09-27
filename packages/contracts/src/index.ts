@@ -509,13 +509,40 @@ export const VerificationRecord = z.object({
 });
 export type VerificationRecord = z.infer<typeof VerificationRecord>;
 
-/** Authorizes a repeatable download of exactly one verified candidate. */
+/**
+ * The export zip, sealed once per (task, candidate verification) from immutable inputs and served
+ * byte for byte on every download. Grant events are outside the sealed payload.
+ */
+export const ExportSeal = z.object({
+  schemaVersion: z.literal(SCHEMA_VERSION),
+  id: plainId,
+  taskId: plainId,
+  candidateDigest: sha256Hex,
+  verificationRecordId: plainId,
+  verificationRecordDigest: sha256Hex,
+  baselineRecordId: plainId,
+  baselineRecordDigest: sha256Hex,
+  /** sha256 of the zip bytes in the artifact blob store. */
+  zipDigest: sha256Hex,
+  byteLength: z.number().int().nonnegative(),
+  /** Last event seq included in the sealed evidence. */
+  eventsThroughSeq: z.number().int().nonnegative(),
+  sealedAt: isoDate,
+});
+export type ExportSeal = z.infer<typeof ExportSeal>;
+
+/** Authorizes a repeatable download of exactly one verified candidate's sealed export. */
 export const ExportGrant = z.object({
   id: plainId,
   owner: z.string(),
   taskId: plainId,
   candidateDigest: sha256Hex,
   verificationRecordId: plainId,
+  /** sha256 of the canonical VerificationRecord the grant was issued against. */
+  verificationRecordDigest: sha256Hex,
+  /** ExportSeal id and the zip digest it names. */
+  sealId: plainId,
+  zipDigest: sha256Hex,
   createdAt: isoDate,
   expiresAt: isoDate,
 });

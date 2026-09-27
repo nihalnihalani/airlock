@@ -211,7 +211,7 @@ export function NewCasePage() {
               <Notice className="flex items-center gap-2 text-xs">
                 <IconLock className="size-4 shrink-0" />
                 <span>
-                  You are reading as a viewer.{" "}
+                  You are signed out.{" "}
                   <a className="font-medium text-foreground underline underline-offset-4" href={hrefFor({ name: "login" })}>
                     Sign in
                   </a>{" "}

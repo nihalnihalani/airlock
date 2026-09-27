@@ -26,7 +26,7 @@
 
 <img src="docs/assets/ui-task.png" alt="Airlock task page on the Vultr deployment: a live glm-5.3 repair under Kata as a conversation with model turns, tool calls, checkpoints and the Passed these checks result, with the five checkpoints in the details pane" width="900" />
 
-<sub>A live-gate run on the deployment (glm-5.3 via Vultr Serverless Inference, sandboxes under Kata on the VX1 host), read as a viewer.</sub>
+<sub>A live-gate run on the deployment (glm-5.3 via Vultr Serverless Inference, sandboxes under Kata on the VX1 host), captured signed out before task data required a session.</sub>
 
 </div>
 
@@ -204,7 +204,7 @@ Secrets come from the environment only. For local work, put `VULTR_INFERENCE_API
 | `AIRLOCK_PROFILES_DIR` | no | `<repo>/profiles` | Profiles; each needs a verified `base/`. |
 | `AIRLOCK_RUNTIME_DIR` | no | `<repo>/runtime/python` | Where `adapter.py` lives (part of the adapter digest). |
 | `AIRLOCK_WEB_DIST` | no | `<repo>/apps/web/dist` | Built web UI served at `/`; `/api/*` always takes precedence; `none` disables. |
-| `AIRLOCK_OPERATOR_PASSWORD`, `AIRLOCK_JUDGE_PASSWORD` | no (≥8 chars, must differ) | — | Role passwords. Without both, only the read-only viewer role exists. The viewer role needs no password and can read every task, its pasted issue text and its complete event stream, including every model turn and the output of every command the model runs (a `cat` or `git diff` puts the candidate source verbatim on the stream). Only the sealed candidate zip and `patch.diff` are gated, by an export grant. Do not paste text into a public deployment that must not be public; gating the URL is the optional NetBird add-on. |
+| `AIRLOCK_OPERATOR_PASSWORD`, `AIRLOCK_JUDGE_PASSWORD` | no (≥8 chars, must differ) | — | Role passwords. Without both, no one can sign in. Task data (issue text, events, model turns, command output) is readable only by the session that started the task and by the operator; each login is its own principal, so judges sharing the judge password do not see each other's cases. Signed out, only profiles and the host check are served. Export is limited to candidates that passed their checks, and serves one sealed zip. |
 | `PORT`, `CONTROL_BIND` | no | `3000`, `0.0.0.0` | Listener. |
 | `AIRLOCK_INSECURE_COOKIES` | no | unset | `1` drops the cookie `Secure` flag for plain-http local development only. |
 | `AIRLOCK_TRUST_PROXY` | no | unset | Set when a reverse proxy fronts control (deployment step 2): `1` for a proxy on the same host, or a comma-separated list of proxy IP addresses. The login rate limit (10/min per client) then keys on the proxy's `X-Forwarded-For` hop for requests arriving from that proxy; every other peer is keyed on its own address, so a direct connection cannot spoof a fresh budget. Unset behind a proxy, all clients share the proxy's address and one login bucket, and ten bad passwords a minute from anyone lock every operator out. |

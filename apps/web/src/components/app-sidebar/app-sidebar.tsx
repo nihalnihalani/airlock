@@ -141,10 +141,10 @@ function RoleFooter() {
       <div className="min-w-0 flex-1 leading-tight">
         <div className="truncate text-sm capitalize">{role}</div>
         <div className="truncate text-[11px] text-muted-foreground">
-          {session.role === "viewer" ? "Read-only" : "Can start cases and run hostile input"}
+          {session.role === "viewer" ? "Sign in to start or read cases" : session.role === "operator" ? "Sees every case" : "Sees the cases this session started"}
         </div>
       </div>
-      <Badge tone={session.role === "operator" ? "ok" : session.role === "judge" ? "info" : "neutral"} title="Roles are enforced by the control API: operator and judge may start cases and run hostile input; viewer is read-only.">
+      <Badge tone={session.role === "operator" ? "ok" : session.role === "judge" ? "info" : "neutral"} title="Roles are enforced by the control API: operator and judge may start cases and run hostile input; a judge reads only its own session's cases; signed out, no case data is shown.">
         {role}
       </Badge>
       {session.role === "viewer" ? (

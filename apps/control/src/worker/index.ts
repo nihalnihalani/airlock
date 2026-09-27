@@ -268,17 +268,20 @@ export class TaskWorker {
         if (!released) {
           // Someone else already moved the task (e.g. running → cancelling by the API). Nothing to undo.
         }
-      } else if (mode === "cancel" && error instanceof TeardownIncompleteError) {
-        log.warn("worker: cancel pass could not confirm teardown", { taskId, leaseId, error });
-        // Revoke/destroy not confirmed: the sandbox may still be running. Stay in `cancelling`,
-        // release the lease with a retry-after so a later tick tries again, bounded by the number
-        // of cancel passes recorded durably in `runs`. Past the bound the task is `failed` (an
-        // honest record of an unconfirmed teardown), never `cancelled`, and keeps its attemptId.
+      } else if (mode === "cancel") {
+        log.warn("worker: cancel pass did not complete", { taskId, leaseId, error });
+        // Any cancel pass that did not return normally has not confirmed the teardown: an explicit
+        // TeardownIncompleteError, and equally a store or supervisor error thrown before or after
+        // it (the sandbox may still be running). Stay in `cancelling`, release the lease with a
+        // retry-after so a later tick tries again, bounded by the number of cancel passes recorded
+        // durably in `runs`. Past the bound the task is `failed` (an honest record of an
+        // unconfirmed teardown), never `cancelled`, and keeps its attemptId. A retried pass whose
+        // attempt is already destroyed confirms that from the supervisor journal and completes.
         const passes = (await this.db.scanWhere<{ taskId: string; mode: WorkerMode }>("runs", { taskId, mode: "cancel" })).length;
         const retries = Math.max(0, this.options.cancelRetries ?? 5);
         if (passes <= retries) {
           const retryAt = new Date(this.now() + (this.options.cancelRetryDelayMs ?? 5000)).toISOString();
-          await this.appendEvent(owner, taskId, "lifecycle", "Teardown will be retried", `${error.message} (cancel pass ${passes} of ${retries + 1}; next at ${retryAt})`).catch((e) =>
+          await this.appendEvent(owner, taskId, "lifecycle", "Teardown will be retried", `${error instanceof Error ? error.message : "cancel pass failed"} (cancel pass ${passes} of ${retries + 1}; next at ${retryAt})`).catch((e) =>
             backgroundFailure("record teardown retry", e),
           );
           await this.db.compareAndSwap(
@@ -289,7 +292,8 @@ export class TaskWorker {
             { leaseId: null, leaseUntil: retryAt, updatedAt: new Date(this.now()).toISOString() },
           );
         } else {
-          const detail = `${error.message} (teardown still unconfirmed after ${passes} cancel passes; the attempt stays recorded)`;
+          const reason = error instanceof Error ? error.message : "cancel pass failed";
+          const detail = `${reason} (teardown still unconfirmed after ${passes} cancel passes; the attempt stays recorded)`;
           await this.appendEvent(owner, taskId, "error", "Task failed", detail).catch((e) => backgroundFailure("record task error", e));
           await this.db.compareAndSwap(
             owner,
@@ -311,7 +315,7 @@ export class TaskWorker {
           taskId,
           { leaseId, status: claimedStatus },
           {
-            status: mode === "cancel" ? "cancelled" : "failed",
+            status: "failed",
             error: detail.slice(0, 2000),
             leaseId: null,
             leaseUntil: null,

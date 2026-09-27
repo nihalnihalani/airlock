@@ -2,8 +2,9 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Task } from "@airlock/contracts";
-import { createApp, STORE_KIND_GRANTS } from "../src/api.ts";
+import { createHash } from "node:crypto";
+import type { Task, VerificationRecord } from "@airlock/contracts";
+import { ARTIFACT_KIND_EXPORT, createApp, STORE_KIND_GRANTS, type ApiDeps } from "../src/api.ts";
 import { exportBundle } from "../src/artifacts/index.ts";
 import { TaskEventBus } from "../src/events.ts";
 import { ARTIFACT_KIND_BUNDLE, STORE_KIND_VERIFICATIONS } from "../src/repair-handler.ts";
@@ -13,6 +14,7 @@ import { exportBundleDouble, FX_FIXED_SOURCE, fixtureObserve, makeFixture, Memor
 import { FakeSupervisor } from "./helpers/fake-supervisor.ts";
 import { makeHarness, OWNER, type Harness } from "./helpers/harness.ts";
 
+const sha = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const OPERATOR = "operator-pass-123";
 const JUDGE = "judge-pass-456";
 
@@ -31,6 +33,7 @@ interface Ctx {
   artifacts: MemoryArtifactStore;
   harness: Harness | null;
   bus: TaskEventBus;
+  deps: ApiDeps;
   close: () => Promise<void>;
 }
 
@@ -56,7 +59,7 @@ async function makeCtx(options: { withWorker?: boolean; now?: () => number; webD
     bus = new TaskEventBus();
   }
   const sessions = new SessionService(store, { operatorPassword: OPERATOR, judgePassword: JUDGE, ttlMs: 60_000, secureCookies: false, ...(options.now ? { now: options.now } : {}) });
-  const app = createApp({
+  const deps: ApiDeps = {
     store,
     sessions,
     profiles: new Map([[fixture.profile.manifest.id, fixture.profile]]),
@@ -72,8 +75,9 @@ async function makeCtx(options: { withWorker?: boolean; now?: () => number; webD
     ...(options.now ? { now: options.now } : {}),
     ...(options.webDist ? { webDist: options.webDist } : {}),
     ...(options.trustedProxies ? { trustedProxies: options.trustedProxies } : {}),
-  });
-  return { app, store, supervisor, artifacts, harness, bus, close: async () => (harness ? harness.close() : store.close()) };
+  };
+  const app = createApp(deps);
+  return { app, store, supervisor, artifacts, harness, bus, deps, close: async () => (harness ? harness.close() : store.close()) };
 }
 
 async function login(app: Ctx["app"], password: string): Promise<string> {
@@ -223,15 +227,19 @@ describe("routes and roles", () => {
       expect(((await scripted.json()) as { error: string }).error).toContain("scripted");
       const notJson = await ctx.app.request("/api/tasks", { method: "POST", headers: { "content-type": "application/json", cookie: op }, body: "{oops" });
       expect(notJson.status).toBe(400);
-      expect((await ctx.app.request("/api/tasks/nope")).status).toBe(404);
-      expect((await ctx.app.request("/api/tasks/../etc")).status).toBe(404);
+      expect((await ctx.app.request("/api/tasks/nope", { headers: { cookie: op } })).status).toBe(404);
+      expect((await ctx.app.request("/api/tasks/../etc", { headers: { cookie: op } })).status).toBe(404);
+      // No anonymous reads of task data: list, detail and events all need a session.
+      expect((await ctx.app.request("/api/tasks")).status).toBe(401);
+      expect((await ctx.app.request("/api/tasks/nope")).status).toBe(401);
+      expect((await ctx.app.request("/api/tasks/nope/events")).status).toBe(401);
       expect((await ctx.app.request("/api/host")).status).toBe(200);
     } finally {
       await ctx.close();
     }
   });
 
-  test("create → list → view; judge cannot cancel an operator's task, operator can cancel anything", async () => {
+  test("create → list → view; a judge cannot see or cancel an operator's task, operator can cancel anything", async () => {
     const ctx = await makeCtx();
     try {
       const op = await login(ctx.app, OPERATOR);
@@ -240,15 +248,19 @@ describe("routes and roles", () => {
       expect(created.status).toBe(201);
       const task = (await created.json()) as Task;
       expect(task.status).toBe("queued");
-      expect(task.owner).toBe("operator");
-      const list = (await (await ctx.app.request("/api/tasks")).json()) as Task[];
+      // A role is never an owner: each login is its own principal.
+      expect(task.owner).toMatch(/^operator-[a-f0-9]{24}$/);
+      const list = (await (await ctx.app.request("/api/tasks", { headers: { cookie: op } })).json()) as Task[];
       expect(list.map((t) => t.id)).toEqual([task.id]);
-      const view = (await (await ctx.app.request(`/api/tasks/${task.id}`)).json()) as { task: Task; cases?: { id: string; kind: string; title: string }[] };
+      expect(await (await ctx.app.request("/api/tasks", { headers: { cookie: judge } })).json()).toEqual([]);
+      expect((await ctx.app.request(`/api/tasks/${task.id}`, { headers: { cookie: judge } })).status).toBe(404);
+      expect((await ctx.app.request(`/api/tasks/${task.id}/events`, { headers: { cookie: judge } })).status).toBe(404);
+      const view = (await (await ctx.app.request(`/api/tasks/${task.id}`, { headers: { cookie: op } })).json()) as { task: Task; cases?: { id: string; kind: string; title: string }[] };
       expect(view.task.id).toBe(task.id);
       // Contract case titles ride on the view for the case table; inputs/expectations do not.
       expect(view.cases?.map((c) => c.id)).toEqual(fixture.profile.contract.cases.map((c) => c.id));
       expect(view.cases?.every((c) => typeof c.title === "string" && !("input" in c))).toBe(true);
-      expect((await ctx.app.request(`/api/tasks/${task.id}/cancel`, json({}, judge))).status).toBe(403);
+      expect((await ctx.app.request(`/api/tasks/${task.id}/cancel`, json({}, judge))).status).toBe(404);
       const cancelled = await ctx.app.request(`/api/tasks/${task.id}/cancel`, json({}, op));
       expect(cancelled.status).toBe(200);
       expect(((await cancelled.json()) as Task).status).toBe("cancelled");
@@ -329,7 +341,8 @@ describe("SSE", () => {
       const task: Task = { id: "task-sse", owner: OWNER, profileId: "fx-1", issueText: "x", status: "done", phase: "ready", outcome: "CHECKS_FAILED", generation: 1, leaseId: null, leaseUntil: null, attempts: 1, budget: { modelCallsUsed: 1, repairAttemptsUsed: 1 }, createdAt: at, updatedAt: at };
       await ctx.store.put(OWNER, "tasks", task);
       for (let i = 1; i <= 5; i++) await ctx.store.appendEvent(OWNER, task.id, { id: `e${i}`, at, kind: "info", title: `event ${i}`, detail: "" });
-      const res = await ctx.app.request("/api/tasks/task-sse/events", { headers: { "last-event-id": "3" } });
+      const op = await login(ctx.app, OPERATOR);
+      const res = await ctx.app.request("/api/tasks/task-sse/events", { headers: { "last-event-id": "3", cookie: op } });
       expect(res.status).toBe(200);
       expect(res.headers.get("content-type")).toContain("text/event-stream");
       const body = await res.text();
@@ -339,9 +352,9 @@ describe("SSE", () => {
       expect(body).toContain("event: end");
       expect(body).not.toContain('"title":"event 3"');
       // apps/web reopens a CLOSED stream with ?lastEventId=<seq>; it must replay like the header.
-      const viaQuery = await (await ctx.app.request("/api/tasks/task-sse/events?lastEventId=4")).text();
+      const viaQuery = await (await ctx.app.request("/api/tasks/task-sse/events?lastEventId=4", { headers: { cookie: op } })).text();
       expect([...viaQuery.matchAll(/^id: (\d+)$/gm)].map((m) => Number(m[1]))).toEqual([5]);
-      const bothHeaderWins = await (await ctx.app.request("/api/tasks/task-sse/events?lastEventId=1", { headers: { "last-event-id": "4" } })).text();
+      const bothHeaderWins = await (await ctx.app.request("/api/tasks/task-sse/events?lastEventId=1", { headers: { "last-event-id": "4", cookie: op } })).text();
       expect([...bothHeaderWins.matchAll(/^id: (\d+)$/gm)].map((m) => Number(m[1]))).toEqual([5]);
     } finally {
       await ctx.close();
@@ -351,11 +364,12 @@ describe("SSE", () => {
   test("unknown task → 404; no header → full replay", async () => {
     const ctx = await makeCtx();
     try {
-      expect((await ctx.app.request("/api/tasks/task-none/events")).status).toBe(404);
+      const op = await login(ctx.app, OPERATOR);
+      expect((await ctx.app.request("/api/tasks/task-none/events", { headers: { cookie: op } })).status).toBe(404);
       const at = new Date().toISOString();
       await ctx.store.put(OWNER, "tasks", { id: "task-x", owner: OWNER, profileId: "fx-1", issueText: "x", status: "failed", phase: "prepare", generation: 0, leaseId: null, leaseUntil: null, attempts: 1, budget: { modelCallsUsed: 0, repairAttemptsUsed: 0 }, createdAt: at, updatedAt: at });
       await ctx.store.appendEvent(OWNER, "task-x", { id: "e1", at, kind: "error", title: "boom", detail: "" });
-      const body = await (await ctx.app.request("/api/tasks/task-x/events")).text();
+      const body = await (await ctx.app.request("/api/tasks/task-x/events", { headers: { cookie: op } })).text();
       expect([...body.matchAll(/^id: (\d+)$/gm)].map((m) => Number(m[1]))).toEqual([1]);
     } finally {
       await ctx.close();
@@ -391,16 +405,19 @@ describe("preview and export", () => {
     }
   });
 
-  test("preview is open to judge sessions on any passed task but rate limited per session", async () => {
+  test("preview is owner-or-operator and rate limited per session", async () => {
     let t = 5_000_000;
     const ctx = await makeCtx({ withWorker: true, now: () => t });
     try {
       const op = await login(ctx.app, OPERATOR);
       const judge = await login(ctx.app, JUDGE);
-      const task = await completedTask(ctx, op);
+      const otherJudge = await login(ctx.app, JUDGE);
+      const task = await completedTask(ctx, judge);
       const body = { candidateDigest: task.candidateDigest, input: { x: 5 } };
-      // A judge may preview an operator's passed task: that is the demo flow.
+      // The judge who ran the repair may try its own sealed candidate.
       expect((await ctx.app.request(`/api/tasks/${task.id}/preview`, json(body, judge))).status).toBe(200);
+      // Another judge sharing the judge password is a different principal: the task reads as absent.
+      expect((await ctx.app.request(`/api/tasks/${task.id}/preview`, json(body, otherJudge))).status).toBe(404);
       // But not in a tight loop: one preview per interval per session, like /api/hostile.
       const second = await ctx.app.request(`/api/tasks/${task.id}/preview`, json(body, judge));
       expect(second.status).toBe(429);
@@ -435,21 +452,26 @@ describe("preview and export", () => {
       const op = await login(ctx.app, OPERATOR);
       const judge = await login(ctx.app, JUDGE);
       const task = await completedTask(ctx, op);
+      const owner = (await ctx.store.scanWhere<Task>("tasks", { id: task.id }))[0]!.owner;
       const first = await ctx.app.request(`/api/tasks/${task.id}/export`, json({}, op));
       expect(first.status).toBe(201);
-      const grant = (await first.json()) as { grantId: string; url: string; expiresAt: string };
+      const grant = (await first.json()) as { grantId: string; url: string; expiresAt: string; zipDigest: string };
       const second = await ctx.app.request(`/api/tasks/${task.id}/export`, json({}, op));
       expect(second.status).toBe(200);
       expect(await second.json()).toEqual(grant);
-      const stored = await ctx.store.get<{ candidateDigest: string }>(OWNER, STORE_KIND_GRANTS, grant.grantId);
+      const stored = await ctx.store.get<{ candidateDigest: string; verificationRecordDigest: string; zipDigest: string }>(owner, STORE_KIND_GRANTS, grant.grantId);
       expect(stored?.candidateDigest).toBe(task.candidateDigest!);
-      expect(await ctx.store.insertImmutable(OWNER, STORE_KIND_GRANTS, { id: grant.grantId, candidateDigest: "0".repeat(64) })).toBe(false);
-      expect((await ctx.store.get<{ candidateDigest: string }>(OWNER, STORE_KIND_GRANTS, grant.grantId))?.candidateDigest).toBe(task.candidateDigest!);
+      expect(stored?.verificationRecordDigest).toMatch(/^[a-f0-9]{64}$/);
+      expect(stored?.zipDigest).toBe(grant.zipDigest);
+      expect(await ctx.store.insertImmutable(owner, STORE_KIND_GRANTS, { id: grant.grantId, candidateDigest: "0".repeat(64) })).toBe(false);
+      expect((await ctx.store.get<{ candidateDigest: string }>(owner, STORE_KIND_GRANTS, grant.grantId))?.candidateDigest).toBe(task.candidateDigest!);
 
       const dl1 = await ctx.app.request(grant.url, { headers: { cookie: op } });
       expect(dl1.status).toBe(200);
       expect(dl1.headers.get("content-type")).toBe("application/zip");
+      expect(dl1.headers.get("x-content-type-options")).toBe("nosniff");
       const bytes1 = new Uint8Array(await dl1.arrayBuffer());
+      expect(sha(bytes1)).toBe(grant.zipDigest);
       const dl2 = await ctx.app.request(grant.url, { headers: { cookie: op } });
       const bytes2 = new Uint8Array(await dl2.arrayBuffer());
       expect(Buffer.from(bytes1).equals(Buffer.from(bytes2))).toBe(true);
@@ -459,31 +481,129 @@ describe("preview and export", () => {
       expect((await ctx.app.request(grant.url, { headers: { cookie: judge } })).status).toBe(404);
       expect((await ctx.app.request(grant.url)).status).toBe(401);
       // Verification records are immutable in the store too.
-      const rec = await ctx.store.get<{ id: string; passed: boolean }>(OWNER, STORE_KIND_VERIFICATIONS, task.verificationRecordId!);
-      expect(await ctx.store.insertImmutable(OWNER, STORE_KIND_VERIFICATIONS, { ...rec!, passed: false })).toBe(false);
+      const rec = await ctx.store.get<{ id: string; passed: boolean }>(owner, STORE_KIND_VERIFICATIONS, task.verificationRecordId!);
+      expect(await ctx.store.insertImmutable(owner, STORE_KIND_VERIFICATIONS, { ...rec!, passed: false })).toBe(false);
     } finally {
       await ctx.close();
     }
   });
 
-  test("export download whose sealed bundle bytes no longer match the manifest is refused with 409 and a reason, not 500", async () => {
+  test("the export zip is sealed once: later grants, other sessions, new events and a restart serve identical bytes", async () => {
+    const ctx = await makeCtx({ withWorker: true, realExport: true });
+    try {
+      const judge = await login(ctx.app, JUDGE);
+      const op = await login(ctx.app, OPERATOR);
+      const task = await completedTask(ctx, judge);
+      const owner = (await ctx.store.scanWhere<Task>("tasks", { id: task.id }))[0]!.owner;
+      const g1 = (await (await ctx.app.request(`/api/tasks/${task.id}/export`, json({}, judge))).json()) as { url: string; zipDigest: string };
+      const b1 = new Uint8Array(await (await ctx.app.request(g1.url, { headers: { cookie: judge } })).arrayBuffer());
+      // A different principal gets its own grant for the same sealed bytes; its grant event, and any
+      // later event, are outside the sealed payload.
+      await ctx.store.appendEvent(owner, task.id, { id: "evt-late", at: new Date().toISOString(), kind: "info", title: "late event", detail: "" });
+      const g2 = (await (await ctx.app.request(`/api/tasks/${task.id}/export`, json({}, op))).json()) as { url: string; zipDigest: string };
+      expect(g2.zipDigest).toBe(g1.zipDigest);
+      const b2 = new Uint8Array(await (await ctx.app.request(g2.url, { headers: { cookie: op } })).arrayBuffer());
+      expect(Buffer.from(b1).equals(Buffer.from(b2))).toBe(true);
+      expect(sha(b1)).toBe(g1.zipDigest);
+      expect(Buffer.from(b1).toString("utf8")).not.toContain("late event");
+      expect(Buffer.from(b1).toString("utf8")).not.toContain("Export authorized");
+      // A second control process over the same store and artifacts serves the same bytes.
+      const restarted = createApp({ ...ctx.deps, sessions: new SessionService(ctx.store, { operatorPassword: OPERATOR, judgePassword: JUDGE, ttlMs: 60_000, secureCookies: false }) });
+      const b3 = new Uint8Array(await (await restarted.request(g1.url, { headers: { cookie: judge } })).arrayBuffer());
+      expect(Buffer.from(b1).equals(Buffer.from(b3))).toBe(true);
+      // Tampering the stored zip is detected on read, never served.
+      ctx.artifacts.blobs.set(g1.zipDigest, new Uint8Array([1, 2, 3]));
+      expect((await ctx.app.request(g1.url, { headers: { cookie: judge } })).status).toBe(409);
+      // A seal whose bytes are gone issues no new grant.
+      ctx.artifacts.blobs.delete(g1.zipDigest);
+      const third = await login(ctx.app, OPERATOR);
+      expect((await ctx.app.request(`/api/tasks/${task.id}/export`, json({}, third))).status).toBe(409);
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  test("concurrent first exports seal one zip", async () => {
+    const ctx = await makeCtx({ withWorker: true, realExport: true });
+    try {
+      const op = await login(ctx.app, OPERATOR);
+      const judge = await login(ctx.app, JUDGE);
+      const task = await completedTask(ctx, judge);
+      const results = await Promise.all([
+        ctx.app.request(`/api/tasks/${task.id}/export`, json({}, judge)),
+        ctx.app.request(`/api/tasks/${task.id}/export`, json({}, op)),
+      ]);
+      const digests = await Promise.all(results.map(async (r) => ((await r.json()) as { zipDigest: string }).zipDigest));
+      expect(new Set(digests).size).toBe(1);
+      expect([...ctx.artifacts.json.keys()].filter((k) => k.startsWith(`${ARTIFACT_KIND_EXPORT}/`))).toHaveLength(1);
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  test("export is refused for a failed repair and for a baseline that did not reproduce, when granting and when downloading", async () => {
+    const ctx = await makeCtx({ withWorker: true });
+    try {
+      const op = await login(ctx.app, OPERATOR);
+      const task = await completedTask(ctx, op);
+      const owner = (await ctx.store.scanWhere<Task>("tasks", { id: task.id }))[0]!.owner;
+      const grant = (await (await ctx.app.request(`/api/tasks/${task.id}/export`, json({}, op))).json()) as { url: string };
+      const verification = (await ctx.store.get<VerificationRecord>(owner, STORE_KIND_VERIFICATIONS, task.verificationRecordId!))!;
+      const baseline = (await ctx.store.get<VerificationRecord>(owner, STORE_KIND_VERIFICATIONS, task.baselineRecordId!))!;
+      const at = new Date().toISOString();
+      // CHECKS_FAILED with a failing candidate record.
+      await ctx.store.insertImmutable(owner, STORE_KIND_VERIFICATIONS, { ...verification, id: "ver-failed", passed: false });
+      await ctx.store.put(owner, "tasks", { ...task, id: "task-failed", outcome: "CHECKS_FAILED", verificationRecordId: "ver-failed", updatedAt: at });
+      const failed = await ctx.app.request("/api/tasks/task-failed/export", json({}, op));
+      expect(failed.status).toBe(409);
+      expect(((await failed.json()) as { error: string }).error).toContain("CHECKS_FAILED");
+      // Outcome claims a pass but the candidate record says otherwise.
+      await ctx.store.put(owner, "tasks", { ...task, id: "task-lying", verificationRecordId: "ver-failed", updatedAt: at });
+      expect((await ctx.app.request("/api/tasks/task-lying/export", json({}, op))).status).toBe(409);
+      // Baseline that did not reproduce.
+      await ctx.store.insertImmutable(owner, STORE_KIND_VERIFICATIONS, { ...verification, id: "ver-nobase", taskId: "task-nobase" });
+      await ctx.store.insertImmutable(owner, STORE_KIND_VERIFICATIONS, { ...baseline, id: "ver-base-bad", taskId: "task-nobase", passed: false });
+      await ctx.store.put(owner, "tasks", { ...task, id: "task-nobase", verificationRecordId: "ver-nobase", baselineRecordId: "ver-base-bad", updatedAt: at });
+      const nobase = await ctx.app.request("/api/tasks/task-nobase/export", json({}, op));
+      expect(nobase.status).toBe(409);
+      expect(((await nobase.json()) as { error: string }).error).toContain("baseline");
+      // A grant is re-checked when used: the task now points at a failing record.
+      await ctx.store.put(owner, "tasks", { ...task, outcome: "CHECKS_FAILED", updatedAt: at });
+      expect((await ctx.app.request(grant.url, { headers: { cookie: op } })).status).toBe(409);
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  test("a grant issued before sealed exports existed authorizes nothing", async () => {
+    const ctx = await makeCtx({ withWorker: true });
+    try {
+      const op = await login(ctx.app, OPERATOR);
+      const task = await completedTask(ctx, op);
+      const session = (await ctx.store.scan<{ owner: string; role: string }>("sessions")).find((r) => r.value.role === "operator")!.value;
+      const legacy = { id: "grant-legacy", owner: session.owner, taskId: task.id, candidateDigest: task.candidateDigest, verificationRecordId: task.verificationRecordId, createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString() };
+      await ctx.store.insertImmutable(session.owner, STORE_KIND_GRANTS, legacy);
+      expect((await ctx.app.request("/api/exports/grant-legacy", { headers: { cookie: op } })).status).toBe(410);
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  test("export of a candidate whose stored bundle bytes no longer match the manifest is refused with 409 and a reason, not 500", async () => {
     const ctx = await makeCtx({ withWorker: true, realExport: true });
     try {
       const op = await login(ctx.app, OPERATOR);
       const task = await completedTask(ctx, op);
-      const granted = await ctx.app.request(`/api/tasks/${task.id}/export`, json({}, op));
-      expect(granted.status).toBe(201);
-      const grant = (await granted.json()) as { url: string };
-      expect((await ctx.app.request(grant.url, { headers: { cookie: op } })).status).toBe(200);
-      // Tamper the stored bundle's bytes after sealing; the manifest and candidateDigest are untouched.
+      // Tamper the stored bundle's bytes before the export is sealed; the manifest and candidateDigest are untouched.
       const key = `${ARTIFACT_KIND_BUNDLE}/${task.candidateDigest}`;
       const bundle = ctx.artifacts.json.get(key) as { files: { contentBase64: string }[] };
       bundle.files[0]!.contentBase64 = Buffer.from("def compute(x):\n    return 'tampered'\n").toString("base64");
-      const refused = await ctx.app.request(grant.url, { headers: { cookie: op } });
+      const refused = await ctx.app.request(`/api/tasks/${task.id}/export`, json({}, op));
       expect(refused.status).toBe(409);
       const body = (await refused.json()) as { error: string };
       expect(body.error).toContain("no longer matches");
       expect(body.error).toContain("lib/mod.py");
+      expect([...ctx.artifacts.json.keys()].some((k) => k.startsWith(`${ARTIFACT_KIND_EXPORT}/`))).toBe(false);
     } finally {
       await ctx.close();
     }
@@ -501,10 +621,7 @@ describe("preview and export", () => {
     }
   });
 
-  test("the unauthenticated event stream carries the output of every command the model runs (documented viewer policy)", async () => {
-    // The READMEs say the viewer role sees command output, file contents included, and that only
-    // the sealed zip is gated by an export grant. Pin the first half: a `run` after write_file
-    // streams its stdout to a reader with no cookie.
+  test("the event stream carries command output only to its owner or an operator, and closes when the session ends", async () => {
     const ctx = await makeCtx({
       withWorker: true,
       driverScript: [
@@ -514,18 +631,90 @@ describe("preview and export", () => {
       ],
     });
     try {
+      const judge = await login(ctx.app, JUDGE);
+      const otherJudge = await login(ctx.app, JUDGE);
+      const op = await login(ctx.app, OPERATOR);
+      const created = (await (await ctx.app.request("/api/tasks", json({ profileId: "fx-1", issueText: "x" }, judge))).json()) as Task;
+      await ctx.harness!.waitFor(created.id);
+      expect((await ctx.app.request(`/api/tasks/${created.id}/events`)).status).toBe(401);
+      expect((await ctx.app.request(`/api/tasks/${created.id}/events`, { headers: { cookie: otherJudge } })).status).toBe(404);
+      for (const cookie of [judge, op]) {
+        const body = await (await ctx.app.request(`/api/tasks/${created.id}/events`, { headers: { cookie } })).text();
+        const execData = body
+          .split("\n")
+          .filter((line) => line.startsWith("data: "))
+          .map((line) => JSON.parse(line.slice(6)) as { kind?: string; data?: { tool?: string; result?: { stdout?: string } } })
+          .find((e) => e.kind === "exec" && e.data?.tool === "run");
+        expect(execData?.data?.result?.stdout).toBe("ran cat lib/mod.py");
+      }
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  test("an open event stream stops delivering once its session is logged out", async () => {
+    const ctx = await makeCtx();
+    try {
+      const judge = await login(ctx.app, JUDGE);
+      const created = (await (await ctx.app.request("/api/tasks", json({ profileId: "fx-1", issueText: "x" }, judge))).json()) as Task;
+      // No worker: the task stays queued, so the stream would stay open indefinitely.
+      const res = await ctx.app.request(`/api/tasks/${created.id}/events`, { headers: { cookie: judge } });
+      expect(res.status).toBe(200);
+      const reader = res.body!.getReader();
+      const first = new TextDecoder().decode((await reader.read()).value);
+      expect(first).toContain("Task created");
+      await ctx.app.request("/api/session", { method: "DELETE", headers: { cookie: judge } });
+      const owner = (await ctx.store.scanWhere<Task>("tasks", { id: created.id }))[0]!.owner;
+      await ctx.store.appendEvent(owner, created.id, { id: "evt-after-logout", at: new Date().toISOString(), kind: "info", title: "secret after logout", detail: "" });
+      let rest = "";
+      const deadline = Date.now() + 2000;
+      for (;;) {
+        const chunk = await Promise.race([reader.read(), new Promise<{ done: true; value: undefined }>((r) => setTimeout(() => r({ done: true, value: undefined }), Math.max(1, deadline - Date.now())))]);
+        if (chunk.done) break;
+        rest += new TextDecoder().decode(chunk.value);
+      }
+      expect(rest).not.toContain("secret after logout");
+      // The stream ends with a named reason so the client stops reconnecting into 401s.
+      expect(rest).toContain("event: end");
+      expect(rest).toContain('"status":"unauthorized"');
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  test("a session written before per-login owners (owner equal to its role) is refused", async () => {
+    const ctx = await makeCtx();
+    try {
+      const token = "legacytoken";
+      const { createHash } = await import("node:crypto");
+      const id = createHash("sha256").update(token).digest("hex");
+      await ctx.store.put("system", "sessions", { id, owner: "judge", role: "judge", createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString() });
+      const res = await ctx.app.request("/api/session", { headers: { cookie: `airlock_session=${token}` } });
+      expect(((await res.json()) as { role: string }).role).toBe("viewer");
+      expect((await ctx.app.request("/api/tasks", { headers: { cookie: `airlock_session=${token}` } })).status).toBe(401);
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  test("cancelling a queued task that still names an attempt goes through teardown, not straight to cancelled", async () => {
+    const ctx = await makeCtx();
+    try {
       const op = await login(ctx.app, OPERATOR);
       const created = (await (await ctx.app.request("/api/tasks", json({ profileId: "fx-1", issueText: "x" }, op))).json()) as Task;
-      await ctx.harness!.waitFor(created.id);
-      const body = await (await ctx.app.request(`/api/tasks/${created.id}/events`)).text();
-      const execData = body
-        .split("\n")
-        .filter((line) => line.startsWith("data: "))
-        .map((line) => JSON.parse(line.slice(6)) as { kind?: string; data?: { tool?: string; result?: { stdout?: string } } })
-        .find((e) => e.kind === "exec" && e.data?.tool === "run");
-      expect(execData?.data?.result?.stdout).toBe("ran cat lib/mod.py");
-      // The sealed candidate zip itself is not on the stream or the task view: it needs a grant.
-      expect((await ctx.app.request(`/api/tasks/${created.id}/export`, json({}))).status).toBe(401);
+      const owner = (await ctx.store.scanWhere<Task>("tasks", { id: created.id }))[0]!.owner;
+      // A lost lease requeues a task with its attemptId still set.
+      await ctx.store.put(owner, "tasks", { ...created, attemptId: "att-requeued", generation: 1 });
+      const res = await ctx.app.request(`/api/tasks/${created.id}/cancel`, json({}, op));
+      expect(res.status).toBe(200);
+      const next = (await res.json()) as Task;
+      expect(next.status).toBe("cancelling");
+      expect(next.attemptId).toBe("att-requeued");
+      expect(next.leaseId).toBeNull();
+      expect(next.leaseUntil).toBeNull();
+      // A task that never had an attempt is still cancelled by the state change alone.
+      const fresh = (await (await ctx.app.request("/api/tasks", json({ profileId: "fx-1", issueText: "y" }, op))).json()) as Task;
+      expect(((await (await ctx.app.request(`/api/tasks/${fresh.id}/cancel`, json({}, op))).json()) as Task).status).toBe("cancelled");
     } finally {
       await ctx.close();
     }

@@ -2,6 +2,9 @@
  * The task roster, kept live by polling `GET /api/tasks` (there is no roster stream). Polling pauses
  * while the tab is hidden and resumes with an immediate fetch; `refresh` lets a caller that just
  * changed a task (create, cancel) update the roster without waiting for the next tick.
+ *
+ * The roster needs a session (the API answers 401 without one), so it is only polled while
+ * `enabled`; signed out, it is empty rather than an error.
  */
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { Task } from "@airlock/contracts";
@@ -16,7 +19,8 @@ export interface TaskList {
   refresh: () => void;
 }
 
-export function useTaskList(): TaskList {
+/** `enabled` false: signed out (an empty roster); null: the session is still loading (no roster yet). */
+export function useTaskList(enabled: boolean | null = true): TaskList {
   const [tasks, setTasks] = useState<Task[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const inflight = useRef<{ controller: AbortController; since: number } | null>(null);
@@ -52,6 +56,12 @@ export function useTaskList(): TaskList {
   const poll = useCallback(() => load(true), [load]);
 
   useEffect(() => {
+    if (enabled !== true) {
+      inflight.current?.controller.abort();
+      setTasks(enabled === null ? null : []);
+      setError(null);
+      return;
+    }
     refresh();
     let timer: ReturnType<typeof setInterval> | null = null;
     const start = () => {
@@ -74,7 +84,7 @@ export function useTaskList(): TaskList {
       document.removeEventListener("visibilitychange", onVisibility);
       inflight.current?.controller.abort();
     };
-  }, [refresh, poll]);
+  }, [enabled, refresh, poll]);
 
   return { tasks, error, refresh };
 }

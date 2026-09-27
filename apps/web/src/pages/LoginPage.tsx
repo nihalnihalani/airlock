@@ -14,7 +14,7 @@
  *
  * Airlock modifications: the centred column, mark, heading and full-width outline controls are
  * OpenBot's; the OAuth/SSO providers are replaced by Airlock's role password form (POST
- * /api/session), a "continue as viewer" link and the current-role line; entrance motion is a CSS
+ * /api/session) and the current-role line; entrance motion is a CSS
  * stagger instead of the motion library. No better-auth.
  */
 import { IconShieldLock } from "@tabler/icons-react";
@@ -24,7 +24,7 @@ import { Input } from "../components/ui/input";
 import { Separator } from "../components/ui/separator";
 import { useSession } from "../hooks/session";
 import { describeError } from "../lib/api";
-import { hrefFor, navigate } from "../lib/router";
+import { navigate } from "../lib/router";
 
 const MAX_PASSWORD = 512;
 const ENTER = "animate-in fade-in-0 slide-in-from-bottom-2 duration-200 fill-mode-both motion-reduce:animate-none";
@@ -86,17 +86,10 @@ export function LoginPage() {
               {error}
             </p>
           ) : null}
-          <div className="my-4 flex items-center gap-3">
-            <Separator className="flex-1" />
-            <span className="text-xs text-muted-foreground">or</span>
-            <Separator className="flex-1" />
-          </div>
-          <Button className="h-10 w-full tracking-tight" size="lg" variant="ghost" render={<a href={hrefFor({ name: "home" })} />}>
-            Continue as viewer
-          </Button>
-          <p className="mt-6 text-center text-xs text-pretty text-muted-foreground">
-            Passwords come from the control app environment. Viewers can read every case; starting cases, hostile input and downloads
-            need the operator or judge role.
+          <Separator className="my-4" />
+          <p className="text-center text-xs text-pretty text-muted-foreground">
+            Passwords come from the control app environment. Case data is private to a session: a judge sees the cases it started in
+            that session, and the operator sees every case.
           </p>
           <p className="mt-2 text-center text-xs text-muted-foreground">
             Current role: <span className="font-medium text-foreground">{session.loading ? "…" : session.role}</span>

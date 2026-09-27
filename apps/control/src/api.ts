@@ -17,9 +17,11 @@ import {
   CreateTaskRequest,
   PreviewRequest,
   canonicalJson,
+  sha256,
   type AdapterRequest,
   type CandidateBundle,
   type ExportGrant,
+  type ExportSeal,
   type HostCheck,
   type ProfileManifest,
   type Role,
@@ -95,6 +97,8 @@ type Env = { Variables: { session: SessionRecord | null; role: Role; token: stri
 
 export const STORE_KIND_TASKS = "tasks";
 export const STORE_KIND_GRANTS = "export-grants";
+/** Artifact-store kind of the sealed export records (ExportSeal); the zip bytes are a blob. */
+export const ARTIFACT_KIND_EXPORT = "export";
 const MAX_JSON_BODY = 256 * 1024;
 const TERMINAL = new Set<Task["status"]>(["cancelled", "done", "failed"]);
 
@@ -182,8 +186,17 @@ export function createApp(deps: ApiDeps) {
     if (!row) throw new AppError("task not found", 404);
     return { owner: row.owner, task: row.value };
   };
-  const requireOwnerOrOperator = (session: SessionRecord, owner: string) => {
-    if (session.role !== "operator" && session.owner !== owner) throw new AppError("not the owner of this task", 403);
+  const canAccess = (session: SessionRecord, owner: string) => session.role === "operator" || session.owner === owner;
+  /**
+   * Every task route: a session is required, and a task that is not the caller's reads as absent
+   * (404, not 403), so task ids cannot be probed. Operators see every task; a judge sees only the
+   * tasks its own session created (CLAUDE.md §3.6).
+   */
+  const authorizeTask = async (c: Context<Env>): Promise<{ session: SessionRecord; owner: string; task: Task }> => {
+    const session = requireRole(c, "operator", "judge");
+    const { owner, task } = await loadTask(taskId(c));
+    if (!canAccess(session, owner)) throw new AppError("task not found", 404);
+    return { session, owner, task };
   };
   const publicManifest = (m: ProfileManifest): Omit<ProfileManifest, "referenceCommitMaintainerOnly"> => {
     const { referenceCommitMaintainerOnly: _omit, ...rest } = m;
@@ -271,12 +284,15 @@ export function createApp(deps: ApiDeps) {
     return c.json(task, 201);
   });
   app.get("/api/tasks", async (c) => {
-    const rows = await deps.store.scan<Task>(STORE_KIND_TASKS);
-    const tasks = rows.map((r) => r.value).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-    return c.json(tasks);
+    const session = requireRole(c, "operator", "judge");
+    const tasks =
+      session.role === "operator"
+        ? (await deps.store.scan<Task>(STORE_KIND_TASKS)).map((r) => r.value)
+        : await deps.store.list<Task>(session.owner, STORE_KIND_TASKS);
+    return c.json(tasks.sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
   });
   app.get("/api/tasks/:id", async (c) => {
-    const { owner, task } = await loadTask(taskId(c));
+    const { owner, task } = await authorizeTask(c);
     const view: TaskView = { task };
     const profile = deps.profiles.get(task.profileId);
     if (profile) view.cases = profile.contract.cases.map((cs) => ({ id: cs.id, kind: cs.kind, title: cs.title }));
@@ -298,8 +314,9 @@ export function createApp(deps: ApiDeps) {
   });
 
   app.get("/api/tasks/:id/events", async (c) => {
-    const id = taskId(c);
-    const { owner } = await loadTask(id);
+    const { owner, task: opened } = await authorizeTask(c);
+    const id = opened.id;
+    const token = c.get("token");
     // Replay cursor: the browser's automatic reconnect sends Last-Event-ID; apps/web's own
     // reopen (after a CLOSED stream) passes ?lastEventId=<seq>; ?after= is kept for curl users.
     const header = c.req.header("last-event-id") ?? c.req.query("lastEventId") ?? c.req.query("after") ?? "0";
@@ -321,9 +338,16 @@ export function createApp(deps: ApiDeps) {
         sent += 1;
         await stream.writeSSE({ id: String(event.seq), event: event.kind, data: JSON.stringify(event) });
       };
-      const drain = async () => {
+      // The session is re-checked before every batch is written: a stream outlives neither its
+      // session's expiry nor a logout, and a revoked reader gets no further events.
+      const stillAuthorized = async () => {
+        const current = await deps.sessions.resolve(token);
+        return !!current && canAccess(current, owner);
+      };
+      const drain = async (): Promise<Task | null | "unauthorized"> => {
         for (;;) {
           const batch = await deps.store.listEvents(id, cursor, 500);
+          if (!(await stillAuthorized())) return "unauthorized";
           for (const event of batch) await send(event);
           if (batch.length < 500) break;
         }
@@ -338,6 +362,12 @@ export function createApp(deps: ApiDeps) {
         let lastHeartbeat = now();
         for (;;) {
           const task = await drain();
+          if (task === "unauthorized") {
+            // Named so the client stops reconnecting instead of retrying into 401s.
+            log.debug("sse: session ended; closing stream", { taskId: id });
+            await stream.writeSSE({ event: "end", data: JSON.stringify({ status: "unauthorized" }) });
+            break;
+          }
           if (!replayed) {
             replayed = true;
             log.debug("sse: replayed", { taskId: id, afterSeq, throughSeq: cursor, events: sent });
@@ -369,15 +399,18 @@ export function createApp(deps: ApiDeps) {
   });
 
   app.post("/api/tasks/:id/cancel", async (c) => {
-    const session = requireRole(c, "operator", "judge");
-    const { owner, task } = await loadTask(taskId(c));
-    requireOwnerOrOperator(session, owner);
+    const { session, owner, task } = await authorizeTask(c);
     if (TERMINAL.has(task.status)) throw new AppError(`task is already ${task.status}`, 409);
     if (task.status === "cancelling") return c.json(task);
     const at = iso();
     let next: Task | null = null;
     if (task.status === "queued") {
-      next = await deps.store.compareAndSwap<Task>(owner, STORE_KIND_TASKS, task.id, { status: "queued", leaseId: null }, { status: "cancelled", updatedAt: at });
+      // A queued task that still names an attempt (requeued after a lost lease) may have a sandbox
+      // on VM B: it goes through `cancelling` so the worker's cancel pass revokes and confirms the
+      // teardown. Only a task that never had an attempt is cancelled by the state change alone.
+      next = task.attemptId
+        ? await deps.store.compareAndSwap<Task>(owner, STORE_KIND_TASKS, task.id, { status: "queued", leaseId: null, attemptId: task.attemptId }, { status: "cancelling", leaseUntil: null, updatedAt: at })
+        : await deps.store.compareAndSwap<Task>(owner, STORE_KIND_TASKS, task.id, { status: "queued", leaseId: null }, { status: "cancelled", updatedAt: at }, [], ["attemptId"]);
     }
     if (!next) {
       next = await deps.store.compareAndSwap<Task>(owner, STORE_KIND_TASKS, task.id, { status: "running" }, { status: "cancelling", updatedAt: at });
@@ -394,12 +427,10 @@ export function createApp(deps: ApiDeps) {
     return c.json(next);
   });
 
-  // Preview is deliberately open to judge sessions on any task (the demo flow: the operator runs
-  // the repair, the judge tries the sealed candidate). It writes nothing and is bound to the sealed
+  // Preview is owner-or-operator like every task route. It writes nothing and is bound to the sealed
   // digest; what bounds it is the per-session interval, since every call is a sandbox run on VM B.
   app.post("/api/tasks/:id/preview", async (c) => {
-    const session = requireRole(c, "operator", "judge");
-    const { owner, task } = await loadTask(taskId(c));
+    const { session, owner, task } = await authorizeTask(c);
     const body = await readJson(c, PreviewRequest);
     if (!task.candidateDigest || !task.verificationRecordId) throw new AppError("task has no verified candidate", 409);
     if (body.candidateDigest !== task.candidateDigest) throw new AppError("candidateDigest does not match the task's sealed candidate", 409);
@@ -428,32 +459,33 @@ export function createApp(deps: ApiDeps) {
   });
 
   app.post("/api/tasks/:id/export", async (c) => {
-    const session = requireRole(c, "operator", "judge");
-    const { owner, task } = await loadTask(taskId(c));
-    requireOwnerOrOperator(session, owner);
-    if (!task.candidateDigest || !task.verificationRecordId || !task.baselineRecordId) throw new AppError("task has no verified candidate to export", 409);
-    const verification = await deps.store.get<VerificationRecord>(owner, STORE_KIND_VERIFICATIONS, task.verificationRecordId);
-    if (!verification || verification.candidateDigest !== task.candidateDigest) throw new AppError("verification record missing or for a different candidate", 409);
+    const { session, owner, task } = await authorizeTask(c);
+    const eligible = await exportEligibility(owner, task);
+    const seal = await sealExport(owner, task, eligible);
     const existing = (await deps.store.list<ExportGrant>(session.owner, STORE_KIND_GRANTS)).find(
-      (g) => g.taskId === task.id && g.candidateDigest === task.candidateDigest && g.verificationRecordId === verification.id && Date.parse(g.expiresAt) > now(),
+      (g) => g.taskId === task.id && g.sealId === seal.id && g.zipDigest === seal.zipDigest && Date.parse(g.expiresAt) > now(),
     );
     const grant: ExportGrant = existing ?? {
       id: `grant-${randomBytes(12).toString("hex")}`,
       owner: session.owner,
       taskId: task.id,
-      candidateDigest: task.candidateDigest,
-      verificationRecordId: verification.id,
+      candidateDigest: seal.candidateDigest,
+      verificationRecordId: seal.verificationRecordId,
+      verificationRecordDigest: seal.verificationRecordDigest,
+      sealId: seal.id,
+      zipDigest: seal.zipDigest,
       createdAt: iso(),
       expiresAt: new Date(now() + deps.exportGrantTtlMs).toISOString(),
     };
     if (!existing) {
       const inserted = await deps.store.insertImmutable(session.owner, STORE_KIND_GRANTS, grant);
       if (!inserted) throw new AppError("grant id collision; retry", 409);
-      const event = await deps.store.appendEvent(owner, task.id, { id: `evt-${randomBytes(8).toString("hex")}`, at: iso(), kind: "artifact", title: "Export authorized", detail: `grant ${grant.id} for ${grant.candidateDigest}` });
+      // Recorded after sealing, so grant events never change the sealed zip.
+      const event = await deps.store.appendEvent(owner, task.id, { id: `evt-${randomBytes(8).toString("hex")}`, at: iso(), kind: "artifact", title: "Export authorized", detail: `grant ${grant.id} for ${grant.candidateDigest}; zip ${grant.zipDigest}` });
       deps.bus.publish(event);
-      log.debug("export grant created", { grantId: grant.id, taskId: task.id, candidateDigest: grant.candidateDigest, verificationRecordId: grant.verificationRecordId, role: session.role, expiresAt: grant.expiresAt });
+      log.debug("export grant created", { grantId: grant.id, taskId: task.id, candidateDigest: grant.candidateDigest, verificationRecordId: grant.verificationRecordId, zipDigest: grant.zipDigest, role: session.role, expiresAt: grant.expiresAt });
     }
-    return c.json({ grantId: grant.id, url: `/api/exports/${grant.id}`, expiresAt: grant.expiresAt }, existing ? 200 : 201);
+    return c.json({ grantId: grant.id, url: `/api/exports/${grant.id}`, expiresAt: grant.expiresAt, zipDigest: grant.zipDigest }, existing ? 200 : 201);
   });
 
   app.get("/api/exports/:grantId", async (c) => {
@@ -463,24 +495,97 @@ export function createApp(deps: ApiDeps) {
     const grant = await deps.store.get<ExportGrant>(session.owner, STORE_KIND_GRANTS, grantId);
     if (!grant) throw new AppError("grant not found", 404);
     if (Date.parse(grant.expiresAt) <= now()) throw new AppError("grant expired; request a new export", 410);
+    // Grants issued before sealed exports existed name no seal: they authorize nothing now.
+    if (!grant.sealId || !grant.zipDigest || !grant.verificationRecordDigest) throw new AppError("grant predates sealed exports; request a new export", 410);
     const { owner, task } = await loadTask(grant.taskId);
-    if (task.candidateDigest !== grant.candidateDigest || task.verificationRecordId !== grant.verificationRecordId)
+    if (!canAccess(session, owner)) throw new AppError("grant not found", 404);
+    // Eligibility is checked when the grant is used, not only when it was issued.
+    const eligible = await exportEligibility(owner, task);
+    if (eligible.verification.id !== grant.verificationRecordId || eligible.verificationRecordDigest !== grant.verificationRecordDigest || task.candidateDigest !== grant.candidateDigest)
       throw new AppError("task no longer matches this grant", 409);
-    const verification = await deps.store.get<VerificationRecord>(owner, STORE_KIND_VERIFICATIONS, grant.verificationRecordId);
-    const baseline = task.baselineRecordId ? await deps.store.get<VerificationRecord>(owner, STORE_KIND_VERIFICATIONS, task.baselineRecordId) : null;
-    if (!verification || !baseline) throw new AppError("verification records missing", 409);
-    const bundle = await deps.artifacts.getJson<CandidateBundle>(ARTIFACT_KIND_BUNDLE, grant.candidateDigest);
-    if (!bundle || bundle.candidateDigest !== grant.candidateDigest) throw new AppError("sealed candidate bundle missing", 409);
-    const profile = deps.profiles.get(task.profileId);
-    if (!profile) throw new AppError("profile no longer loaded", 409);
-    const events = await deps.store.listEvents(task.id, 0, 5000);
-    const { files } = await deps.exportBundle({ profile: publicManifest(profile.manifest) as ProfileManifest, baseFiles: profile.baseFiles, bundle, verification, baseline, task, events });
-    const zip = deps.zipFiles(files);
+    const seal = await deps.artifacts.getJson<ExportSeal>(ARTIFACT_KIND_EXPORT, grant.sealId);
+    if (!seal || seal.zipDigest !== grant.zipDigest || seal.taskId !== task.id || seal.verificationRecordDigest !== grant.verificationRecordDigest || seal.baselineRecordId !== eligible.baseline.id || seal.baselineRecordDigest !== eligible.baselineRecordDigest)
+      throw new AppError("sealed export missing or does not match this grant", 409);
+    const zip = await deps.artifacts.getBlob(seal.zipDigest);
+    if (!zip) throw new AppError("sealed export bytes missing", 409);
+    if (zip.byteLength !== seal.byteLength || (await sha256(zip)) !== seal.zipDigest) throw new AppError("sealed export bytes no longer match their digest", 409);
     c.header("content-type", "application/zip");
     c.header("content-disposition", `attachment; filename="airlock-${task.id}-${grant.candidateDigest.slice(0, 12)}.zip"`);
     c.header("cache-control", "private, no-store");
+    c.header("x-content-type-options", "nosniff");
+    c.header("x-airlock-zip-sha256", seal.zipDigest);
     return new Response(new Uint8Array(zip).buffer.slice(zip.byteOffset, zip.byteOffset + zip.byteLength) as ArrayBuffer, { status: 200, headers: c.res.headers });
   });
+
+  /**
+   * A task may be exported only as a passing candidate: outcome CANDIDATE_PASSED_CHECKS, a candidate
+   * record that passed for exactly the sealed digest, and a baseline record that passed (the
+   * reported failure reproduced and the regression cases held) under the same contract and adapter.
+   * A failed or unverified repair never reaches the passing-candidate export.
+   */
+  async function exportEligibility(owner: string, task: Task): Promise<{ verification: VerificationRecord; baseline: VerificationRecord; verificationRecordDigest: string; baselineRecordDigest: string }> {
+    if (task.status !== "done" || task.outcome !== "CANDIDATE_PASSED_CHECKS") throw new AppError(`only a candidate that passed its checks can be exported (task ${task.status}${task.outcome ? `, ${task.outcome}` : ""})`, 409);
+    if (!task.candidateDigest || !task.verificationRecordId || !task.baselineRecordId) throw new AppError("task has no verified candidate to export", 409);
+    const verification = await deps.store.get<VerificationRecord>(owner, STORE_KIND_VERIFICATIONS, task.verificationRecordId);
+    const baseline = await deps.store.get<VerificationRecord>(owner, STORE_KIND_VERIFICATIONS, task.baselineRecordId);
+    if (!verification || verification.role !== "candidate" || verification.taskId !== task.id || verification.candidateDigest !== task.candidateDigest)
+      throw new AppError("verification record missing or for a different candidate", 409);
+    if (!verification.passed || verification.completedCases !== verification.requiredCases) throw new AppError("candidate did not pass checks; export refused", 409);
+    if (!baseline || baseline.role !== "baseline" || baseline.taskId !== task.id || !baseline.passed) throw new AppError("baseline did not reproduce the reported failure under the frozen contract; export refused", 409);
+    if (baseline.contractDigest !== verification.contractDigest || baseline.adapterDigest !== verification.adapterDigest) throw new AppError("baseline and candidate were measured under different contracts or adapters; export refused", 409);
+    return { verification, baseline, verificationRecordDigest: await sha256(canonicalJson(verification)), baselineRecordDigest: await sha256(canonicalJson(baseline)) };
+  }
+
+  /**
+   * Builds the export zip once per (task, candidate record) and stores it content-addressed; every
+   * later grant and download serves those bytes. The seal id is derived from the pair, so two
+   * concurrent first exports race on one immutable record and the loser adopts the winner's seal.
+   */
+  async function sealExport(owner: string, task: Task, eligible: Awaited<ReturnType<typeof exportEligibility>>): Promise<ExportSeal> {
+    const { verification, baseline } = eligible;
+    const id = `exp-${(await sha256(`${task.id}\n${verification.id}`)).slice(0, 40)}`;
+    const matches = (seal: ExportSeal | null): seal is ExportSeal =>
+      !!seal && seal.taskId === task.id && seal.candidateDigest === task.candidateDigest && seal.verificationRecordDigest === eligible.verificationRecordDigest && seal.baselineRecordDigest === eligible.baselineRecordDigest;
+    const existing = await deps.artifacts.getJson<ExportSeal>(ARTIFACT_KIND_EXPORT, id);
+    if (existing) {
+      if (!matches(existing)) throw new AppError("sealed export does not match the task's verification records", 409);
+      // A grant is only issued for bytes that are actually there (the blob store re-hashes on read).
+      if (!(await deps.artifacts.getBlob(existing.zipDigest))) throw new AppError("sealed export bytes missing; export refused", 409);
+      return existing;
+    }
+    const bundle = await deps.artifacts.getJson<CandidateBundle>(ARTIFACT_KIND_BUNDLE, task.candidateDigest!);
+    if (!bundle || bundle.candidateDigest !== task.candidateDigest) throw new AppError("sealed candidate bundle missing", 409);
+    const profile = deps.profiles.get(task.profileId);
+    if (!profile) throw new AppError("profile no longer loaded", 409);
+    // Evidence cutoff: every event recorded so far except export bookkeeping. The task is terminal,
+    // so nothing the run did is left out; grant events are never part of the sealed payload.
+    const events = (await deps.store.listEvents(task.id, 0, 5000)).filter((e) => !(e.kind === "artifact" && (e.title === "Export authorized" || e.title === "Export sealed")));
+    const { files } = await deps.exportBundle({ profile: publicManifest(profile.manifest) as ProfileManifest, baseFiles: profile.baseFiles, bundle, verification, baseline, task, events });
+    const zip = deps.zipFiles(files);
+    const zipDigest = await deps.artifacts.putBlob(zip);
+    const seal: ExportSeal = {
+      schemaVersion: 1,
+      id,
+      taskId: task.id,
+      candidateDigest: task.candidateDigest!,
+      verificationRecordId: verification.id,
+      verificationRecordDigest: eligible.verificationRecordDigest,
+      baselineRecordId: baseline.id,
+      baselineRecordDigest: eligible.baselineRecordDigest,
+      zipDigest,
+      byteLength: zip.byteLength,
+      eventsThroughSeq: events.at(-1)?.seq ?? 0,
+      sealedAt: iso(),
+    };
+    if (await deps.artifacts.putImmutableJson(ARTIFACT_KIND_EXPORT, id, seal)) {
+      const event = await deps.store.appendEvent(owner, task.id, { id: `evt-${randomBytes(8).toString("hex")}`, at: iso(), kind: "artifact", title: "Export sealed", detail: `zip ${zipDigest} (${zip.byteLength} bytes, events through #${seal.eventsThroughSeq})` });
+      deps.bus.publish(event);
+      return seal;
+    }
+    const winner = await deps.artifacts.getJson<ExportSeal>(ARTIFACT_KIND_EXPORT, id);
+    if (!matches(winner)) throw new AppError("sealed export does not match the task's verification records", 409);
+    return winner;
+  }
 
   // ---- hostile panel --------------------------------------------------------------------------------
   app.post("/api/hostile", async (c) => {

@@ -11,7 +11,7 @@ icons. The content is Airlock's. Copied and adapted files keep their MIT header 
 
 ![Task page on the deployment](../../docs/assets/ui-task.png)
 
-Above: a live glm-5.3 repair on the Vultr deployment (Kata), read as a viewer. The same page on a
+Above: a live glm-5.3 repair on the Vultr deployment (Kata), captured signed out before task data required a session. The same page on a
 local development stack (plain runc, scripted model driver) labels both everywhere:
 [ui-task-local-dev.png](../../docs/assets/ui-task-local-dev.png).
 
@@ -80,13 +80,12 @@ replay label, what the agent may change and read, caps), and the issue text box 
 reply is the `BlastRadiusCard`: Died vs Survived, execution, output tails, teardown. Judge/operator
 only; history lives in the page for the session.
 
-**Sign in** (`#/login`). OpenBot's sign page with the role password; "Continue as viewer" reads
-without signing in. `#/tasks` lists every case as rows.
+**Sign in** (`#/login`). OpenBot's sign page with the role password. `#/tasks` lists the session's
+cases as rows (every case for the operator).
 
-Task lists, task pages and event streams are readable by the viewer role without signing in,
-including the pasted issue text, every model turn and the output of every command the model runs
-(which can include candidate file contents); only the sealed zip needs an export grant. Role checks
-are enforced by the control API; the UI only hides controls.
+Task lists, task pages and event streams need a session: a judge sees only the cases its own
+session started, the operator sees every case, and signed out the roster is empty (nothing is
+fetched). Role and ownership checks are enforced by the control API; the UI only hides controls.
 
 ## Live events
 

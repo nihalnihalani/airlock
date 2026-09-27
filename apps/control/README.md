@@ -26,7 +26,7 @@ bunx tsc --noEmit -p tsconfig.json  # from apps/control
 | `AIRLOCK_DATA_DIR` | no | `./data` | PGlite database (`pglite/`) and content-addressed artifacts (`artifacts/`). |
 | `AIRLOCK_PROFILES_DIR` | no | `<repo>/profiles` | Profiles; each needs a verified `base/` tree (see below). |
 | `AIRLOCK_RUNTIME_DIR` | no | `<repo>/runtime/python` | Where `adapter.py` lives (part of the adapter digest). |
-| `AIRLOCK_OPERATOR_PASSWORD` / `AIRLOCK_JUDGE_PASSWORD` | no (≥8 chars, must differ) | — | Role passwords. Without both only the read-only viewer role exists. |
+| `AIRLOCK_OPERATOR_PASSWORD` / `AIRLOCK_JUDGE_PASSWORD` | no (≥8 chars, must differ) | — | Role passwords. Without both, no one can sign in and no task data is readable. |
 | `PORT` / `CONTROL_BIND` | no | `3000` / `0.0.0.0` | Listener. |
 | `AIRLOCK_WEB_DIST` | no | `<repo>/apps/web/dist` | Built web UI served at `/` (SPA fallback to `index.html`); `/api/*` always takes precedence. Unset and missing → only `/api` is served (logged). `none` disables. |
 | `AIRLOCK_INSECURE_COOKIES` | no | unset | `1` drops the cookie `Secure` flag for plain-http local development only. |
@@ -51,7 +51,11 @@ and is the diff base for export. The adapter digest is
 ## Routes (`/api`)
 
 Cookie `airlock_session` (HttpOnly, SameSite=Strict, sha256 of the token stored). Roles:
-`operator`, `judge`, `viewer` (no login, read-only). Errors are JSON `{error}`.
+`operator`, `judge`, and `viewer` (signed out: profiles, host check and login only; no task data).
+A role is never an owner: every login is its own principal (`<role>-<random>`), so two judges who
+share the judge password cannot read each other's cases; after logout or expiry that principal's
+cases stay readable to the operator only. A task that is not the caller's reads as 404. Sessions
+written before this rule (owner equal to the role) are refused. Errors are JSON `{error}`.
 `referenceCommitMaintainerOnly` is stripped from every response.
 
 | Route | Role | Notes |
@@ -60,12 +64,12 @@ Cookie `airlock_session` (HttpOnly, SameSite=Strict, sha256 of the token stored)
 | `GET /api/profiles` | any | `ProfileManifest[]` without the maintainer commit. |
 | `GET /api/host` | any | Supervisor `HostCheck`. |
 | `POST /api/tasks` `CreateTaskRequest` → `Task` (201) | operator, judge | Profile must be loaded (422 otherwise). |
-| `GET /api/tasks`, `GET /api/tasks/:id` | any | List / `TaskView` (task, baseline and candidate records, sealed manifest, host). |
-| `GET /api/tasks/:id/events` | any | Public to viewers, including every model turn and each `run` command's stdout/stderr (bounded), so candidate source printed by a command is on the stream. SSE of `RunEvent` (`id` = seq, `event` = kind), replayed after `Last-Event-ID` (or `?after=`), plus `task` snapshots and a final `end`. |
-| `POST /api/tasks/:id/cancel` → `Task` | owner or operator | queued → cancelled; running → cancelling (worker runs the teardown path); terminal → 409. |
-| `POST /api/tasks/:id/preview` `PreviewRequest` → `PreviewResult` | operator, judge (any task; intended: the judge tries the operator's passed candidate) | Refused (409) unless `candidateDigest` equals the task's sealed digest, the verification record passed, and the stored bundle still carries that digest. Runs a fresh `preview` invocation on the sealed bundle; writes nothing. One per 2 s per session (429). |
-| `POST /api/tasks/:id/export` → `{grantId,url,expiresAt}` | owner or operator | Immutable `ExportGrant` bound to (task, candidateDigest, verificationRecordId); repeated calls return the same unexpired grant. |
-| `GET /api/exports/:grantId` | the granting owner | Streams the zip: `patch.diff`, `manifest.json`, `verification.json`, `baseline.json`, `task.json` (the task record with lease fields removed: owner role, issue text, budget, `scriptedDriver` on diagnostic runs), `events.jsonl` (the complete run event log, including every model turn's text and every command run), `reproduction/`, `README.txt`. Repeatable; 410 when expired. |
+| `GET /api/tasks`, `GET /api/tasks/:id` | owner or operator | List (a judge gets its own session's tasks, the operator all) / `TaskView` (task, baseline and candidate records, sealed manifest, host). |
+| `GET /api/tasks/:id/events` | owner or operator | SSE of `RunEvent` (`id` = seq, `event` = kind), replayed after `Last-Event-ID` (or `?after=`), plus `task` snapshots and a final `end`. Carries every model turn and each `run` command's stdout/stderr (bounded). The session is re-checked before every delivery; a stream closes when its session is logged out or expires. |
+| `POST /api/tasks/:id/cancel` → `Task` | owner or operator | queued with no attempt → cancelled; queued that still names an attempt (requeued after a lost lease), or running → cancelling (the worker's cancel pass revokes and confirms teardown); terminal → 409. |
+| `POST /api/tasks/:id/preview` `PreviewRequest` → `PreviewResult` | owner or operator | Refused (409) unless `candidateDigest` equals the task's sealed digest, the verification record passed, and the stored bundle still carries that digest. Runs a fresh `preview` invocation on the sealed bundle; writes nothing. One per 2 s per session (429). |
+| `POST /api/tasks/:id/export` → `{grantId,url,expiresAt,zipDigest}` | owner or operator | Only for `CANDIDATE_PASSED_CHECKS` with a passing candidate record for the sealed digest and a passing baseline record under the same contract and adapter (409 otherwise). The first export seals the zip once (`ExportSeal`: zip sha256, verification and baseline record digests, events through a fixed seq; grant events excluded) and stores it content-addressed. The immutable `ExportGrant` binds the verification record digest and the sealed zip digest; repeated calls return the same unexpired grant. |
+| `GET /api/exports/:grantId` | the granting owner | Re-checks eligibility, then serves the sealed zip byte for byte (re-hashed on read; `x-airlock-zip-sha256`): `patch.diff`, `manifest.json`, `verification.json`, `baseline.json`, `task.json` (the task record with lease fields removed: owner, issue text, budget, `scriptedDriver` on diagnostic runs), `events.jsonl` (the run event log through the seal, including every model turn's text and every command run), `reproduction/`, `README.txt`. Repeatable, identical across grants and restarts; 410 when expired or when the grant predates sealed exports. |
 | `POST /api/hostile {command, profileId?}` → `BlastRadiusCard` | judge, operator | One per 10 s per session. |
 
 ## Phases and outcomes

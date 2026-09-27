@@ -6,6 +6,12 @@
  * holds only sha256(token) so a database read never yields a usable credential. Airlock changes:
  * two role passwords (operator, judge) instead of one access key, a viewer role without login,
  * an HttpOnly cookie instead of a bearer header, a login rate limiter, and no HMAC-signed links.
+ *
+ * Ownership: a role is never an owner. Each login is its own principal with an opaque owner id
+ * (`<role>-<random>`), so two judges who share the judge password cannot read each other's tasks.
+ * Logging out or letting the session expire ends that principal: its tasks stay readable to an
+ * operator, not to the next login. Sessions written before this rule (owner equal to the role)
+ * are refused and removed on resolve.
  */
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { Role, Session } from "@airlock/contracts";
@@ -74,7 +80,7 @@ export class SessionService {
     const createdAt = this.now();
     const session: SessionRecord = {
       id: digest(token).toString("hex"),
-      owner: role,
+      owner: `${role}-${randomBytes(12).toString("hex")}`,
       role,
       createdAt: new Date(createdAt).toISOString(),
       expiresAt: new Date(createdAt + this.options.ttlMs).toISOString(),
@@ -88,7 +94,7 @@ export class SessionService {
     if (!token || token.length > 128 || !/^[A-Za-z0-9_-]+$/.test(token)) return null;
     const session = await this.db.get<SessionRecord>(SESSION_OWNER, SESSION_KIND, digest(token).toString("hex"));
     if (!session) return null;
-    if (Date.parse(session.expiresAt) <= this.now()) {
+    if (Date.parse(session.expiresAt) <= this.now() || session.owner === session.role) {
       await this.db.remove(SESSION_OWNER, SESSION_KIND, session.id);
       return null;
     }

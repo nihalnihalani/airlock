@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { AttemptRef, RunEvent, Task } from "@airlock/contracts";
-import { SupervisorUnavailableError } from "../src/supervisor-client.ts";
+import { SupervisorFenceError, SupervisorUnavailableError } from "../src/supervisor-client.ts";
 import { STORE_KIND_VERIFICATIONS, countOccurrences, sliceLines } from "../src/repair-handler.ts";
 import { FX_FIXED_SOURCE, FX_BROKEN_SOURCE, fixtureObserve, makeFixture, scriptedDriverDouble, type Fixture, type ScriptedTurn } from "./helpers/doubles.ts";
 import { FakeSupervisor, okExec } from "./helpers/fake-supervisor.ts";
@@ -449,6 +449,41 @@ describe("repair handler", () => {
     return { h, supervisor, task, attemptId };
   }
 
+  test("a lost lease whose teardown cannot be confirmed leaves that on the record, and the attempt is never forgotten", async () => {
+    let releaseExec: (() => void) | null = null;
+    const execStarted = new Promise<void>((resolve) => { releaseExec = resolve; });
+    const supervisor = new OutageSupervisor({
+      profile: fixture.profile,
+      observe: fixtureObserve,
+      exec: (command, _files, signal) =>
+        new Promise((resolve, reject) => {
+          releaseExec?.();
+          const timer = setTimeout(() => resolve(okExec({ stdout: `ran ${command}` })), 20_000);
+          signal?.addEventListener("abort", () => { clearTimeout(timer); reject(new Error("exec aborted")); }, { once: true });
+        }),
+    });
+    const driver = scriptedDriverDouble([{ toolCalls: [{ name: "run", args: { command: "sleep 100" } }] }, ...repairScript(FX_FIXED_SOURCE)]);
+    const h = await makeHarness(fixture, supervisor, driver);
+    h.worker.start();
+    try {
+      const task = await h.newTask();
+      await execStarted;
+      const attemptId = [...supervisor.attempts.keys()][0]!;
+      supervisor.outage = true;
+      // Abort without a status change: the run loses its lease and the task is requeued.
+      h.worker.abort(task.id);
+      const result = await h.waitFor(task.id);
+      const events = await h.store.listEvents(task.id);
+      expect(events.some((e) => e.title === "Teardown incomplete after the lease was lost")).toBe(true);
+      // The next claim cannot confirm the teardown either, so it fails honestly and keeps the attempt.
+      expect(result.status).toBe("failed");
+      expect(result.attemptId).toBe(attemptId);
+      expect(supervisor.attempts.has(attemptId)).toBe(true);
+    } finally {
+      await h.close();
+    }
+  });
+
   test("cancel while the supervisor is unreachable stays `cancelling` and the teardown is retried until it is confirmed", async () => {
     const { h, supervisor, task, attemptId } = await cancelDuringOutage({ cancelRetries: 50 });
     try {
@@ -550,6 +585,27 @@ describe("repair handler", () => {
       expect(s.supervisor.attempts.size).toBe(0);
     } finally {
       await s.close();
+    }
+  });
+
+  test("a freeze the supervisor refuses (unsettled operations) → INCONCLUSIVE, nothing sealed, sandbox destroyed", async () => {
+    class RefusingFreeze extends FakeSupervisor {
+      override async freeze(): Promise<never> {
+        throw new SupervisorFenceError("Outstanding operations did not settle; the workspace is uncertain and will not be collected.");
+      }
+    }
+    const supervisor = new RefusingFreeze({ profile: fixture.profile, observe: fixtureObserve });
+    const h = await makeHarness(fixture, supervisor, scriptedDriverDouble(repairScript(FX_FIXED_SOURCE)));
+    h.worker.start();
+    try {
+      const task = await h.waitFor((await h.newTask()).id);
+      expect(task.status).toBe("done");
+      expect(task.outcome).toBe("INCONCLUSIVE");
+      expect(task.candidateDigest).toBeUndefined();
+      expect(supervisor.attempts.size).toBe(0);
+      expect((await h.store.listEvents(task.id)).some((e) => e.title === "Freeze refused by the supervisor")).toBe(true);
+    } finally {
+      await h.close();
     }
   });
 

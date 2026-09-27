@@ -120,12 +120,18 @@ export function useTaskEvents(taskId: string | null, active: boolean, autoReconn
     // Named events (`event: <kind>`) never reach `onmessage`; listen for each kind by name.
     for (const name of RUN_EVENT_NAMES) source.addEventListener(name, onRunEvent);
     // Optional named terminal event. If the server never sends it, nothing changes.
-    source.addEventListener("end", () => {
+    source.addEventListener("end", (msg: Event) => {
       if (disposed) return;
       flush();
       source.close();
       setStatus("ended");
-      setNote("The server closed the stream: the task reached a terminal state.");
+      const data = isServerMessage(msg) && typeof msg.data === "string" ? msg.data : "";
+      // The server ends a stream whose session was logged out or expired with status "unauthorized".
+      setNote(
+        /"status"\s*:\s*"unauthorized"/.test(data)
+          ? "The server closed the stream: your session ended. Sign in again to follow this case."
+          : "The server closed the stream: the task reached a terminal state.",
+      );
     });
     source.onerror = (event: Event) => {
       if (disposed) return;
