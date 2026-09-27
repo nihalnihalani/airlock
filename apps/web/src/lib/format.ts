@@ -122,8 +122,8 @@ export function hostnameOf(url: string): string {
 export type Tone = "neutral" | "ok" | "warn" | "bad" | "info";
 
 export function outcomeTone(outcome: Outcome): Tone {
-  if (outcome === "CANDIDATE_PASSED_CHECKS") return "ok";
-  if (outcome === "INCONCLUSIVE" || outcome === "STOPPED_LIMIT" || outcome === "NOT_REPRODUCED") return "warn";
+  if (outcome === "CANDIDATE_PASSED_CHECKS" || outcome === "RESULT_VERIFIED") return "ok";
+  if (outcome === "INCONCLUSIVE" || outcome === "STOPPED_LIMIT" || outcome === "NOT_REPRODUCED" || outcome === "RESULT_PARTIAL" || outcome === "UNSUPPORTED") return "warn";
   return "bad";
 }
 

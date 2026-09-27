@@ -5,7 +5,8 @@ import type { RuntimeTier } from "../lib/eventViews";
 import { cn } from "../lib/utils";
 import { Badge, type Tone } from "./common";
 
-const PHASES = Phase.options;
+/** Repair phases; "execute" belongs to general tasks only. */
+const ALL_PHASES: readonly Phase[] = Phase.options.filter((p) => p !== "execute");
 
 export function OutcomeBadge({ outcome }: { outcome: Outcome }) {
   return (
@@ -41,8 +42,20 @@ export function RuntimeChip({ tier }: { tier: RuntimeTier }) {
 }
 
 /** Seven phases as a compact stepper: done, current (live or terminal), to come. */
-export function PhaseRail({ task, className }: { task: Task; className?: string }) {
-  const currentIndex = PHASES.indexOf(task.phase);
+export function PhaseRail({
+  task,
+  className,
+  phases = ALL_PHASES,
+  current: currentPhase = task.phase,
+}: {
+  task: Task;
+  className?: string;
+  /** The phases this kind of task passes (general tasks: prepare → execute → freeze → verify → ready). */
+  phases?: readonly Phase[];
+  current?: Phase;
+}) {
+  const PHASES = phases;
+  const currentIndex = PHASES.indexOf(currentPhase);
   const terminal = isTerminalStatus(task.status);
   return (
     <ol className={cn("flex min-w-0 items-center gap-1", className)} aria-label="Phases">

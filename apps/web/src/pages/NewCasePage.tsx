@@ -10,7 +10,8 @@ import {
   IconServer2,
   IconShieldCheck,
 } from "@tabler/icons-react";
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { GeneralTaskComposer } from "../components/general/composer";
 import type { ProfileManifest } from "@airlock/contracts";
 import { Badge, BoolChip, Chip, ErrorBox, KeyValue, Mono, Notice } from "../components/common";
 import { DiagnosticBadge, InstanceIdRows, InstanceIdsLine } from "../components/Evidence";
@@ -160,7 +161,8 @@ function DiagnosticsSection({ profile, disabled, onLaunched }: { profile: Profil
   useEffect(() => {
     const controller = new AbortController();
     getDiagnostics(controller.signal)
-      .then(setScripts)
+      // General-task scripts ("general-*") drive general tasks only; they are offered under "Run a task".
+      .then((list) => setScripts(list.filter((d) => !d.name.startsWith("general-"))))
       .catch((err: unknown) => {
         if (err instanceof DOMException && err.name === "AbortError") return;
         setError(
@@ -223,7 +225,7 @@ function DiagnosticsSection({ profile, disabled, onLaunched }: { profile: Profil
   );
 }
 
-export function NewCasePage() {
+function RepairCaseComposer({ modeSwitch }: { modeSwitch: ReactNode }) {
   const session = useSession();
   const roster = useSharedTaskList();
   const [profiles, setProfiles] = useState<ProfileManifest[] | null>(null);
@@ -302,7 +304,8 @@ export function NewCasePage() {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <PageHeader>
-        <span className="text-sm text-muted-foreground">Profile:</span>
+        {modeSwitch}
+        <span className="ml-2 hidden text-sm text-muted-foreground sm:inline">Profile:</span>
         {profiles && profiles.length > 0 ? (
           <select
             aria-label="Supported profile"
@@ -408,4 +411,58 @@ export function NewCasePage() {
       </ComposerFrame>
     </div>
   );
+}
+
+type Mode = "repair" | "general";
+const MODE_KEY = "airlock-new-mode";
+
+function readMode(): Mode {
+  try {
+    return window.localStorage.getItem(MODE_KEY) === "general" ? "general" : "repair";
+  } catch {
+    return "repair";
+  }
+}
+
+/** Two ways to start: repair a supported bug (the repair profiles) or run a general task. */
+function ModeSwitch({ mode, onChange }: { mode: Mode; onChange: (mode: Mode) => void }) {
+  const options: { id: Mode; label: string; short: string }[] = [
+    { id: "repair", label: "Repair a supported bug", short: "Repair" },
+    { id: "general", label: "Run a task", short: "Run a task" },
+  ];
+  return (
+    <div role="tablist" aria-label="What to start" className="inline-flex shrink-0 items-center rounded-lg bg-muted p-0.5">
+      {options.map((o) => (
+        <button
+          key={o.id}
+          type="button"
+          role="tab"
+          aria-selected={mode === o.id}
+          onClick={() => onChange(o.id)}
+          className={
+            mode === o.id
+              ? "h-7 rounded-md bg-background px-2.5 text-xs font-medium text-foreground shadow-sm"
+              : "h-7 rounded-md px-2.5 text-xs text-muted-foreground hover:text-foreground"
+          }
+        >
+          <span className="hidden sm:inline">{o.label}</span>
+          <span className="sm:hidden">{o.short}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export function NewCasePage() {
+  const [mode, setMode] = useState<Mode>(readMode);
+  const change = (next: Mode) => {
+    setMode(next);
+    try {
+      window.localStorage.setItem(MODE_KEY, next);
+    } catch {
+      // not remembered
+    }
+  };
+  const modeSwitch = <ModeSwitch mode={mode} onChange={change} />;
+  return mode === "general" ? <GeneralTaskComposer modeSwitch={modeSwitch} /> : <RepairCaseComposer modeSwitch={modeSwitch} />;
 }

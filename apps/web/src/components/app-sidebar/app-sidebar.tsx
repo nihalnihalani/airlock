@@ -20,7 +20,7 @@
  * row, the search field, the row anatomy and classes, the empty states, the footer rows and the rail.
  * No TanStack Router/Query, motion, dropdown or channel mutations.
  */
-import { IconBug, IconFlame, IconLogin2, IconLogout, IconPinFilled, IconPlus, IconSearch, IconShieldLock } from "@tabler/icons-react";
+import { IconBug, IconFlame, IconSparkles, IconLogin2, IconLogout, IconPinFilled, IconPlus, IconSearch, IconShieldLock } from "@tabler/icons-react";
 import { useMemo, useState } from "react";
 import type { Task } from "@airlock/contracts";
 import { useNow, useSharedTaskList } from "../../hooks/useTaskList";
@@ -68,7 +68,7 @@ export function BrandMark({ className }: { className?: string }) {
 export function matchingRows(rows: TaskRowView[], query: string): TaskRowView[] {
   const needle = query.trim().toLowerCase();
   if (!needle) return rows;
-  return rows.filter((row) => [row.title, row.profileId, row.badge.label, row.id].some((f) => f.toLowerCase().includes(needle)));
+  return rows.filter((row) => [row.title, row.profileId, row.profileLabel, row.badge.label, row.id].some((f) => f.toLowerCase().includes(needle)));
 }
 
 function rowClass(active: boolean) {
@@ -84,7 +84,7 @@ function TaskRow({ row, active, onNavigate }: { row: TaskRowView; active: boolea
     <a href={hrefFor({ name: "task", id: row.id })} className={rowClass(active)} aria-current={active ? "page" : undefined} onClick={onNavigate}>
       <div className="relative shrink-0">
         <div className="flex size-8 items-center justify-center rounded-full bg-muted-foreground/10 text-foreground/70">
-          <IconBug className="size-4" />
+          {row.kind === "general" ? <IconSparkles className="size-4" /> : <IconBug className="size-4" />}
         </div>
         <span className="absolute -right-0.5 -bottom-0.5 rounded-full bg-sidebar p-[2px]">
           <Dot tone={tone} pulse={row.live} />
@@ -100,9 +100,17 @@ function TaskRow({ row, active, onNavigate }: { row: TaskRowView; active: boolea
           </span>
         </div>
         <div className="mt-px flex min-w-0 items-center gap-1.5 text-[12px] leading-4 text-muted-foreground">
-          <span className="shrink-0">{row.profileId}</span>
+          <span className="shrink-0" title={row.profileId}>{row.profileLabel}</span>
           <span className="shrink-0 text-muted-foreground/50">·</span>
           <span className={cn("min-w-0 truncate font-medium", TONE_TEXT[row.badge.tone])}>{row.badge.label}</span>
+          {row.cleanup ? (
+            <>
+              <span className="shrink-0 text-muted-foreground/50">·</span>
+              <span className={cn("shrink-0 truncate", TONE_TEXT[row.cleanup.tone])} title="Cleanup, separate from the result">
+                {row.cleanup.label}
+              </span>
+            </>
+          ) : null}
         </div>
         {row.scripted ? (
           <div

@@ -1,6 +1,6 @@
 import { IconLayoutSidebarRight, IconPlayerStopFilled, IconPlus } from "@tabler/icons-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { TaskView } from "@airlock/contracts";
+import type { Artifact, RunEvent, TaskView } from "@airlock/contracts";
 import { Badge, Dot, ErrorBox, Notice, type Tone } from "../components/common";
 import { STREAM_LABEL, TaskDetail } from "../components/detail/task-detail";
 import { DetailPanel } from "../components/layout/detail-panel";
@@ -22,7 +22,12 @@ import { canOperate, useSession } from "../hooks/session";
 import { useSharedTaskList } from "../hooks/useTaskList";
 import { useTaskEvents, type StreamStatus } from "../hooks/useTaskEvents";
 import { CleanupBadge, DiagnosticBadge, RepairDisabledBanner } from "../components/Evidence";
-import { ApiError, cancelTask, describeError, getTask } from "../lib/api";
+import { ApiError, cancelTask, describeError, getTask, getTaskProfiles, listTaskArtifacts, type TaskProfileInfo } from "../lib/api";
+import { GeneralTaskDetail } from "../components/general/detail";
+import { GeneralTaskSummary, StatusDimensions } from "../components/general/status";
+import { GeneralMark, GeneralResultPanel, GoalMessage, TurnMessage, type ScreenshotInfo } from "../components/general/thread";
+import { OperationCard } from "../components/general/op-card";
+import { buildGeneralThread, GENERAL_PHASES, generalPhase, profileShortName, screenshotMeta, type GeneralItem } from "../lib/general";
 import { cleanupStatus, isDiagnostic, type CleanupStatus } from "../lib/evidence";
 import { extractCheckpoints, runtimeTier } from "../lib/eventViews";
 import { isTerminalStatus, PHASE_LABEL, STATUS_LABEL } from "../lib/format";
@@ -104,6 +109,45 @@ function ThreadRow({ item, view, cleanup, onOpenDetails }: { item: ThreadItem; v
   }
 }
 
+function GeneralRow({
+  item,
+  task,
+  terminal,
+  screenshotInfo,
+  events,
+  artifacts,
+  artifactsError,
+  canExport,
+}: {
+  item: GeneralItem;
+  task: TaskView["task"];
+  terminal: boolean;
+  screenshotInfo: ScreenshotInfo;
+  events: readonly RunEvent[];
+  artifacts: Artifact[] | null;
+  artifactsError: string | null;
+  canExport: boolean;
+}) {
+  switch (item.type) {
+    case "goal":
+      return <GoalMessage item={item} task={task} />;
+    case "turn":
+      return <TurnMessage item={item} terminal={terminal} screenshotInfo={screenshotInfo} />;
+    case "op":
+      return (
+        <div className="min-w-0 pl-[2.125rem]">
+          <OperationCard op={item.op} terminal={terminal} screenshotInfo={screenshotInfo} />
+        </div>
+      );
+    case "mark":
+      return <GeneralMark item={item} />;
+    case "working":
+      return <WorkingRow item={{ type: "working", key: item.key, status: item.status, phase: generalPhase(item.phase) }} />;
+    case "result":
+      return <GeneralResultPanel task={task} events={events} artifacts={artifacts} artifactsError={artifactsError} canExport={canExport} />;
+  }
+}
+
 function ThreadSkeleton() {
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 px-4 py-6" aria-hidden>
@@ -127,8 +171,12 @@ export function TaskPage({ id }: { id: string }) {
   const [lastFetch, setLastFetch] = useState<string | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(readDetailPref);
   const inflight = useRef<AbortController | null>(null);
+  const [artifacts, setArtifacts] = useState<Artifact[] | null>(null);
+  const [artifactsError, setArtifactsError] = useState<string | null>(null);
+  const [taskProfiles, setTaskProfiles] = useState<TaskProfileInfo[] | null>(null);
 
   const terminal = view ? isTerminalStatus(view.task.status) : false;
+  const general = view?.task.kind === "general";
   const stream = useTaskEvents(id, true, !terminal);
 
   const refresh = useCallback(async () => {
@@ -153,10 +201,31 @@ export function TaskPage({ id }: { id: string }) {
     }
   }, [id]);
 
+  const refreshArtifacts = useCallback(async () => {
+    try {
+      setArtifacts(await listTaskArtifacts(id));
+      setArtifactsError(null);
+    } catch (err) {
+      setArtifactsError(describeError(err));
+    }
+  }, [id]);
+
+  // General tasks: the profile (for its limits and name) and the task's artifacts.
+  useEffect(() => {
+    if (!general) return;
+    const controller = new AbortController();
+    getTaskProfiles(controller.signal)
+      .then(setTaskProfiles)
+      .catch(() => setTaskProfiles([]));
+    return () => controller.abort();
+  }, [general]);
+
   useEffect(() => {
     setView(null);
     setLoadError(null);
     setCancelError(null);
+    setArtifacts(null);
+    setArtifactsError(null);
     void refresh();
     return () => inflight.current?.abort();
   }, [refresh]);
@@ -182,6 +251,14 @@ export function TaskPage({ id }: { id: string }) {
     if (stream.status === "ended") void refresh();
   }, [stream.status, refresh]);
 
+  const artifactEvents = useMemo(() => stream.log.events.filter((e) => e.kind === "artifact").length, [stream.log.events]);
+  const viewStatus = view?.task.status;
+  useEffect(() => {
+    if (!general) return;
+    const timer = setTimeout(() => void refreshArtifacts(), EVENT_REFRESH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [general, artifactEvents, viewStatus, refreshArtifacts]);
+
   // The roster shows this task's status too; nudge it when this view learns something new.
   const status = view?.task.status;
   const outcome = view?.task.outcome;
@@ -192,10 +269,28 @@ export function TaskPage({ id }: { id: string }) {
 
   const checkpoints = useMemo(() => extractCheckpoints(view, stream.log.events), [view, stream.log.events]);
   const tier = useMemo(() => runtimeTier(checkpoints), [checkpoints]);
-  const items = useMemo(() => buildThread(view?.task ?? null, stream.log.events), [view?.task, stream.log.events]);
+  const items = useMemo(() => (general ? [] : buildThread(view?.task ?? null, stream.log.events)), [general, view?.task, stream.log.events]);
   const groups = useMemo(() => groupItems(items), [items]);
+  const generalItems = useMemo(() => (general ? buildGeneralThread(view?.task ?? null, stream.log.events) : []), [general, view?.task, stream.log.events]);
+  const shots = useMemo(() => screenshotMeta(stream.log.events), [stream.log.events]);
+  const sentImages = useMemo(() => {
+    const set = new Set<string>();
+    for (const e of stream.log.events) {
+      const d = e.data as Record<string, unknown> | undefined;
+      if (e.kind === "model" && d?.["imageAttached"] === true && typeof d["imageArtifactId"] === "string") set.add(d["imageArtifactId"]);
+    }
+    return set;
+  }, [stream.log.events]);
+  const screenshotInfo: ScreenshotInfo = useCallback(
+    (artifactId: string) => {
+      const m = shots.get(artifactId);
+      return { capturedAt: m?.capturedAt ?? null, width: m?.width ?? null, height: m?.height ?? null, sentToModel: sentImages.has(artifactId) ? true : terminal ? false : undefined };
+    },
+    [shots, sentImages, terminal],
+  );
+  const taskProfile = view ? (taskProfiles?.find((p) => p.id === view.task.profileId) ?? null) : null;
   const cleanup = useMemo(() => cleanupStatus({ status: view?.task.status ?? "queued" }, stream.log.events), [view?.task.status, stream.log.events]);
-  const scroller = useStickToBottom(`${lastSeq ?? -1}:${items.length}:${status ?? ""}`);
+  const scroller = useStickToBottom(`${lastSeq ?? -1}:${items.length + generalItems.length}:${status ?? ""}`);
 
   const setDetails = (open: boolean) => {
     setDetailsOpen(open);
@@ -266,7 +361,30 @@ export function TaskPage({ id }: { id: string }) {
       detailWidth={DETAIL_WIDTH}
       title={<span className="px-2 text-sm font-medium">Details</span>}
       detail={
-        view ? (
+        view && general ? (
+          <GeneralTaskDetail
+            view={view}
+            events={stream.log.events}
+            checkpoints={checkpoints}
+            tier={tier}
+            profile={taskProfile}
+            artifacts={artifacts}
+            artifactsError={artifactsError}
+            stream={{
+              status: stream.status,
+              note: stream.note,
+              count: stream.log.events.length,
+              dropped: stream.log.dropped,
+              malformed: stream.log.malformed,
+            }}
+            lastFetch={lastFetch}
+            onReconnect={stream.reconnect}
+            onRefresh={() => {
+              void refresh();
+              void refreshArtifacts();
+            }}
+          />
+        ) : view ? (
           <TaskDetail
             view={view}
             events={stream.log.events}
@@ -304,6 +422,29 @@ export function TaskPage({ id }: { id: string }) {
                   {stream.log.dropped > 0 ? (
                     <Notice className="text-xs">{stream.log.dropped} older events were dropped from this view; the full log is in the export.</Notice>
                   ) : null}
+                  {general && task ? (
+                    <GeneralTaskSummary
+                      task={task}
+                      profileName={taskProfile?.displayName ?? profileShortName(task.profileId)}
+                      inputNames={(task.inputArtifactIds ?? []).map((aid) => artifacts?.find((a) => a.id === aid)?.filename ?? aid)}
+                    />
+                  ) : null}
+                  {general && task
+                    ? generalItems.map((item) => (
+                        <MessageScrollerItem key={item.key} className="flex flex-col gap-1.5 animate-in fade-in-0 duration-300 motion-reduce:animate-none">
+                          <GeneralRow
+                            item={item}
+                            task={task}
+                            terminal={terminal}
+                            screenshotInfo={screenshotInfo}
+                            events={stream.log.events}
+                            artifacts={artifacts}
+                            artifactsError={artifactsError}
+                            canExport={canOperate(session.role)}
+                          />
+                        </MessageScrollerItem>
+                      ))
+                    : null}
                   {groups.map((group) => (
                     <MessageScrollerItem key={group.key} className="flex flex-col gap-1.5 animate-in fade-in-0 duration-300 motion-reduce:animate-none">
                       {group.items.map((item) => (
@@ -328,12 +469,18 @@ export function TaskPage({ id }: { id: string }) {
                 ) : null}
               </div>
             }
-            footnote="Nothing typed here reaches the model: its inputs are fixed by the control plane (issue text, profile, tool results)."
+            footnote={
+              general
+                ? "Nothing typed here reaches the model: its inputs are fixed by the control plane (goal, profile, your files, tool results)."
+                : "Nothing typed here reaches the model: its inputs are fixed by the control plane (issue text, profile, tool results)."
+            }
           >
-            {task ? <PhaseRail task={task} /> : null}
+            {task ? general ? <PhaseRail task={task} phases={GENERAL_PHASES} current={generalPhase(task.phase)} /> : <PhaseRail task={task} /> : null}
             <div className="flex items-center gap-3">
               <div className="min-w-0 flex-1 text-sm">
-                {task ? (
+                {task && general ? (
+                  <StatusDimensions task={task} compact />
+                ) : task ? (
                   task.outcome ? (
                     <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                       <OutcomeBadge outcome={task.outcome} />
@@ -372,7 +519,7 @@ export function TaskPage({ id }: { id: string }) {
               ) : terminal ? (
                 <Button size="sm" variant="outline" className="rounded-full" render={<a href={hrefFor({ name: "new" })} />}>
                   <IconPlus />
-                  New case
+                  {general ? "New task" : "New case"}
                 </Button>
               ) : null}
             </div>

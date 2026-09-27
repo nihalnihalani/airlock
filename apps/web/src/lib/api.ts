@@ -5,6 +5,7 @@
  */
 import { z } from "zod";
 import {
+  Artifact,
   BlastRadiusCard,
   HostCheck,
   PreviewResult,
@@ -39,6 +40,9 @@ export const ExportResponse = z.object({
   expiresAt: z.string(),
   /** sha256 of the sealed zip the grant serves (also sent as `x-airlock-zip-sha256`). */
   zipDigest: sha256Hex.optional(),
+  /** General tasks: the exported result's outcome, and whether it is a partial export. */
+  outcome: z.string().max(64).optional(),
+  partial: z.boolean().optional(),
 });
 export type ExportResponse = z.infer<typeof ExportResponse>;
 
@@ -244,4 +248,114 @@ export function describeError(err: unknown): string {
   }
   if (err instanceof Error) return err.message;
   return String(err);
+}
+
+
+// --- General tasks (doc 40 Stage 3) ----------------------------------------------------------
+
+/** `GET /api/task-profiles`: a general task profile as the controller publishes it. */
+export const TaskProfileInfo = z.object({
+  id: z.string().min(1).max(64),
+  version: z.string().max(32),
+  displayName: z.string().max(200),
+  description: z.string().max(2000),
+  tools: z.array(z.string().max(64)).max(64),
+  browser: z.boolean(),
+  codeLanguages: z.array(z.string().max(32)).max(8),
+  maxEgressHosts: z.number().int().nonnegative(),
+  budgets: z.object({
+    modelCalls: z.number(),
+    tokens: z.number(),
+    wallClockMs: z.number(),
+    browserOps: z.number(),
+    codeRuns: z.number(),
+    browserSessions: z.number(),
+    codeSandboxes: z.number(),
+    recoveries: z.number(),
+    attemptMs: z.number(),
+  }),
+  checks: z.array(z.string().max(128)).max(64),
+  requiredOutputs: z.array(z.string().max(256)).max(64),
+  acceptsUploads: z.boolean(),
+});
+export type TaskProfileInfo = z.infer<typeof TaskProfileInfo>;
+
+export function getTaskProfiles(signal?: AbortSignal): Promise<TaskProfileInfo[]> {
+  return request(z.array(TaskProfileInfo), "/api/task-profiles", { signal });
+}
+
+export const UploadQuota = z.object({
+  usedFiles: z.number().int().nonnegative(),
+  usedBytes: z.number().int().nonnegative(),
+  maxFiles: z.number().int().nonnegative(),
+  maxBytes: z.number().int().nonnegative(),
+  maxFileBytes: z.number().int().nonnegative(),
+});
+export type UploadQuota = z.infer<typeof UploadQuota>;
+const UploadsResponse = z.object({ artifacts: z.array(Artifact).max(1000), quota: UploadQuota });
+export type UploadsResponse = z.infer<typeof UploadsResponse>;
+
+export function listUploads(signal?: AbortSignal): Promise<UploadsResponse> {
+  return request(UploadsResponse, "/api/uploads", { signal });
+}
+
+/** Raw-body upload (no multipart); the name travels URI-encoded in `x-filename`. */
+export async function uploadFile(file: Blob, filename: string): Promise<Artifact> {
+  let res: Response;
+  try {
+    res = await fetch("/api/uploads", {
+      method: "POST",
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: { Accept: "application/json", "Content-Type": "application/octet-stream", "x-filename": encodeURIComponent(filename.slice(0, 255)) },
+      body: file,
+    });
+  } catch (err) {
+    throw new ApiError(0, `Could not reach the control API (${err instanceof Error ? err.message : String(err)}).`);
+  }
+  const text = await res.text().catch(() => "");
+  if (!res.ok) throw new ApiError(res.status, extractErrorMessage(res.status, text));
+  let payload: unknown;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    throw new ApiError(res.status, "The API returned a response that is not valid JSON.");
+  }
+  const parsed = Artifact.safeParse(payload);
+  if (!parsed.success) throw new ApiError(res.status, "The API returned an unexpected upload record.");
+  return parsed.data;
+}
+
+export function listTaskArtifacts(id: string, signal?: AbortSignal): Promise<Artifact[]> {
+  return request(z.array(Artifact).max(1000), `/api/tasks/${encodeURIComponent(id)}/artifacts`, { signal });
+}
+
+/** Bounded text read of one artifact for a client-side preview (never rendered as HTML). */
+export async function fetchArtifactText(id: string, maxBytes: number, signal?: AbortSignal): Promise<string> {
+  const res = await fetch(`/api/artifacts/${encodeURIComponent(id)}`, { credentials: "same-origin", cache: "no-store", ...(signal ? { signal } : {}) });
+  if (!res.ok) throw new ApiError(res.status, extractErrorMessage(res.status, await res.text().catch(() => "")));
+  const buf = await res.arrayBuffer();
+  return new TextDecoder("utf-8", { fatal: false }).decode(buf.byteLength > maxBytes ? buf.slice(0, maxBytes) : buf);
+}
+
+export interface GeneralTaskInput {
+  profileId: string;
+  goal: string;
+  inputArtifactIds: string[];
+  egressAllow: string[];
+  scriptedDriver?: string | undefined;
+}
+
+export function createGeneralTask(input: GeneralTaskInput): Promise<Task> {
+  return request(Task, "/api/tasks", {
+    method: "POST",
+    body: {
+      kind: "general",
+      profileId: input.profileId,
+      issueText: input.goal,
+      ...(input.inputArtifactIds.length ? { inputArtifactIds: input.inputArtifactIds } : {}),
+      ...(input.egressAllow.length ? { egressAllow: input.egressAllow } : {}),
+      ...(input.scriptedDriver ? { scriptedDriver: input.scriptedDriver } : {}),
+    },
+  });
 }

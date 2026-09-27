@@ -1,4 +1,4 @@
-import { IconBug, IconRefresh } from "@tabler/icons-react";
+import { IconBug, IconSparkles, IconRefresh } from "@tabler/icons-react";
 import { Badge, Dot, ErrorBox, TONE_TEXT, type Tone } from "../components/common";
 import { DiagnosticBadge } from "../components/Evidence";
 import { PageHeader } from "../components/layout/page-header";
@@ -66,12 +66,12 @@ export function TasksPage() {
                   {i > 0 ? <Separator /> : null}
                   <Item size="sm" render={<a href={hrefFor({ name: "task", id: row.id })} />}>
                     <ItemMedia variant="icon" className="size-9 rounded-lg bg-muted/60 text-muted-foreground">
-                      <IconBug />
+                      {row.kind === "general" ? <IconSparkles /> : <IconBug />}
                     </ItemMedia>
                     <ItemContent className="min-w-0">
                       <ItemTitle className="w-full truncate">{row.title}</ItemTitle>
                       <ItemDescription className="line-clamp-1 text-xs">
-                        {row.profileId} · {formatDateTime(task.createdAt)} · <span className="font-mono">{row.id}</span>
+                        {row.profileLabel} · {formatDateTime(task.createdAt)} · <span className="font-mono">{row.id}</span>
                       </ItemDescription>
                     </ItemContent>
                     <ItemActions className="gap-1.5">
@@ -83,6 +83,7 @@ export function TasksPage() {
                       ) : null}
                       <Dot tone={DOT_TONE[row.dot]} pulse={row.live} />
                       <span className={cn("text-xs font-medium", TONE_TEXT[row.badge.tone])}>{row.badge.label}</span>
+                      {row.cleanup ? <Badge tone={row.cleanup.tone} title="Cleanup, separate from the result">{row.cleanup.label}</Badge> : null}
                     </ItemActions>
                   </Item>
                 </div>
