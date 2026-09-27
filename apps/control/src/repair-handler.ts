@@ -121,13 +121,28 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
   const newId = (prefix: string) => `${prefix}-${randomBytes(10).toString("hex")}`;
   const bounded = (text: string, cap = DETAIL_CAP) => (text.length > cap ? `${text.slice(0, cap)}\n…[truncated ${text.length - cap} chars]` : text);
 
-  /** Best-effort teardown of an attempt: revoke then destroy. Unknown attempts count as gone. */
+  /**
+   * Best-effort teardown of an attempt: revoke then destroy. Unknown attempts count as gone.
+   * Teardown runs twice on cancellation (the aborted run's failure path, then the worker's cancel
+   * pass): the supervisor fences the repeat with 409 because the identity is tombstoned. That is
+   * only "clean" when the supervisor's own journal says the attempt is `destroyed` (which it sets
+   * only after a clean teardown); any other fenced state stays visible as incomplete.
+   */
   async function teardown(ref: AttemptRef): Promise<{ clean: boolean; detail: string; data?: Record<string, unknown> }> {
+    const confirmedDestroyed = async (): Promise<boolean> => {
+      try {
+        const state = await deps.supervisor.getAttempt(ref.attemptId);
+        return state.ref.taskId === ref.taskId && state.status === "destroyed";
+      } catch (error) {
+        return error instanceof SupervisorNotFoundError;
+      }
+    };
     let revoked = "revoked";
     try {
       await deps.supervisor.revoke({ ref });
     } catch (error) {
       if (error instanceof SupervisorNotFoundError) return { clean: true, detail: "attempt unknown to supervisor (already destroyed)" };
+      if (error instanceof SupervisorFenceError && (await confirmedDestroyed())) return { clean: true, detail: "attempt already destroyed (supervisor journal status: destroyed)" };
       revoked = `revoke failed: ${errorMessage(error)}`;
     }
     try {
@@ -139,6 +154,7 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
       };
     } catch (error) {
       if (error instanceof SupervisorNotFoundError) return { clean: true, detail: `${revoked}; attempt unknown to supervisor (already destroyed)` };
+      if (error instanceof SupervisorFenceError && (await confirmedDestroyed())) return { clean: true, detail: `${revoked}; attempt already destroyed (supervisor journal status: destroyed)` };
       return { clean: false, detail: `${revoked}; destroy failed: ${errorMessage(error)}` };
     }
   }

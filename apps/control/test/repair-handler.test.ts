@@ -217,6 +217,10 @@ describe("repair handler", () => {
       expect(supervisor.revoked).toContain(attemptId);
       const events = await h.store.listEvents(task.id);
       expect(events.some((e) => e.title === "Task cancelled")).toBe(true);
+      // The aborted run already destroyed the attempt; the cancel pass's repeat is fenced (409) by the
+      // tombstone and must be reported clean because the journal says `destroyed`, never "incomplete".
+      expect(events.some((e) => e.title === "Attempt destroyed after cancellation")).toBe(true);
+      expect(events.some((e) => /incomplete/i.test(e.title))).toBe(false);
     } finally {
       await h.close();
     }

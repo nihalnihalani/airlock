@@ -112,7 +112,9 @@ export interface FakeSupervisorOptions {
 }
 
 export class FakeSupervisor implements SupervisorClient {
+  /** Live attempts. Destroyed ones move to `tombstones`, as the real journal keeps them. */
   readonly attempts = new Map<string, FakeAttempt>();
+  readonly tombstones = new Map<string, AttemptState>();
   readonly destroyed: string[] = [];
   readonly revoked: string[] = [];
   readonly invocations: { role: string; bundleDigest?: string; caseIds: string[] }[] = [];
@@ -132,6 +134,7 @@ export class FakeSupervisor implements SupervisorClient {
   }
 
   private fence(ref: AttemptRef): FakeAttempt {
+    if (this.tombstones.has(ref.attemptId)) throw new SupervisorFenceError(`Attempt ${ref.attemptId} was destroyed.`);
     const attempt = this.attempts.get(ref.attemptId);
     if (!attempt) throw new SupervisorNotFoundError(`unknown attempt ${ref.attemptId}`);
     if (attempt.ref.taskId !== ref.taskId) throw new SupervisorNotFoundError("attempt belongs to another task");
@@ -194,14 +197,16 @@ export class FakeSupervisor implements SupervisorClient {
   }
 
   async destroy(input: { ref: AttemptRef }): Promise<DestroyResult> {
-    const attempt = this.attempts.get(input.ref.attemptId);
-    if (!attempt) throw new SupervisorNotFoundError(`unknown attempt ${input.ref.attemptId}`);
+    const attempt = this.fence(input.ref);
     this.attempts.delete(input.ref.attemptId);
+    this.tombstones.set(input.ref.attemptId, { ref: attempt.ref, role: attempt.role, container: attempt.container, status: "destroyed", deadline: attempt.deadline });
     this.destroyed.push(input.ref.attemptId);
     return { teardown: cleanTeardown() };
   }
 
   async getAttempt(attemptId: string): Promise<AttemptState> {
+    const gone = this.tombstones.get(attemptId);
+    if (gone) return gone;
     const attempt = this.attempts.get(attemptId);
     if (!attempt) throw new SupervisorNotFoundError("unknown attempt");
     return { ref: attempt.ref, role: attempt.role, container: attempt.container, status: attempt.status, deadline: attempt.deadline };
