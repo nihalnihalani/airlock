@@ -65,7 +65,9 @@ export function ToolCard({ call }: { call: ToolCall }) {
   const r = call.result;
   const exitTone: Tone = r ? (r.status === "succeeded" ? "neutral" : r.status === "failed" ? "warn" : "bad") : "neutral";
   const stateBadge = call.state === "ok" || call.state === "failed" ? null : STATE_BADGE[call.state];
-  const showDetail = call.detail.length > 0 && (!r || call.name === "submit_candidate" || call.state !== "ok");
+  // A `run` event's detail only restates its ExecResult (status, exit, stdout/stderr tails);
+  // invocation details also carry observation and protocol-error counts, so they stay.
+  const showDetail = call.detail.length > 0 && (!r || call.name !== "run");
 
   return (
     <details className="tool-line group min-w-0 rounded-lg border border-border bg-card text-sm dark:border-transparent dark:bg-card/60">
