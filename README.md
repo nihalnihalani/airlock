@@ -19,7 +19,7 @@
 ![Hono](https://img.shields.io/badge/Hono-API-E36002?style=flat-square&logo=hono&logoColor=white)
 ![React](https://img.shields.io/badge/React-Vite-61DAFB?style=flat-square&logo=react&logoColor=black)
 ![Python](https://img.shields.io/badge/Python-3.12%20runtime-3776AB?style=flat-square&logo=python&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-384%20control%20%C2%B7%20207%20supervisor%20%C2%B7%20126%20web%20%C2%B7%20135%20runtime%20%C2%B7%20114%20other-16a34a?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-398%20control%20%C2%B7%20207%20supervisor%20%C2%B7%20132%20web%20%C2%B7%20135%20runtime%20%C2%B7%20114%20other-16a34a?style=flat-square)
 
 <br />
 <br />
@@ -284,7 +284,7 @@ It does not mean the patch is safe, certified, correct in general, or free of ot
 
 ## Testing
 
-Current counts on this branch (Colima for the real-Docker tests): control 384, supervisor 207 (all real-Docker integration tests ran), web 126, egress 35, fixtures 41, scripts 11, browser runner 27, Node probe parity 2, Python runtime and output collector 135 (+2 skipped on macOS). `bun run test` runs the owned Bun suites (it lists paths so upstream reference trees are not collected); `bun run test:python` and `bun run test:browser` run the others. The independent acceptance driver is `bun scripts/acceptance/local.ts` against a running `scripts/dev-up.sh` stack.
+Current counts on this branch (Colima for the real-Docker tests): control 398, supervisor 207 (all real-Docker integration tests ran), web 132, egress 35, fixtures 41, scripts 11, browser runner 27, Node probe parity 2, Python runtime and output collector 135 (+2 skipped on macOS). `bun run test` runs the owned Bun suites (it lists paths so upstream reference trees are not collected); `bun run test:python` and `bun run test:browser` run the others. The independent acceptance driver is `bun scripts/acceptance/local.ts` against a running `scripts/dev-up.sh` stack.
 
 The original four suites plus the smoke:
 
