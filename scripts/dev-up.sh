@@ -66,7 +66,7 @@ export AIRLOCK_MODEL_DRIVER="${AIRLOCK_MODEL_DRIVER:-scripted:$ROOT/apps/control
 export AIRLOCK_INSECURE_COOKIES=1
 export AIRLOCK_DATA_DIR_CONTROL="${AIRLOCK_DATA_DIR_CONTROL:-$DATA/control}"
 export AIRLOCK_DATA_DIR_SUPERVISOR="${AIRLOCK_DATA_DIR_SUPERVISOR:-$DATA/supervisor}"
-export AIRLOCK_WEB_DIST="${AIRLOCK_WEB_DIST:-$ROOT/apps/web/dist}"
+export AIRLOCK_WEB_DIST="${AIRLOCK_WEB_DIST-$ROOT/apps/web/dist}"
 
 if [[ "$AIRLOCK_RUNTIME" == "runc" && "$AIRLOCK_DEV_UNSAFE" != "1" ]]; then
   echo "AIRLOCK_RUNTIME=runc needs AIRLOCK_DEV_UNSAFE=1 (local development only)" >&2
@@ -84,17 +84,20 @@ if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
   echo "runtime image $IMAGE is missing; building it (runtime/python/build.sh tabulate-365)"
   "$ROOT/runtime/python/build.sh" tabulate-365 >/dev/null
 fi
-# Always rebuild the web UI: dist/ is gitignored and depends on apps/web/src, packages/contracts,
-# vite.config.ts and the lockfile, so a dist left from an earlier checkout would silently serve a
-# stale bundle after a pull. The build takes about a second, and the control plane reads dist
-# files per request, so this is right even when the stack is already running.
-if [[ "$AIRLOCK_WEB_DIST" == "$ROOT/apps/web/dist" ]]; then
-  echo "building the web UI into apps/web/dist"
-  (cd "$ROOT/apps/web" && bunx vite build >/dev/null)
-elif [[ ! -f "$AIRLOCK_WEB_DIST/index.html" ]]; then
-  echo "AIRLOCK_WEB_DIST=$AIRLOCK_WEB_DIST has no index.html; build it first (bun run --cwd apps/web build)" >&2
-  exit 2
-fi
+# Web bundle: see scripts/lib/web-dist.sh. "none" (or empty) skips it, the default apps/web/dist
+# is always rebuilt (about a second; the control plane reads dist files per request, so this is
+# right even when the stack is already running), any other directory must already hold index.html.
+# shellcheck disable=SC1091
+source "$ROOT/scripts/lib/web-dist.sh"
+case "$(web_dist_action "$AIRLOCK_WEB_DIST" "$ROOT")" in
+  build)
+    echo "building the web UI into apps/web/dist"
+    (cd "$ROOT/apps/web" && bunx vite build >/dev/null)
+    ;;
+  skip) echo "AIRLOCK_WEB_DIST=none: web UI disabled; only /api is served" ;;
+  serve) ;;
+  *) exit 2 ;;
+esac
 
 # --- idempotent start -----------------------------------------------------------------------------
 alive() { [[ -f "$1" ]] && kill -0 "$(cat "$1")" 2>/dev/null; }
@@ -142,7 +145,11 @@ echo
 echo "Airlock dev stack (dev-unsafe: plain runc, local only)"
 echo "  supervisor  $SUPERVISOR_URL/health   -> $(bun -e 'const h=JSON.parse(process.argv[1]);console.log(`${h.status} runtime=${h.host.selectedRuntime} devUnsafe=${h.host.devUnsafe} kvm=${h.host.kvmPresent}`)' "$HOST_JSON")"
 echo "  control     $CONTROL_URL/api/session"
-echo "  web UI      $CONTROL_URL/   (operator password in $DEV_ENV)"
+if [[ -z "$AIRLOCK_WEB_DIST" || "$AIRLOCK_WEB_DIST" == "none" ]]; then
+  echo "  web UI      disabled (AIRLOCK_WEB_DIST=none); operator password in $DEV_ENV"
+else
+  echo "  web UI      $CONTROL_URL/   (operator password in $DEV_ENV)"
+fi
 echo "  model       $AIRLOCK_MODEL_DRIVER"
 echo "  logs        $RUN/supervisor.log  $RUN/control.log"
 echo "  smoke       bun scripts/smoke.ts"
