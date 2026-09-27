@@ -19,7 +19,12 @@
 ![Hono](https://img.shields.io/badge/Hono-API-E36002?style=flat-square&logo=hono&logoColor=white)
 ![React](https://img.shields.io/badge/React-Vite-61DAFB?style=flat-square&logo=react&logoColor=black)
 ![Python](https://img.shields.io/badge/Python-3.12%20runtime-3776AB?style=flat-square&logo=python&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-186%20control%20%C2%B7%2064%20supervisor%20%C2%B7%2025%20web%20%C2%B7%2071%20runtime-16a34a?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-186%20control%20%C2%B7%2064%20supervisor%20%C2%B7%2041%20web%20%C2%B7%2071%20runtime-16a34a?style=flat-square)
+
+<br />
+<br />
+
+<img src="docs/assets/ui-task.png" alt="Airlock task page: the case list, the run as a conversation with model turns and expandable tool calls, and the details pane with checkpoints and the Report Export preview" width="900" />
 
 </div>
 
@@ -222,7 +227,7 @@ Secrets come from the environment only. For local work, put `VULTR_INFERENCE_API
 
 ### Web UI (`apps/web`)
 
-No runtime configuration: every request is relative (`/api/...`). `bun run --cwd apps/web build` writes `apps/web/dist`, which the control plane serves. For UI development `bun run --cwd apps/web dev` proxies `/api` to `AIRLOCK_CONTROL_URL` (default `http://localhost:3000`).
+No runtime configuration: every request is relative (`/api/...`). `bun run --cwd apps/web build` writes `apps/web/dist`, which the control plane serves. For UI development `bun run --cwd apps/web dev` proxies `/api` to `AIRLOCK_CONTROL_URL` (default `http://localhost:3000`). The layout (case sidebar, the run as a conversation, details pane, hostile input as a chat) follows CopilotKit OpenBot's app; see [apps/web/README.md](apps/web/README.md) and the screenshots in `docs/assets/` ([new case](docs/assets/ui-new-case.png), [hostile input](docs/assets/ui-hostile.png), [mobile](docs/assets/ui-mobile.png)).
 
 ### Model driver
 
