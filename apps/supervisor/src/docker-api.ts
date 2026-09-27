@@ -96,7 +96,8 @@ export interface DockerApi {
   info(): Promise<{ runtimes: string[]; defaultRuntime: string }>;
   inspectImage(ref: string): Promise<{ id: string; repoDigests: string[] } | null>;
 
-  createVolume(name: string, labels: Record<string, string>): Promise<void>;
+  /** Create a `local` volume with exactly these driver options (a size-capped tmpfs); never adopts an existing one. */
+  createVolume(name: string, labels: Record<string, string>, driverOpts: Record<string, string>): Promise<void>;
   inspectVolume(name: string): Promise<VolumeDetail | null>;
   removeVolume(name: string): Promise<void>;
   listVolumes(labelFilters: string[]): Promise<VolumeSummary[]>;

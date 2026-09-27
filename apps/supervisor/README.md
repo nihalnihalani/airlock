@@ -62,6 +62,14 @@ read-write for author/one-shot roles; `/candidate` read-only for the collector),
 env limited to an allowlist. Labels `airlock.supervisor=true`, `airlock.namespace`, `airlock.task`,
 `airlock.attempt`, `airlock.role` (and `airlock.operation` on one-shots).
 
+The named volume is a `local` volume backed by a **size-capped tmpfs** (`type=tmpfs,device=tmpfs,o=size=<caps.workspaceBytes>,uid=1000,gid=1000,mode=0755`;
+128 MiB unless the profile says otherwise). A sandbox cannot write more than that (ENOSPC inside the
+sandbox, the pages are charged to its memory cgroup) and nothing it writes reaches host disk, so a fill
+loop cannot exhaust VM B's storage or starve the journal. `provision` re-inspects the volume (driver,
+options, ownership labels) before any container mounts it and refuses anything else. A tmpfs volume's
+contents exist only while some container holds the mount, which is why freeze provisions the collector
+before it stops the author container (see the route table).
+
 Inspection reads the **effective** config back and fails closed (409, container destroyed) if any check
 differs, if the runtime is not the configured one, or if the guest identity cannot be read. Author sandboxes
 then run the fixed isolation probe (`/opt/airlock/probe.sh`: metadata endpoint, DNS, outbound TCP, Docker
@@ -81,7 +89,7 @@ everything except `GET /health`. Body limit 16 MiB.
 | `GET /attempts` | `AttemptState[]` (journaled attempts this supervisor owns) |
 | `GET /attempts/:attemptId` | `AttemptState` |
 | `POST /attempts/:attemptId/tool` | `AuthorToolRequest → AuthorToolResult`. `read` limited to `readablePaths`, `write` to `allowedReplacementPaths` (delivered by tar upload), `exec` runs `timeout --signal=TERM --kill-after=2s <commandTimeout>s bash --noprofile --norc -c <command>` as 1000:1000 in `/workspace/src`. |
-| `POST /attempts/:attemptId/freeze` | `FreezeRequest → FreezeResult`: revoke → stop (t=2) → settle outstanding execs → re-inspect stopped → collector in a fresh container with the volume read-only at `/candidate` → `FileEnvelope`. |
+| `POST /attempts/:attemptId/freeze` | `FreezeRequest → FreezeResult`: revoke → collector container created with the volume read-only at `/candidate` (holds the tmpfs-backed workspace; it has run nothing) → stop author (t=2) → settle outstanding execs → re-inspect stopped → collector runs → `FileEnvelope`. An attempt whose container was already stopped (quarantine, deadline) has no workspace left to collect: the collector reports the files missing and the freeze fails closed. |
 | `POST /attempts/:attemptId/revoke` | `RevokeRequest → AttemptState` (dispatch closed, container stopped and confirmed) |
 | `POST /attempts/:attemptId/destroy` | `DestroyRequest → DestroyResult` (container + volume removed; `teardown` lists what remains) |
 | `POST /invoke` | `InvokeRequest → InvokeResult`: fresh one-shot container; bundle digests verified **before** anything is created; replacements + `request.json` uploaded as tar; materialize, then adapter; stdout parsed line by line with `Observation`; always destroyed. |

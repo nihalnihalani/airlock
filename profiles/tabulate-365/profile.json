@@ -16,7 +16,8 @@
     "maxTotalBytes": 4194304,
     "memoryBytes": 536870912,
     "outputBytes": 65536,
-    "pidsLimit": 64
+    "pidsLimit": 64,
+    "workspaceBytes": 134217728
   },
   "contractPath": "contract.json",
   "displayName": "python-tabulate #365: empty table with maxheadercolwidths crashes",

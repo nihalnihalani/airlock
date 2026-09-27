@@ -81,7 +81,7 @@ export function defaultHandler(overrides: Partial<Record<"uname" | "hostname" | 
 export class FakeDocker implements DockerApi {
   readonly calls: string[] = [];
   readonly containers = new Map<string, { spec: ContainerCreateSpec; running: boolean }>();
-  readonly volumes = new Map<string, Record<string, string>>();
+  readonly volumes = new Map<string, { labels: Record<string, string>; options: Record<string, string> }>();
   handler: ExecHandler;
   runtimes = ["runc", "io.containerd.runc.v2"];
   defaultRuntime = "runc";
@@ -111,21 +111,21 @@ export class FakeDocker implements DockerApi {
   async inspectImage(ref: string) {
     return { id: `sha256:${"0".repeat(64)}`, repoDigests: [`${ref.split(":")[0]}@sha256:${"1".repeat(64)}`] };
   }
-  async createVolume(name: string, labels: Record<string, string>) {
-    this.record(`createVolume ${name}`);
+  async createVolume(name: string, labels: Record<string, string>, driverOpts: Record<string, string>) {
+    this.record(`createVolume ${name} ${Object.entries(driverOpts).map(([k, v]) => `${k}=${v}`).join(",")}`);
     if (this.volumes.has(name)) throw Object.assign(new Error("conflict"), { statusCode: 409 });
-    this.volumes.set(name, labels);
+    this.volumes.set(name, { labels, options: driverOpts });
   }
   async inspectVolume(name: string) {
-    const labels = this.volumes.get(name);
-    return labels ? { name, labels, driver: "local", scope: "local", options: {} } : null;
+    const v = this.volumes.get(name);
+    return v ? { name, labels: v.labels, driver: "local", scope: "local", options: v.options } : null;
   }
   async removeVolume(name: string) {
     this.record(`removeVolume ${name}`);
     this.volumes.delete(name);
   }
   async listVolumes(labelFilters: string[]) {
-    return [...this.volumes.entries()].filter(([, labels]) => matches(labels, labelFilters)).map(([name, labels]) => ({ name, labels }));
+    return [...this.volumes.entries()].filter(([, v]) => matches(v.labels, labelFilters)).map(([name, v]) => ({ name, labels: v.labels }));
   }
   async createContainer(spec: ContainerCreateSpec) {
     this.record(`createContainer ${spec.name}`);

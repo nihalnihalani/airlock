@@ -7,4 +7,5 @@ Historical replay of [python-tabulate #365](https://github.com/astanin/python-ta
 - **Reference (maintainer only):** `87a9a4e07a5efb39b81fdb6ac513b1d345bb21fb`. Used only to author `contract.json`; never supplied to any sandbox.
 - **Contract:** `contract.json`, six cases. Expected values were **measured**, not written by hand: each case was executed at both commits in a clean venv (see `research/22-feasibility-lab.md` for the earlier lab). The reported case raises at baseline and returns the header-only table at reference; the five regression cases return identical output at both.
 - **Agent may change:** `tabulate/__init__.py` only. The collector rejects anything else.
+- **Caps:** `caps.workspaceBytes` (128 MiB) is the hard size of the per-attempt `/workspace` tmpfs; the other caps are the CPU/memory/pids/time/output/file bounds listed in `profile.json`.
 - Case ids use hyphens (plain identifiers). Inputs are the keyword arguments to `tabulate.tabulate`.

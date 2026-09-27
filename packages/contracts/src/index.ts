@@ -190,8 +190,18 @@ export const Caps = z.object({
   maxFileBytes: z.number().int().positive(),
   maxTotalBytes: z.number().int().positive(),
   maxFiles: z.number().int().positive(),
+  /**
+   * Hard size of the per-attempt `/workspace` (a size-capped tmpfs volume held by the supervisor;
+   * never host disk). Defaults to `DEFAULT_WORKSPACE_BYTES` when a profile omits it.
+   */
+  workspaceBytes: z.number().int().positive().optional(),
 });
 export type Caps = z.infer<typeof Caps>;
+/** 128 MiB: the `/workspace` bound applied when `caps.workspaceBytes` is absent. */
+export const DEFAULT_WORKSPACE_BYTES = 134217728;
+export function workspaceBytesOf(caps: Pick<Caps, "workspaceBytes">): number {
+  return caps.workspaceBytes ?? DEFAULT_WORKSPACE_BYTES;
+}
 
 /** `profiles/<id>/profile.json`. The reference commit is maintainer-only and never reaches the agent. */
 export const ProfileManifest = z.object({

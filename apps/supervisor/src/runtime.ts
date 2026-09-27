@@ -33,6 +33,29 @@ import { SANDBOX_USER, runExec, timedCommand } from "./exec";
 import { ours } from "./names";
 
 export const TMPFS_TMP = "rw,nosuid,nodev,noexec,size=67108864,mode=1777";
+
+/**
+ * The per-attempt workspace is a `local` volume backed by a size-capped tmpfs, so a sandbox can never
+ * write more than `caps.workspaceBytes` and never touches host disk (writes beyond the cap fail with
+ * ENOSPC inside the sandbox; the pages are charged to the sandbox's memory cgroup). The contents live
+ * only while some container holds the mount, which is why freeze provisions the collector before it
+ * stops the author container.
+ */
+export function workspaceDriverOpts(sizeBytes: number): Record<string, string> {
+  if (!Number.isInteger(sizeBytes) || sizeBytes <= 0) throw new SupervisorError("internal", `workspace size ${sizeBytes} is not a positive integer.`);
+  return { type: "tmpfs", device: "tmpfs", o: `size=${sizeBytes},uid=1000,gid=1000,mode=0755` };
+}
+
+/** The effective-config check for a workspace volume: local driver and exactly the bounded tmpfs options. */
+export function workspaceVolumeBounded(detail: VolumeDetail, sizeBytes: number): boolean {
+  const expected = workspaceDriverOpts(sizeBytes);
+  const options = detail.options;
+  return (
+    detail.driver === "local" &&
+    Object.keys(options).length === Object.keys(expected).length &&
+    Object.entries(expected).every(([k, v]) => options[k] === v)
+  );
+}
 export const SANDBOX_ENV = ["HOME=/workspace", "LANG=C.UTF-8"];
 const ENV_ALLOWED_PREFIXES = ["PATH=", "HOME=", "LANG=", "LC_", "PYTHON", "PIP_", "GPG_KEY=", "AIRLOCK_", "TZ="];
 
@@ -308,9 +331,9 @@ export function createDockerode(socketPath: string | undefined): DockerApi {
       }
     },
 
-    async createVolume(name, labels) {
+    async createVolume(name, labels, driverOpts) {
       try {
-        await docker.createVolume({ Name: name, Labels: labels });
+        await docker.createVolume({ Name: name, Labels: labels, Driver: "local", DriverOpts: driverOpts });
       } catch (error) {
         if (statusOf(error) === 409) throw new SupervisorError("name_held", `A volume named ${name} already exists; it will not be adopted.`);
         throw dockerUnavailable(error);
@@ -319,6 +342,9 @@ export function createDockerode(socketPath: string | undefined): DockerApi {
       const detail = await this.inspectVolume(name);
       if (!detail || Object.entries(labels).some(([k, v]) => detail.labels[k] !== v)) {
         throw new SupervisorError("name_held", `A volume named ${name} exists and does not belong to this attempt; it will not be adopted.`);
+      }
+      if (detail.driver !== "local" || Object.entries(driverOpts).some(([k, v]) => detail.options[k] !== v)) {
+        throw new SupervisorError("name_held", `A volume named ${name} exists with other driver options; it will not be adopted.`);
       }
     },
     async inspectVolume(name): Promise<VolumeDetail | null> {

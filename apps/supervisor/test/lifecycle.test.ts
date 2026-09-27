@@ -33,6 +33,9 @@ describe("lifecycle", () => {
     expect(state.probe?.allBlocked).toBe(true);
     const order = docker.calls.filter((c) => /^(createVolume|createContainer|startContainer|exec)/.test(c)).map((c) => c.split(" ").slice(0, 2).join(" "));
     expect(order.slice(0, 3)).toEqual(["createVolume airlocktest-ws-task1-att1", "createContainer airlocktest-author-task1-att1", "startContainer airlocktest-author-task1-att1"]);
+    // The workspace is a size-capped tmpfs volume (caps.workspaceBytes), never unbounded host disk.
+    expect(docker.calls[0]).toBe("createVolume airlocktest-ws-task1-att1 type=tmpfs,device=tmpfs,o=size=134217728,uid=1000,gid=1000,mode=0755");
+    expect(docker.volumes.get("airlocktest-ws-task1-att1")?.options).toEqual({ type: "tmpfs", device: "tmpfs", o: "size=134217728,uid=1000,gid=1000,mode=0755" });
     expect(docker.calls.some((c) => c.includes("materialize.py"))).toBe(true);
     expect(docker.calls.some((c) => c.includes("probe.sh"))).toBe(true);
     core.stop();
@@ -72,7 +75,7 @@ describe("lifecycle", () => {
     core.stop();
   });
 
-  test("freeze orders revoke → stop → settle → inspect stopped → collector (volume read-only) → collect", async () => {
+  test("freeze orders revoke → collector holds the volume (read-only) → stop → settle → inspect stopped → collect", async () => {
     const docker = new FakeDocker(defaultHandler({ collector: { stdout: ENVELOPE } }));
     const { core, journal } = await createAuthor(docker);
     // A long-running author exec is in flight when freeze arrives.
@@ -101,12 +104,15 @@ describe("lifecycle", () => {
     const stop = idx(/^stopContainer airlocktest-author-task1-att1 t=2/);
     const inspectStopped = seq.findIndex((c, i) => i > stop && /^inspectContainer airlocktest-author-task1-att1/.test(c));
     const collectorCreate = idx(/^createContainer airlocktest-collector-task1-att1/);
-    const collectorExec = idx(/^exec airlocktest-collector-task1-att1 .*collector\.py|^exec airlocktest-collector-task1-att1/);
+    const collectorExec = idx(/^exec airlocktest-collector-task1-att1 .*collector\.py/);
     const collectorRemove = idx(/^removeContainer airlocktest-collector-task1-att1/);
     expect(stop).toBeGreaterThanOrEqual(0);
     expect(inspectStopped).toBeGreaterThan(stop);
-    expect(collectorCreate).toBeGreaterThan(inspectStopped);
-    expect(collectorExec).toBeGreaterThan(collectorCreate);
+    // The collector container is created (holding the tmpfs-backed workspace) BEFORE the author is
+    // stopped, and runs only after the stop is confirmed.
+    expect(collectorCreate).toBeGreaterThanOrEqual(0);
+    expect(collectorCreate).toBeLessThan(stop);
+    expect(collectorExec).toBeGreaterThan(inspectStopped);
     expect(collectorRemove).toBeGreaterThan(collectorExec);
     // no createVolume during freeze: the collector reuses the stopped volume, read-only
     expect(seq.some((c) => c.startsWith("createVolume"))).toBe(false);
@@ -212,7 +218,7 @@ describe("lifecycle", () => {
       hostname: "sandbox",
       hostConfig: { runtime: "runc", networkMode: "none", readonlyRootfs: true, capDrop: ["ALL"], securityOpt: ["no-new-privileges"], pidsLimit: 1, memory: 1, memorySwap: 1, nanoCpus: 1, ipcMode: "private", restartPolicy: { Name: "no" }, tmpfs: {}, mounts: [] },
     });
-    await docker.createVolume("airlocktest-ws-ghost-g1", { "airlock.supervisor": "true", "airlock.namespace": "airlocktest", "airlock.task": "ghost", "airlock.attempt": "g1" });
+    await docker.createVolume("airlocktest-ws-ghost-g1", { "airlock.supervisor": "true", "airlock.namespace": "airlocktest", "airlock.task": "ghost", "airlock.attempt": "g1" }, {});
     const report = await core.janitor();
     expect(report.removedUnknown).toContain("airlocktest-author-ghost-g1");
     expect(report.removedUnknown).toContain("airlocktest-ws-ghost-g1");

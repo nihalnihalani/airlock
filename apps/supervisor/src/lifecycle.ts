@@ -23,6 +23,7 @@ import {
   type RuntimeInspection,
   type SandboxRole,
   type TeardownRecord,
+  workspaceBytesOf,
 } from "@airlock/contracts";
 import type { SupervisorConfig } from "./config";
 import type { CreateAttemptRequest, DestroyResult } from "./types";
@@ -30,10 +31,10 @@ import type { DockerApi } from "./docker-api";
 import { SupervisorError, describe } from "./errors";
 import { SANDBOX_USER, SUPERVISOR_GRACE_MS, authorCommand, runExec, timedCommand } from "./exec";
 import type { HostReport } from "./host";
-import { type AttemptNames, attemptLabels, attemptNames, ownedFilter, ATTEMPT_LABEL, OPERATION_LABEL, ROLE_LABEL, TASK_LABEL } from "./names";
+import { type AttemptNames, attemptLabels, attemptNames, ours, ownedFilter, ATTEMPT_LABEL, OPERATION_LABEL, ROLE_LABEL, TASK_LABEL } from "./names";
 import { type AttemptRecord, Journal, attemptStateOf } from "./operations";
 import { runProbe } from "./probe";
-import { type ExpectedSandbox, InspectionFailed, type SandboxSpec, inspectSandbox, sandboxCreateSpec } from "./runtime";
+import { type ExpectedSandbox, InspectionFailed, type SandboxSpec, inspectSandbox, sandboxCreateSpec, workspaceDriverOpts, workspaceVolumeBounded } from "./runtime";
 import { ancestorDirs, createTar } from "./tar";
 
 export const MATERIALIZE = "/opt/airlock/materialize.py";
@@ -230,10 +231,17 @@ export class Supervisor {
   async provision(request: ProvisionRequest): Promise<Provisioned> {
     const expected = this.expectedFor(request);
     let volumeCreated = false;
+    const workspaceBytes = workspaceBytesOf(request.profile.caps);
     try {
       if (request.createVolume) {
-        await this.api.createVolume(request.volume, request.labels);
+        await this.api.createVolume(request.volume, request.labels, workspaceDriverOpts(workspaceBytes));
         volumeCreated = true;
+      }
+      // Effective check of the volume itself: it must be the size-capped tmpfs this supervisor
+      // creates, whether it was created just now or is being reused (collector).
+      const volume = await this.api.inspectVolume(request.volume);
+      if (!volume || !ours(this.config.namespace, volume.labels) || !workspaceVolumeBounded(volume, workspaceBytes)) {
+        throw new SupervisorError("inspection_failed", `Volume ${request.volume} is not a ${workspaceBytes}-byte bounded workspace owned by this supervisor; refusing to mount it.`);
       }
       await this.api.createContainer(sandboxCreateSpec(expected));
       await this.api.startContainer(request.container);
@@ -546,35 +554,41 @@ export class Supervisor {
         if (!current || current.status === "destroyed" || current.status === "unknown") {
           throw new SupervisorError("fenced", `Attempt ${record.attemptId} is ${current?.status ?? "gone"}; nothing to freeze.`);
         }
+        const names = this.names(ref, "author");
         // 1. revoke dispatch
         this.journal.revoke(record.attemptId, "revoked");
         this.closeDispatch(record.attemptId);
-        // 2. stop the container
-        await this.api.stopContainer(record.container, STOP_SECONDS);
-        const stoppedAt = new Date().toISOString();
-        // 3. settle outstanding execs
-        const settled = await this.settle(record.attemptId);
-        // 4. re-inspect stopped
-        const names = this.names(ref, "author");
-        const expected = this.expectedFor({
-          container: names.container,
-          volume: names.volume,
-          labels: attemptLabels(names),
-          profile,
-          mount: { target: "/workspace", readOnly: false },
-          workingDir: "/workspace",
-          createVolume: false,
+        // 2. hold the workspace: the collector (a fresh container that has run nothing) mounts the
+        //    volume read-only BEFORE the author stops. The workspace is a tmpfs volume whose contents
+        //    exist only while a container holds the mount; without the hold, stopping the author would
+        //    discard the candidate before it could be collected.
+        const { held, envelope } = await this.collect(names, profile, async () => {
+          // 3. stop the container
+          await this.api.stopContainer(record.container, STOP_SECONDS);
+          const stoppedAt = new Date().toISOString();
+          // 4. settle outstanding execs
+          const settled = await this.settle(record.attemptId);
+          // 5. re-inspect stopped
+          const expected = this.expectedFor({
+            container: names.container,
+            volume: names.volume,
+            labels: attemptLabels(names),
+            profile,
+            mount: { target: "/workspace", readOnly: false },
+            workingDir: "/workspace",
+            createVolume: false,
+          });
+          const guest = current.inspection ? { uname: current.inspection.guestUname, hostname: current.inspection.guestHostname } : undefined;
+          const { detail } = await this.inspect(expected, { requireRunning: false, ...(guest ? { previousGuest: guest } : {}) });
+          if (detail.state.running) {
+            this.journal.updateAttempt(record.attemptId, { status: "unknown" });
+            throw new SupervisorError("fenced", `Container ${record.container} is still running after stop; refusing to collect.`);
+          }
+          this.journal.updateAttempt(record.attemptId, { status: "stopped" });
+          return { stoppedAt, settled };
         });
-        const guest = current.inspection ? { uname: current.inspection.guestUname, hostname: current.inspection.guestHostname } : undefined;
-        const { detail } = await this.inspect(expected, { requireRunning: false, ...(guest ? { previousGuest: guest } : {}) });
-        if (detail.state.running) {
-          this.journal.updateAttempt(record.attemptId, { status: "unknown" });
-          throw new SupervisorError("fenced", `Container ${record.container} is still running after stop; refusing to collect.`);
-        }
-        this.journal.updateAttempt(record.attemptId, { status: "stopped" });
-        // 5. collect in a fresh container with the volume read-only
-        const envelope = await this.collect(names, profile);
-        const result: FreezeResult = { stoppedAt, stopConfirmed: true, outstandingOperationsSettled: settled, envelope };
+        // 6. collected in the fresh container with the volume read-only
+        const result: FreezeResult = { stoppedAt: held.stoppedAt, stopConfirmed: true, outstandingOperationsSettled: held.settled, envelope };
         return { status: 200, body: result };
       }),
     );
@@ -589,9 +603,13 @@ export class Supervisor {
     return outcome === "settled";
   }
 
-  /** The collector: fresh container, stopped volume mounted read-only at /candidate, fixed argv.
- *  The author workspace holds the source tree at <volume>/src, so the collector root is /candidate/src. */
-  private async collect(names: AttemptNames, profile: ProfileManifest): Promise<FileEnvelope> {
+  /**
+   * The collector: fresh container with the workspace volume mounted read-only at /candidate, fixed
+   * argv. It is provisioned first (holding the tmpfs-backed volume), then `afterHold` stops and
+   * confirms the author container, and only then does the collector run. The author workspace holds
+   * the source tree at <volume>/src, so the collector root is /candidate/src.
+   */
+  private async collect<T>(names: AttemptNames, profile: ProfileManifest, afterHold: () => Promise<T>): Promise<{ held: T; envelope: FileEnvelope }> {
     const labels = attemptLabels(names, "collector");
     const deadline = new Date(Date.now() + profile.caps.commandTimeoutMs * 2 + 60_000).toISOString();
     this.journal.insertEphemeral({ container: names.collector, volume: null, taskId: names.taskId, operationId: `collect-${names.attemptId}`, role: "collector", deadline, createdAt: new Date().toISOString() });
@@ -605,6 +623,7 @@ export class Supervisor {
         workingDir: "/",
         createVolume: false,
       });
+      const held = await afterHold();
       const outputBytes = Math.ceil(profile.caps.maxTotalBytes * 1.4) + 65_536 + profile.caps.maxFiles * 2048;
       const outcome = await runExec(
         this.api,
@@ -628,7 +647,7 @@ export class Supervisor {
       }
       const parsed = FileEnvelope.safeParse(raw);
       if (!parsed.success) throw new SupervisorError("internal", `Collector envelope does not validate: ${parsed.error.issues[0]?.message ?? "unknown"}`);
-      return parsed.data;
+      return { held, envelope: parsed.data };
     } finally {
       await this.removeResources(names.collector);
       this.journal.deleteEphemeral(names.collector);

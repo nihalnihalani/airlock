@@ -53,6 +53,25 @@ describe("real docker (runc, dev-unsafe)", () => {
         const exec = await core.authorTool(ref, await operationFor("it-exec", {}), { kind: "exec", command: 'python -c "print(1)"' });
         expect(exec.body).toMatchObject({ kind: "exec", result: { status: "succeeded", exitCode: 0, stdout: "1\n" } });
 
+        // The workspace is a size-capped tmpfs volume: a fill stops at caps.workspaceBytes with ENOSPC,
+        // the sandbox is otherwise unaffected, and nothing reaches host disk.
+        const workspaceBytes = profiles.get("tabulate-365")?.caps.workspaceBytes ?? 0;
+        expect(workspaceBytes).toBeGreaterThan(0);
+        const fill = await core.authorTool(ref, await operationFor("it-fill", {}), {
+          kind: "exec",
+          command: `dd if=/dev/zero of=/workspace/fill bs=1M count=${Math.ceil((workspaceBytes * 2) / 1048576)} 2>/dev/null; echo dd=$?; stat -c %s /workspace/fill; rm -f /workspace/fill; echo alive`,
+        });
+        const fillResult = (fill.body as { result: { status: string; stdout: string } }).result;
+        expect(fillResult.status).toBe("succeeded");
+        const lines = fillResult.stdout.trim().split("\n");
+        expect(lines[0]).toBe("dd=1");
+        expect(Number(lines[1])).toBeLessThanOrEqual(workspaceBytes);
+        expect(Number(lines[1])).toBeGreaterThan(workspaceBytes / 2);
+        expect(lines[2]).toBe("alive");
+        const volume = await api.inspectVolume(`${config.namespace}-ws-it-${ref.attemptId}`);
+        expect(volume?.driver).toBe("local");
+        expect(volume?.options).toMatchObject({ type: "tmpfs", o: `size=${workspaceBytes},uid=1000,gid=1000,mode=0755` });
+
         const read = await core.authorTool(ref, await operationFor("it-read", {}), { kind: "read", path: "tabulate/__init__.py" });
         expect(read.body).toMatchObject({ kind: "read" });
         expect((read.body as { content: string }).content).toContain("def tabulate(");

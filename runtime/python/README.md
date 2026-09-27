@@ -24,7 +24,9 @@ runtime/python/build.sh tabulate-365        # prepare-profile.sh + docker build;
 | Tools present | `/usr/bin/timeout`, `/usr/bin/sleep`, `/bin/bash` (checked at build) |
 
 The rootfs is meant to run read-only; `/workspace` is supplied per attempt by the supervisor as a
-named volume (author role) or tmpfs (one-shot roles). Setuid/setgid bits are stripped from the image.
+named volume for every role (author, baseline/candidate/preview, hostile), backed by a tmpfs capped at
+`caps.workspaceBytes` (128 MiB by default) so a sandbox cannot fill host disk. Setuid/setgid bits are
+stripped from the image.
 
 Build context is the repository root; `Dockerfile` takes `--build-arg PROFILE=<id>` and
 `--build-arg ADAPTER_MODULE=<module>` (build.sh derives the module from `profile.json`).
