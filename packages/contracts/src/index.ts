@@ -768,6 +768,8 @@ export const Task = z.object({
   egressAllow: z.array(z.string().max(253)).max(16).optional(),
   result: TaskResult.optional(),
   cleanup: CleanupState.optional(),
+  /** Who may drive the task's browser right now (milestone 5); absent = the agent. */
+  control: z.lazy(() => ControlState).optional(),
   createdAt: isoDate,
   updatedAt: isoDate,
 });
@@ -1167,3 +1169,69 @@ export const BrowserEvidence = z.object({
 export type BrowserEvidence = z.infer<typeof BrowserEvidence>;
 export const EgressLog = z.object({ decisions: z.array(EgressDecision).max(200), summary: EgressSummary });
 export type EgressLog = z.infer<typeof EgressLog>;
+
+// ---------------------------------------------------------------------------------------------
+// Human control and supported final actions (40 Stage 5)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Exclusive browser control. Taking control revokes agent dispatch, settles the in-flight
+ * operation, then grants one human session; releasing invalidates every snapshot taken before so
+ * the agent must observe afresh. Human actions keep the task's destination policy, deadline,
+ * artifact and approval rules: a manual click is never an approval.
+ */
+export const ControlState = z.object({
+  holder: z.enum(["agent", "human", "transferring"]),
+  /** The session owner id holding control while holder is "human". */
+  humanOwner: z.string().optional(),
+  since: isoDate,
+  /** Browser snapshot generation at the handover; refs from before it are stale. */
+  fenceGeneration: z.number().int().nonnegative().optional(),
+  reason: z.string().max(512).optional(),
+});
+export type ControlState = z.infer<typeof ControlState>;
+
+/** A human browser action, sent through the control plane (never to the runner directly). */
+export const HumanBrowserAction = z.object({ request: BrowserOp });
+
+/**
+ * A proposed final action (a form submission to a supported destination), bound to exactly one
+ * owner, task, attempt, browser generation, destination origin and normalized payload. Approval
+ * is a one-use atomic claim; any change, expiry or replay fails closed.
+ */
+export const ActionProposal = z.object({
+  schemaVersion: z.literal(SCHEMA_VERSION),
+  id: plainId,
+  owner: z.string(),
+  taskId: plainId,
+  attemptId: plainId,
+  browserGeneration: z.number().int().nonnegative(),
+  /** Origin of the supported destination, e.g. https://forms.example.org */
+  destination: z.string().max(512),
+  /** The adapter that enforces the approval at the destination (only supported adapters exist). */
+  adapter: z.literal("airlock-forms-v1"),
+  formId: z.string().max(128),
+  /** Normalized fields the model proposes to submit (name → value); bounded. */
+  fields: z.record(z.string().max(128), z.string().max(4096)),
+  payloadDigest: sha256Hex,
+  summary: z.string().max(2000),
+  createdAt: isoDate,
+  expiresAt: isoDate,
+  status: z.enum(["pending", "approved", "rejected", "expired", "claimed", "submitted", "confirmed", "outcome_unknown", "failed"]),
+  decidedBy: z.string().optional(),
+  decidedAt: isoDate.optional(),
+  /** Receipt from the destination after submission (read back by the controller). */
+  receipt: z.object({ receiptId: z.string().max(128), payloadDigest: sha256Hex, at: isoDate }).optional(),
+});
+export type ActionProposal = z.infer<typeof ActionProposal>;
+
+export const ApprovalDecision = z.object({
+  decision: z.enum(["approve", "reject"]),
+  /** Must equal the proposal's payloadDigest: the approver approves exactly what they saw. */
+  payloadDigest: sha256Hex,
+});
+
+/** payloadDigest = SHA256(canonical {adapter, destination, formId, fields}). */
+export async function payloadDigestOf(p: { adapter: string; destination: string; formId: string; fields: Record<string, string> }): Promise<string> {
+  return sha256(canonicalJson({ adapter: p.adapter, destination: p.destination, formId: p.formId, fields: p.fields }));
+}
