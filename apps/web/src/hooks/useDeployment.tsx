@@ -34,6 +34,7 @@ export function DeploymentProvider({ children }: { children: ReactNode }) {
   const signedIn = !session.loading && session.role !== "viewer";
 
   useEffect(() => {
+    if (session.loading) return;
     const controller = new AbortController();
     getRepairAvailability(controller.signal)
       .then((a) => {
@@ -46,7 +47,8 @@ export function DeploymentProvider({ children }: { children: ReactNode }) {
         setAvailabilityError(err instanceof ApiError && err.status === 404 ? "this control plane does not report repair availability" : describeError(err));
       });
     return () => controller.abort();
-  }, [tick]);
+    // Refetch on sign-in: instance ids and the model name are only returned to a session.
+  }, [tick, session.loading, signedIn, session.role]);
 
   useEffect(() => {
     if (session.loading) return;
