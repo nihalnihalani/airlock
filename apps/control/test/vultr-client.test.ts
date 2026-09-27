@@ -3,6 +3,7 @@ import {
   VultrError,
   createScriptedDriver,
   createVultrDriver,
+  finishReasonOf,
   listModels,
   normalizeModelName,
   parseToolCalls,
@@ -34,8 +35,8 @@ function fakeFetch(responses: (Response | Error | (() => Response | Error))[]) {
 const json = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });
 
-const completion = (message: Record<string, unknown>, usage = { prompt_tokens: 11, completion_tokens: 7 }) =>
-  json({ id: "chatcmpl-1", choices: [{ index: 0, message: { role: "assistant", ...message }, finish_reason: "stop" }], usage });
+const completion = (message: Record<string, unknown>, usage: Record<string, unknown> = { prompt_tokens: 11, completion_tokens: 7 }, finishReason = "stop") =>
+  json({ id: "chatcmpl-1", choices: [{ index: 0, message: { role: "assistant", ...message }, finish_reason: finishReason }], usage });
 
 const noSleep = async () => undefined;
 const tools: ToolSpec[] = [{ name: "add", description: "adds", parameters: { type: "object", properties: { a: { type: "integer" }, b: { type: "integer" } }, required: ["a", "b"] } }];
@@ -84,6 +85,8 @@ describe("createVultrDriver", () => {
     expect(out.text).toBe("");
     expect(out.toolCalls).toEqual([{ id: "chatcmpl-tool-abc", name: "add", args: { a: 2, b: 3 } }]);
     expect(out.usage).toEqual({ input: 11, output: 7 });
+    expect(out.finishReason).toBe("stop");
+    expect(out.reasoning).toBe("");
 
     expect(calls.length).toBe(1);
     expect(calls[0]?.url).toBe(`${BASE}/chat/completions`);
@@ -108,8 +111,49 @@ describe("createVultrDriver", () => {
     const body = JSON.parse(calls[0]?.init.body as string);
     expect(body.tools).toBeUndefined();
     expect(body.tool_choice).toBeUndefined();
-    expect(body.max_tokens).toBe(4096);
+    expect(body.max_tokens).toBe(16384);
+    expect(body.reasoning_effort).toBeUndefined();
     expect(body.messages[0].role).toBe("user");
+  });
+
+  test("max_tokens is bounded and reasoning_effort is sent only when set", async () => {
+    const { fetch, calls } = fakeFetch([completion({ content: "a" }), completion({ content: "b" })]);
+    const driver = createVultrDriver({ apiKey: KEY, baseUrl: BASE, model: "m", fetch, sleep: noSleep });
+    const input = { system: "", messages: [{ role: "user" as const, content: "x" }], tools: [] };
+    await driver.chat({ ...input, maxTokens: 10_000_000, reasoningEffort: "low" });
+    await driver.chat({ ...input, maxTokens: 0 });
+    expect(JSON.parse(calls[0]?.init.body as string)).toMatchObject({ max_tokens: 131072, reasoning_effort: "low" });
+    const second = JSON.parse(calls[1]?.init.body as string);
+    expect(second.max_tokens).toBe(1);
+    expect("reasoning_effort" in second).toBe(false);
+  });
+
+  test("finish_reason is mapped and the reasoning text and token count are captured and bounded", async () => {
+    // The live Vultr shape (observed 2026-09-26): thinking in message.reasoning, content null,
+    // finish_reason "length" when the output limit cut the turn, reasoning_tokens in usage details.
+    const longReasoning = "r".repeat(10_000);
+    const { fetch } = fakeFetch([
+      completion({ content: null, reasoning: longReasoning }, { prompt_tokens: 76, completion_tokens: 50, completion_tokens_details: { reasoning_tokens: 50 } }, "length"),
+      completion({ content: "", reasoning_content: "thought", tool_calls: [{ id: "t1", type: "function", function: { name: "add", arguments: "{}" } }] }, { prompt_tokens: 1, completion_tokens: 2 }, "tool_calls"),
+      completion({ content: "done" }, { prompt_tokens: 1, completion_tokens: 2, completion_tokens_details: { reasoning_tokens: "n/a" } }, "content_filter"),
+    ]);
+    const driver = createVultrDriver({ apiKey: KEY, baseUrl: BASE, model: "m", fetch, sleep: noSleep });
+    const input = { system: "", messages: [{ role: "user" as const, content: "x" }], tools };
+    const cut = await driver.chat(input);
+    expect(cut.finishReason).toBe("length");
+    expect(cut.text).toBe("");
+    expect(cut.toolCalls).toEqual([]);
+    expect(cut.reasoning?.length).toBe(4000);
+    expect(cut.usage).toEqual({ input: 76, output: 50, reasoning: 50 });
+    const called = await driver.chat(input);
+    expect(called.finishReason).toBe("tool_calls");
+    expect(called.reasoning).toBe("thought");
+    expect(called.usage.reasoning).toBeUndefined();
+    const other = await driver.chat(input);
+    expect(other.finishReason).toBe("other");
+    expect(other.usage.reasoning).toBeUndefined();
+    expect(finishReasonOf(undefined)).toBe("other");
+    expect(finishReasonOf("stop")).toBe("stop");
   });
 
   test.each([401, 422])("HTTP %i is an auth failure that never retries and never leaks the key", async (status) => {
@@ -241,10 +285,13 @@ describe("createScriptedDriver", () => {
     const input = { system: "", messages: [], tools: [] };
     const t1 = await d.chat(input);
     expect(t1.text).toBe("writing");
+    expect(t1.finishReason).toBe("tool_calls");
     expect(t1.toolCalls).toEqual([{ id: "scripted-1", name: "write_file", args: { path: "a", content: "b" } }]);
-    expect((await d.chat(input)).text).toBe("done");
-    expect(await d.chat(input)).toEqual({ text: "", toolCalls: [], usage: { input: 0, output: 0 } });
-    expect(await d.chat(input)).toEqual({ text: "", toolCalls: [], usage: { input: 0, output: 0 } });
+    const t2 = await d.chat(input);
+    expect(t2.text).toBe("done");
+    expect(t2.finishReason).toBe("stop");
+    expect(await d.chat(input)).toEqual({ text: "", toolCalls: [], finishReason: "stop", reasoning: "", usage: { input: 0, output: 0 } });
+    expect(await d.chat(input)).toEqual({ text: "", toolCalls: [], finishReason: "stop", reasoning: "", usage: { input: 0, output: 0 } });
   });
 
   test("the forged-log fixture writes a log and submits with no source change", async () => {

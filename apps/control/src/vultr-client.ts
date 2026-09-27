@@ -27,12 +27,25 @@ export interface ChatInput {
   tools: ToolSpec[];
   signal?: AbortSignal;
   maxTokens?: number;
+  /** Sent as `reasoning_effort` only when set (Vultr accepts it; observed 2026-09-26 with glm-5.3). */
+  reasoningEffort?: string;
 }
 
+/**
+ * Why the model stopped: `length` means the output limit cut the turn (possibly mid tool call),
+ * `tool_calls`/`stop` are complete turns, `other` is any value this driver does not know.
+ */
+export type FinishReason = "stop" | "tool_calls" | "length" | "other";
+
+/** Additive over the original shape: drivers that predate finishReason/reasoning still satisfy it. */
 export interface ChatOutput {
   text: string;
   toolCalls: { id: string; name: string; args: unknown }[];
-  usage: { input: number; output: number };
+  /** Absent (older drivers) is read by the handler as "tool_calls" when calls are present, else "stop". */
+  finishReason?: FinishReason;
+  /** The model's thinking (`message.reasoning` / `message.reasoning_content`), bounded to 4000 chars; "" when absent. */
+  reasoning?: string;
+  usage: { input: number; output: number; reasoning?: number };
 }
 
 export interface ModelDriver {
@@ -72,8 +85,13 @@ const BACKOFF_BASE_MS = 500;
 const BACKOFF_CAP_MS = 8000;
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_ERROR_BODY_CHARS = 512;
-const DEFAULT_MAX_TOKENS = 4096;
-const MAX_MAX_TOKENS = 65536;
+/**
+ * glm-5.3 reasons before acting and the reasoning counts against max_tokens: at 4096 several live
+ * turns were all reasoning, ended with finish_reason "length" and carried no tool call.
+ */
+export const DEFAULT_MAX_TOKENS = 16384;
+export const MAX_MAX_TOKENS = 131072;
+const MAX_REASONING_CHARS = 4000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
 
 export function normalizeModelName(model: string): string {
@@ -220,10 +238,23 @@ async function readBounded(res: Response, apiKey: string): Promise<string> {
   return scrub(new TextDecoder().decode(merged), apiKey);
 }
 
-function usageOf(raw: unknown): { input: number; output: number } {
-  const u = (raw ?? {}) as { prompt_tokens?: unknown; completion_tokens?: unknown };
+function usageOf(raw: unknown): ChatOutput["usage"] {
+  const u = (raw ?? {}) as { prompt_tokens?: unknown; completion_tokens?: unknown; completion_tokens_details?: { reasoning_tokens?: unknown } };
   const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0);
-  return { input: n(u.prompt_tokens), output: n(u.completion_tokens) };
+  const usage: ChatOutput["usage"] = { input: n(u.prompt_tokens), output: n(u.completion_tokens) };
+  const reasoning = u.completion_tokens_details?.reasoning_tokens;
+  if (typeof reasoning === "number" && Number.isFinite(reasoning) && reasoning >= 0) usage.reasoning = Math.floor(reasoning);
+  return usage;
+}
+
+export function finishReasonOf(raw: unknown): FinishReason {
+  return raw === "stop" || raw === "tool_calls" || raw === "length" ? raw : "other";
+}
+
+/** `message.reasoning` (Vultr/vLLM) or `message.reasoning_content` (other OpenAI-compatible servers). */
+function reasoningOf(message: { reasoning?: unknown; reasoning_content?: unknown }): string {
+  const value = typeof message.reasoning === "string" ? message.reasoning : typeof message.reasoning_content === "string" ? message.reasoning_content : "";
+  return value.length > MAX_REASONING_CHARS ? value.slice(0, MAX_REASONING_CHARS) : value;
 }
 
 function linkSignals(external: AbortSignal | undefined, timeoutMs: number): { signal: AbortSignal; dispose: () => void } {
@@ -351,6 +382,7 @@ export function createVultrDriver(opts: VultrDriverOptions): ModelDriver {
         body.tools = tools;
         body.tool_choice = "auto";
       }
+      if (input.reasoningEffort) body.reasoning_effort = input.reasoningEffort;
       const init: { method: "POST"; body: string; signal?: AbortSignal } = { method: "POST", body: JSON.stringify(body) };
       if (input.signal) init.signal = input.signal;
       const json = await requestJson(io, endpoint, init);
@@ -359,12 +391,12 @@ export function createVultrDriver(opts: VultrDriverOptions): ModelDriver {
       if (!Array.isArray(choices) || choices.length === 0) {
         throw new VultrError("protocol", "response has no choices");
       }
-      const first = choices[0] as { message?: { content?: unknown; tool_calls?: unknown } };
+      const first = choices[0] as { message?: { content?: unknown; tool_calls?: unknown; reasoning?: unknown; reasoning_content?: unknown }; finish_reason?: unknown };
       const message = first?.message;
       if (!message || typeof message !== "object") throw new VultrError("protocol", "response choice has no message");
       const text = typeof message.content === "string" ? message.content : "";
       const toolCalls = parseToolCalls(message.tool_calls);
-      return { text, toolCalls, usage: usageOf((json as { usage?: unknown }).usage) };
+      return { text, toolCalls, finishReason: finishReasonOf(first.finish_reason), reasoning: reasoningOf(message), usage: usageOf((json as { usage?: unknown }).usage) };
     },
   };
 }
@@ -381,12 +413,12 @@ export function createScriptedDriver(script: ScriptedTurn[], options: { name?: s
       if (input.signal?.aborted) throw new VultrError("aborted", "request aborted");
       const turn = turns[cursor];
       cursor = Math.min(cursor + 1, turns.length);
-      if (!turn) return { text: "", toolCalls: [], usage: { input: 0, output: 0 } };
+      if (!turn) return { text: "", toolCalls: [], finishReason: "stop", reasoning: "", usage: { input: 0, output: 0 } };
       const toolCalls = (turn.toolCalls ?? []).map((tc) => {
         counter += 1;
         return { id: `scripted-${counter}`, name: tc.name, args: tc.args };
       });
-      return { text: turn.text ?? "", toolCalls, usage: { input: 0, output: 0 } };
+      return { text: turn.text ?? "", toolCalls, finishReason: toolCalls.length > 0 ? "tool_calls" : "stop", reasoning: "", usage: { input: 0, output: 0 } };
     },
   };
 }
