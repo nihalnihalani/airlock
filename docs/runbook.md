@@ -39,7 +39,7 @@ bun scripts/probe-model.ts <model> && bun scripts/probe-model.ts --vision <model
 deploy/deploy.sh --driver vultr --model <model> --skip-host-setup
 bun scripts/live-gate.ts --n 3                              # writes docs/evidence/live-gate/<ts>.json on ≥ 2/3
 git add docs/evidence/live-gate && git commit               # repair becomes available only with a matching receipt
-deploy/deploy.sh --only control --skip-host-setup           # reload receipts (or restart airlock-control)
+deploy/deploy.sh --only control --driver vultr --model <model> --skip-host-setup   # reload receipts; without --driver it falls back to scripted
 deploy/vultr/destroy.sh                                     # when done: both VMs bill while they exist
 ```
 
