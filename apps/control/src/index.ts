@@ -9,6 +9,7 @@ import { createApp } from "./api.ts";
 import { ArtifactStore, buildManifest, exportBundle, validateEnvelope, zipFiles } from "./artifacts/index.ts";
 import { loadConfig, redactConfig, ConfigError } from "./config.ts";
 import { TaskEventBus } from "./events.ts";
+import { log } from "./log.ts";
 import { loadProfilesReport } from "./profiles.ts";
 import { createRepairHandler, type DriverSource } from "./repair-handler.ts";
 import { openScriptedCatalog } from "./scripted.ts";
@@ -25,30 +26,30 @@ async function main() {
     config = loadConfig();
   } catch (error) {
     if (error instanceof ConfigError) {
-      console.error(`configuration error: ${error.message}`);
+      log.error("configuration error", { error: error.message });
       process.exit(2);
     }
     throw error;
   }
-  console.log({ timestamp: new Date().toISOString(), message: "control starting", config: redactConfig(config) });
+  log.info("control starting", { logLevel: log.level, config: redactConfig(config) });
 
   const store = await createStore({ dataDir: join(config.dataDir, "pglite") });
   const artifacts = new ArtifactStore(join(config.dataDir, "artifacts"));
   const report = await loadProfilesReport(config.profilesDir);
-  for (const skipped of report.skipped) console.warn({ timestamp: new Date().toISOString(), message: "profile skipped", id: skipped.id, reason: skipped.reason });
+  for (const skipped of report.skipped) log.warn("profile skipped", { id: skipped.id, reason: skipped.reason });
   if (report.profiles.size === 0) {
-    console.error(`no usable profiles in ${config.profilesDir}; run runtime/python/prepare-profile.sh for each profile`);
+    log.error("no usable profiles; run runtime/python/prepare-profile.sh for each profile", { profilesDir: config.profilesDir });
     process.exit(2);
   }
-  console.log({ timestamp: new Date().toISOString(), message: "profiles loaded", ids: [...report.profiles.keys()] });
+  log.info("profiles loaded", { ids: [...report.profiles.keys()] });
 
   const supervisor = new HttpSupervisorClient({ baseUrl: config.supervisorUrl, token: config.supervisorToken });
   try {
     const health = await supervisor.health();
-    console.log({ timestamp: new Date().toISOString(), message: "supervisor reachable", status: health.status, docker: health.docker, runtime: health.host.selectedRuntime, devUnsafe: health.host.devUnsafe });
-    if (health.host.devUnsafe) console.warn("supervisor reports devUnsafe=true (plain runc): local development only, never a deployment");
+    log.info("supervisor reachable", { url: config.supervisorUrl, status: health.status, docker: health.docker, runtime: health.host.selectedRuntime, devUnsafe: health.host.devUnsafe });
+    if (health.host.devUnsafe) log.warn("supervisor reports devUnsafe=true (plain runc): local development only, never a deployment");
   } catch (error) {
-    console.warn({ timestamp: new Date().toISOString(), message: "supervisor not reachable at start; tasks will fail until it is", error: error instanceof Error ? error.message.slice(0, 200) : "unknown" });
+    log.warn("supervisor not reachable at start; tasks will fail until it is", { url: config.supervisorUrl, error });
   }
 
   // One driver per task run: the scripted driver replays from its first turn for every task, and
@@ -64,7 +65,7 @@ async function main() {
       const script = await catalog.load(task.scriptedDriver);
       return createScriptedDriver(script.turns, { name: script.name });
     };
-    console.warn(`model driver is SCRIPTED from ${config.driver.scriptPath} (${catalog.names.join(", ")}): diagnostics only, not a live repair`);
+    log.warn("model driver is SCRIPTED: diagnostics only, not a live repair", { scriptPath: config.driver.scriptPath, scripts: catalog.names });
   }
 
   const bus = new TaskEventBus();
@@ -106,19 +107,19 @@ async function main() {
     trustedProxies: config.trustedProxies,
   });
   if (config.trustedProxies.length > 0)
-    console.log({ timestamp: new Date().toISOString(), message: "AIRLOCK_TRUST_PROXY: the login rate limit keys on the reverse proxy's X-Forwarded-For hop for requests arriving from these peers; other peers are keyed on their own address", trustedProxies: config.trustedProxies });
-  if (config.webDist) console.log({ timestamp: new Date().toISOString(), message: "serving web UI", dir: config.webDist });
-  else console.warn("no web UI directory (apps/web/dist); only /api is served. Build it with: bun run --cwd apps/web build");
+    log.info("AIRLOCK_TRUST_PROXY: the login rate limit keys on the reverse proxy's X-Forwarded-For hop for requests arriving from these peers; other peers are keyed on their own address", { trustedProxies: config.trustedProxies });
+  if (config.webDist) log.info("serving web UI", { dir: config.webDist });
+  else log.warn("no web UI directory (apps/web/dist); only /api is served. Build it with: bun run --cwd apps/web build");
 
   worker.start();
   const server = Bun.serve({ port: config.port, hostname: config.bind, fetch: app.fetch, idleTimeout: 255 });
-  console.log({ timestamp: new Date().toISOString(), message: "control listening", url: `http://${config.bind}:${server.port}` });
+  log.info("control listening", { url: `http://${config.bind}:${server.port}`, driver: config.driver.kind, model: config.driver.kind === "vultr" ? config.vultr.model : null, logLevel: log.level });
 
   let stopping = false;
   const shutdown = async (signal: string) => {
     if (stopping) return;
     stopping = true;
-    console.log({ timestamp: new Date().toISOString(), message: `shutting down on ${signal}` });
+    log.info("shutting down", { signal });
     server.stop(true);
     await worker.stop().catch((error) => backgroundFailure("worker stop", error));
     await store.close().catch((error) => backgroundFailure("store close", error));
@@ -129,6 +130,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error({ timestamp: new Date().toISOString(), message: "control failed to start", error: error instanceof Error ? `${error.name}: ${error.message.slice(0, 500)}` : String(error) });
+  log.error("control failed to start", { error });
   process.exit(1);
 });

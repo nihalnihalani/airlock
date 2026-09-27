@@ -30,6 +30,7 @@ import {
   type VerificationRecord,
 } from "@airlock/contracts";
 import type { TaskEventBus } from "./events.ts";
+import { log } from "./log.ts";
 import type { LoadedProfile } from "./profiles.ts";
 import { ExportIntegrityError } from "./artifacts/index.ts";
 import { ARTIFACT_KIND_BUNDLE, STORE_KIND_VERIFICATIONS, type ArtifactStoreLike } from "./repair-handler.ts";
@@ -110,25 +111,45 @@ export function createApp(deps: ApiDeps) {
     if (error instanceof z.ZodError) return c.json({ error: `invalid body: ${error.issues.map((i) => `${i.path.join(".")} ${i.message}`).join("; ").slice(0, 500)}` }, 400);
     if (error instanceof LoginRateLimited) return c.json({ error: error.message }, 429);
     if (error instanceof ExportIntegrityError) {
-      console.error({ timestamp: new Date().toISOString(), context: { path: c.req.path }, error: `ExportIntegrityError: ${error.message.slice(0, 300)}` });
+      log.error("export refused: sealed candidate no longer matches its manifest", { path: c.req.path, error });
       return c.json({ error: `sealed candidate no longer matches its manifest; export refused (${error.message.slice(0, 200)})` }, 409);
     }
     if (error instanceof SupervisorUnavailableError) return c.json({ error: "supervisor unavailable" }, 503);
     if (error instanceof SupervisorFenceError) return c.json({ error: error.message.slice(0, 300) }, 409);
     if (error instanceof SupervisorError) return c.json({ error: error.message.slice(0, 300) }, 502);
-    console.error({ timestamp: new Date().toISOString(), context: { path: c.req.path }, error: error instanceof Error ? `${error.name}: ${error.message.slice(0, 300)}` : "request failed" });
+    log.error("request failed", { method: c.req.method, path: c.req.path, error: error instanceof Error ? error : "request failed" });
     return c.json({ error: "internal error" }, 500);
   });
   app.notFound((c) => c.json({ error: "not found" }, 404));
 
-  // Session resolution on every request; viewer when no valid cookie.
+  // Session resolution on every request; viewer when no valid cookie. At debug level every
+  // request is logged with its outcome: method, path, status, duration, role and body sizes,
+  // never a body, header or token.
   app.use("*", async (c, next) => {
+    const startedAt = now();
     const token = readCookie(c.req.header("cookie"), SESSION_COOKIE);
     const session = await deps.sessions.resolve(token);
     c.set("token", token);
     c.set("session", session);
     c.set("role", session?.role ?? "viewer");
-    await next();
+    try {
+      await next();
+    } finally {
+      if (log.enabled("debug")) {
+        const requestBytes = Number(c.req.header("content-length") ?? "0") || 0;
+        const responseBytes = Number(c.res.headers.get("content-length") ?? "0") || 0;
+        log.debug("http", {
+          method: c.req.method,
+          path: c.req.path,
+          status: c.res.status,
+          durationMs: now() - startedAt,
+          role: session?.role ?? "viewer",
+          requestBytes,
+          ...(responseBytes ? { responseBytes } : {}),
+          ...(c.res.headers.get("content-type")?.startsWith("text/event-stream") ? { sse: true } : {}),
+        });
+      }
+    }
   });
 
   const requireRole = (c: Context<Env>, ...roles: Role[]): SessionRecord => {
@@ -284,14 +305,20 @@ export function createApp(deps: ApiDeps) {
     const header = c.req.header("last-event-id") ?? c.req.query("lastEventId") ?? c.req.query("after") ?? "0";
     const afterSeq = /^\d{1,12}$/.test(header) ? Number(header) : 0;
     const pollMs = deps.ssePollMs ?? 2000;
+    const role = c.get("role");
+    log.debug("sse: subscribe", { taskId: id, afterSeq, role });
     return streamSSE(c, async (stream) => {
       let cursor = afterSeq;
       let lastTaskUpdatedAt = "";
       let wake: (() => void) | null = null;
+      let sent = 0;
+      let replayed = false;
+      const openedAt = now();
       const unsubscribe = deps.bus.subscribe(id, () => wake?.());
       const send = async (event: RunEvent) => {
         if (event.seq <= cursor) return;
         cursor = event.seq;
+        sent += 1;
         await stream.writeSSE({ id: String(event.seq), event: event.kind, data: JSON.stringify(event) });
       };
       const drain = async () => {
@@ -311,6 +338,10 @@ export function createApp(deps: ApiDeps) {
         let lastHeartbeat = now();
         for (;;) {
           const task = await drain();
+          if (!replayed) {
+            replayed = true;
+            log.debug("sse: replayed", { taskId: id, afterSeq, throughSeq: cursor, events: sent });
+          }
           if (!task || (TERMINAL.has(task.status) && (await deps.store.listEvents(id, cursor, 1)).length === 0)) {
             await stream.writeSSE({ event: "end", data: JSON.stringify({ status: task?.status ?? "missing" }) });
             break;
@@ -332,6 +363,7 @@ export function createApp(deps: ApiDeps) {
         }
       } finally {
         unsubscribe();
+        log.debug("sse: closed", { taskId: id, afterSeq, throughSeq: cursor, events: sent, durationMs: now() - openedAt, aborted: stream.aborted });
       }
     });
   });
@@ -419,6 +451,7 @@ export function createApp(deps: ApiDeps) {
       if (!inserted) throw new AppError("grant id collision; retry", 409);
       const event = await deps.store.appendEvent(owner, task.id, { id: `evt-${randomBytes(8).toString("hex")}`, at: iso(), kind: "artifact", title: "Export authorized", detail: `grant ${grant.id} for ${grant.candidateDigest}` });
       deps.bus.publish(event);
+      log.debug("export grant created", { grantId: grant.id, taskId: task.id, candidateDigest: grant.candidateDigest, verificationRecordId: grant.verificationRecordId, role: session.role, expiresAt: grant.expiresAt });
     }
     return c.json({ grantId: grant.id, url: `/api/exports/${grant.id}`, expiresAt: grant.expiresAt }, existing ? 200 : 201);
   });

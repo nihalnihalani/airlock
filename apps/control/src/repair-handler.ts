@@ -33,6 +33,7 @@ import {
   type Task,
   type VerificationRecord,
 } from "@airlock/contracts";
+import { log } from "./log.ts";
 import type { LoadedProfile } from "./profiles.ts";
 import { MODEL_TOOLS, systemPrompt, taskMessage, type ToolSpec } from "./prompts.ts";
 import { DEFAULT_MAX_TOKENS as DRIVER_DEFAULT_MAX_TOKENS } from "./vultr-client.ts";
@@ -194,7 +195,9 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
     let task = initial;
     let liveAttempt: AttemptRef | null = null;
     const checkpoint = async (patch: Partial<Task>) => {
+      const before = task.phase;
       task = await ctx.checkpoint(patch);
+      if (patch.phase && patch.phase !== before) log.debug("phase", { taskId: task.id, from: before, to: patch.phase, attemptId: task.attemptId ?? null, generation: task.generation, modelCalls: task.budget.modelCallsUsed });
       return task;
     };
     const finish = async (outcome: Outcome, why: string): Promise<Partial<Task>> => {
@@ -486,6 +489,7 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
           } catch (error) {
             if (ctx.signal.aborted) throw new LostLeaseError();
             driverErrors++;
+            log.warn("model call failed", { taskId: task.id, call: task.budget.modelCallsUsed, model: identity.model, host: identity.host, durationMs: now() - startedAt, consecutive: driverErrors, error });
             await ctx.event("error", "Model call failed", bounded(errorMessage(error), 2000), { consecutive: driverErrors, model: identity.model, host: identity.host, durationMs: now() - startedAt, error: true });
             if (driverErrors >= MAX_CONSECUTIVE_DRIVER_ERRORS) throw new Error(`Model driver failed ${driverErrors} times in a row: ${errorMessage(error).slice(0, 300)}`);
             continue;
@@ -496,6 +500,20 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
           const cutOff = finishReason === "length";
           const reasoning = typeof turn.reasoning === "string" ? turn.reasoning : "";
           const reasoningTokens = turn.usage?.reasoning;
+          log.debug("model call", {
+            taskId: task.id,
+            call: task.budget.modelCallsUsed,
+            model: identity.model,
+            host: identity.host,
+            finishReason,
+            promptTokens: turn.usage?.input,
+            completionTokens: turn.usage?.output,
+            reasoningTokens: reasoningTokens ?? null,
+            maxTokens,
+            tools: toolCalls.map((c) => String(c.name).slice(0, 64)),
+            textChars: text.length,
+            durationMs: now() - startedAt,
+          });
           await ctx.event("model", `Model turn ${task.budget.modelCallsUsed}`, bounded(text || (cutOff ? "(no text: output limit hit)" : "(no text)")), {
             model: identity.model,
             host: identity.host,

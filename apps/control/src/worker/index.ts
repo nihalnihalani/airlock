@@ -18,6 +18,7 @@ import { randomUUID } from "node:crypto";
 import type { RunEvent, Task } from "@airlock/contracts";
 import type { Store } from "../store/index.ts";
 import type { TaskEventBus } from "../events.ts";
+import { log } from "../log.ts";
 
 export class LostLeaseError extends Error {
   constructor() {
@@ -57,12 +58,7 @@ export type TaskHandler = (owner: string, task: Task, context: TaskContext) => P
 export function backgroundFailure(phase: string, error: unknown) {
   const rawCode = error instanceof Error && "code" in error ? (error as Error & { code?: unknown }).code : undefined;
   const code = typeof rawCode === "string" && /^[A-Za-z0-9_.-]{1,64}$/.test(rawCode) ? rawCode : undefined;
-  console.error({
-    timestamp: new Date().toISOString(),
-    context: { phase },
-    error: error instanceof Error ? `${error.name}: ${error.message.slice(0, 300)}` : "Background operation failed",
-    ...(code ? { code } : {}),
-  });
+  log.error("background operation failed", { phase, error: error instanceof Error ? error : "Background operation failed", ...(code ? { code } : {}) });
 }
 
 const EVENT_TITLE_MAX = 256;
@@ -175,10 +171,15 @@ export class TaskWorker {
       updatedAt: new Date(this.now()).toISOString(),
       attempts: previous.attempts + 1,
     });
-    if (!task) return;
+    if (!task) {
+      log.debug("worker: claim lost the race", { taskId: previous.id, status: previous.status });
+      return;
+    }
     const controller = new AbortController();
     this.active.set(task.id, controller);
     const taskId = task.id;
+    const claimedAt = this.now();
+    log.debug("worker: lease claimed", { taskId, leaseId, mode, attempt: task.attempts, leaseMs, active: this.active.size });
 
     const guard = async () => {
       const latest = await this.db.get<Task>(owner, "tasks", taskId);
@@ -217,9 +218,15 @@ export class TaskWorker {
             { leaseUntil: new Date(this.now() + leaseMs).toISOString() },
           )
           .then((value) => {
-            if (!value) controller.abort();
+            if (!value) {
+              log.warn("worker: heartbeat lost the lease; aborting the run", { taskId, leaseId });
+              controller.abort();
+            }
           })
-          .catch(() => controller.abort());
+          .catch((error) => {
+            log.warn("worker: heartbeat failed; aborting the run", { taskId, leaseId, error });
+            controller.abort();
+          });
       },
       Math.max(10, Math.floor(leaseMs / 3)),
     );
@@ -228,6 +235,7 @@ export class TaskWorker {
       await this.db.put("system", "runs", { id: leaseId, taskId, owner, mode, startedAt, status: "running" });
       const result = await this.execute(owner, task, { mode, signal: controller.signal, guard, checkpoint, event });
       await checkpoint({ ...result, leaseId: null, leaseUntil: null } as Partial<Task>);
+      log.debug("worker: lease released", { taskId, leaseId, mode, status: result.status ?? task.status, outcome: result.outcome ?? null, durationMs: this.now() - claimedAt });
       await this.db.put("system", "runs", {
         id: leaseId,
         taskId,
@@ -239,6 +247,7 @@ export class TaskWorker {
       });
     } catch (error) {
       if (error instanceof LostLeaseError || controller.signal.aborted) {
+        log.debug("worker: lease lost or run aborted; releasing", { taskId, leaseId, mode, aborted: controller.signal.aborted, durationMs: this.now() - claimedAt });
         // Lost the lease while running: requeue so a fresh claim resumes (the handler discards any
         // uncertain workspace). Lost the lease while cancelling: release so the next tick retries.
         const released =
@@ -260,6 +269,7 @@ export class TaskWorker {
           // Someone else already moved the task (e.g. running → cancelling by the API). Nothing to undo.
         }
       } else if (mode === "cancel" && error instanceof TeardownIncompleteError) {
+        log.warn("worker: cancel pass could not confirm teardown", { taskId, leaseId, error });
         // Revoke/destroy not confirmed: the sandbox may still be running. Stay in `cancelling`,
         // release the lease with a retry-after so a later tick tries again, bounded by the number
         // of cancel passes recorded durably in `runs`. Past the bound the task is `failed` (an
@@ -291,6 +301,7 @@ export class TaskWorker {
         }
       } else {
         const detail = error instanceof Error ? error.message : "Task execution failed";
+        log.error("worker: task failed", { taskId, leaseId, mode, error, durationMs: this.now() - claimedAt });
         await this.appendEvent(owner, taskId, "error", "Task failed", detail).catch((e) =>
           backgroundFailure("record task error", e),
         );

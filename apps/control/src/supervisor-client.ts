@@ -25,6 +25,7 @@ import {
   type Operation,
   type SandboxRole,
 } from "@airlock/contracts";
+import { log } from "./log.ts";
 
 export class SupervisorError extends Error {
   constructor(
@@ -212,10 +213,14 @@ export class HttpSupervisorClient implements SupervisorClient {
     let lastError: unknown;
     for (let attempt = 0; attempt < 2; attempt++) {
       if (signal?.aborted) throw new SupervisorError("Call aborted", 0);
+      const startedAt = Date.now();
       try {
         const response = await this.request(path, { method: "GET", headers }, DEFAULT_TIMEOUTS.read, signal);
-        return await this.decode(response, schema);
+        const decoded = await this.decode(response, schema);
+        log.debug("supervisor call", { method: "GET", path, status: response.status, attempt, durationMs: Date.now() - startedAt });
+        return decoded;
       } catch (error) {
+        log.debug("supervisor call failed", { method: "GET", path, attempt, durationMs: Date.now() - startedAt, error });
         if (error instanceof SupervisorError) throw error;
         if (signal?.aborted) throw new SupervisorError("Call aborted", 0);
         lastError = error;
@@ -239,15 +244,22 @@ export class HttpSupervisorClient implements SupervisorClient {
     let lastError: unknown;
     for (let attempt = 0; attempt <= this.retries; attempt++) {
       if (opts?.signal?.aborted) throw new SupervisorError("Call aborted", 0, operation.operationId);
+      const startedAt = Date.now();
+      const call = { method: "POST", path, operationId: operation.operationId, attempt, requestBytes: payload.length, timeoutMs };
       try {
         const response = await this.request(path, { method: "POST", headers: this.headers(true), body: payload }, timeoutMs, opts?.signal);
         if (response.status === 503) {
           lastError = new SupervisorUnavailableError(await errorText(response), operation.operationId);
+          log.debug("supervisor call unavailable; will replay the same operation", { ...call, status: 503, durationMs: Date.now() - startedAt });
           await this.backoff(attempt);
           continue;
         }
-        return await this.decode(response, schema, operation.operationId);
+        const decoded = await this.decode(response, schema, operation.operationId);
+        log.debug("supervisor call", { ...call, status: response.status, durationMs: Date.now() - startedAt });
+        return decoded;
       } catch (error) {
+        const fenced = error instanceof SupervisorFenceError;
+        log.debug(fenced ? "supervisor call fenced" : "supervisor call failed", { ...call, durationMs: Date.now() - startedAt, fenced, error });
         if (error instanceof SupervisorError) throw error;
         if (opts?.signal?.aborted) throw new SupervisorError("Call aborted", 0, operation.operationId);
         // Transport failure or timeout: outcome uncertain → replay the SAME operation id.

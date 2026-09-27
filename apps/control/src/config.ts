@@ -5,6 +5,7 @@
 import { existsSync, statSync } from "node:fs";
 import { isIP } from "node:net";
 import { join, resolve } from "node:path";
+import { log } from "./log.ts";
 
 /** `scriptPath` is one script file or a directory of `<name>.json` scripts (see scripted.ts). */
 export type DriverMode = { kind: "vultr" } | { kind: "scripted"; scriptPath: string };
@@ -102,7 +103,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   if (operatorPassword && judgePassword && operatorPassword === judgePassword)
     throw new ConfigError("AIRLOCK_OPERATOR_PASSWORD and AIRLOCK_JUDGE_PASSWORD must differ");
   if (!operatorPassword && !judgePassword)
-    console.warn("No AIRLOCK_OPERATOR_PASSWORD or AIRLOCK_JUDGE_PASSWORD set: only the read-only viewer role is available");
+    log.warn("No AIRLOCK_OPERATOR_PASSWORD or AIRLOCK_JUDGE_PASSWORD set: only the read-only viewer role is available");
 
   const profilesDir = resolve(env.AIRLOCK_PROFILES_DIR?.trim() || resolve(repoRoot, "profiles"));
   requireDir(profilesDir, "AIRLOCK_PROFILES_DIR");
