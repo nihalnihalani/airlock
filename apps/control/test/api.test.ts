@@ -1292,3 +1292,27 @@ describe("rate-limit memory is bounded without resetting every client", () => {
     expect([...map.keys()]).toEqual(["new-1", "new-2", "new-3"]);
   });
 });
+
+describe("cross-site request forgery", () => {
+  test("state-changing requests with a foreign Origin or a cross-site Sec-Fetch-Site are refused; same-origin and non-browser clients pass", async () => {
+    const ctx = await makeCtx();
+    try {
+      const op = await login(ctx.app, OPERATOR);
+      const body = JSON.stringify({ profileId: "fx-1", issueText: "x" });
+      const post = (headers: Record<string, string>) =>
+        ctx.app.request("http://airlock.test/api/tasks", { method: "POST", headers: { "content-type": "application/json", cookie: op, host: "airlock.test", ...headers }, body });
+      expect((await post({ origin: "https://evil.example" })).status).toBe(403);
+      expect((await post({ origin: "null" })).status).toBe(403);
+      expect((await post({ "sec-fetch-site": "cross-site" })).status).toBe(403);
+      expect((await post({ "sec-fetch-site": "same-site" })).status).toBe(403);
+      expect((await post({ origin: "http://airlock.test", "sec-fetch-site": "same-origin" })).status).toBe(201);
+      expect((await post({})).status).toBe(201);
+      // Reads are unaffected.
+      expect((await ctx.app.request("http://airlock.test/api/tasks", { headers: { cookie: op, origin: "https://evil.example" } })).status).toBe(200);
+      // Login is a state change too.
+      expect((await ctx.app.request("http://airlock.test/api/session", { method: "POST", headers: { "content-type": "application/json", origin: "https://evil.example", host: "airlock.test" }, body: JSON.stringify({ password: OPERATOR }) })).status).toBe(403);
+    } finally {
+      await ctx.close();
+    }
+  });
+});

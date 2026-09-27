@@ -1,8 +1,11 @@
 # Airlock — development guideline
 
-Airlock takes an untrusted bug report for a supported library, reproduces the failure in a disposable sandbox on Vultr, attempts a minimal repair, and returns a patch with **externally measured** before/after behavior. The agent can edit the candidate; it can never edit the acceptance contract, grant itself privileges, publish its work, or decide that it passed.
+Airlock is a web agent that executes useful work in disposable sandboxes on Vultr without giving the work any authority over the application. Two task kinds share one control plane and one supervisor:
 
-This file is the standing guideline for every session on this repo. The research that produced it lives in `research/`; the governing documents are [35](research/35-AIRLOCK-MAIN-CHALLENGE.md) (product, demo, gates), [37](research/37-AIRLOCK-OPENMUSE-OPENBOT-ARCHITECTURE.md) (architecture and reuse) and [38](research/38-kickoff-decks-and-netbird-clarification.md) (kickoff amendments). Where this file and those differ, this file wins for day-to-day work; update all three together when a decision changes.
+- **Repair** (35/37): takes an untrusted bug report for a supported library, reproduces the failure, attempts a minimal repair, and returns a patch with **externally measured** before/after behavior. The agent can edit the candidate; it can never edit the acceptance contract, grant itself privileges, publish its work, or decide that it passed.
+- **General tasks** (40, stages 0–6): a goal under a controller-selected profile (`analysis`, `web-research`, `web-analysis`) run with real Chromium and offline Python/Node sandboxes, owner uploads, screenshots, human takeover and approvals for supported form submissions only. Completion is decided by the controller's checks on collected outputs and evidence, never by the model or a page.
+
+This file is the standing guideline for every session on this repo. The research that produced it lives in `research/`; the governing documents are [35](research/35-AIRLOCK-MAIN-CHALLENGE.md) (product, demo, gates), [37](research/37-AIRLOCK-OPENMUSE-OPENBOT-ARCHITECTURE.md) (architecture and reuse) and [38](research/38-kickoff-decks-and-netbird-clarification.md) (kickoff amendments), with [40](research/40-AIRLOCK-NEXT-STEPS-FULL-EXECUTION.md) extending scope to browser and general execution; the finding ledger is [docs/implementation-status.md](docs/implementation-status.md) (from [42](research/42-AIRLOCK-GAP-AUDIT.md)). Where this file and those differ, this file wins for day-to-day work; update all three together when a decision changes.
 
 ## 1. The bar: a real product, not a demo simulation
 
@@ -40,17 +43,22 @@ Facts to keep in mind while adapting: OpenBot's upstream supervisor exposes only
 ### Layout
 
 ```
-apps/web/                         React/Vite task page and Report Export form
-apps/control/
-  api.ts                          Hono sessions, task endpoints, SSE, export
-  repair-handler.ts               Deterministic phases around one model loop
+apps/web/                         React/Vite: repair and general task pages, control, approvals
+apps/control/src/
+  api.ts                          Hono sessions, task endpoints, SSE, export, control, approvals
+  repair-handler.ts               Deterministic repair phases around one model loop
+  general-handler.ts              General task loop: browser/code/file tools, completion checks
+  task-profiles.ts                analysis / web-research / web-analysis registry
+  browser-control.ts, proposals.ts  Exclusive human control; action proposals and approvals
   vultr-client.ts                 Serverless Inference only, normalized tools
   store/                          Adapted OpenMuse Store + typed repositories
   worker/                         Adapted OpenMuse TaskWorker
   verifier/                       Contract comparison, no candidate imports
   artifacts/                      Canonical manifests, diff, immutable storage
-apps/supervisor/
-  api.ts                          Adapted OpenBot narrow service
+apps/supervisor/src/
+  index.ts                        Adapted OpenBot narrow service (HTTP routes)
+  browser.ts, code.ts             Browser (+ egress) and analysis/node sandbox roles
+  capacity.ts                     Host admission
   runtime.ts                      Docker adapter + OpenMuse hardening checks
   operations.ts                   Fences, request digests and local journal
   lifecycle.ts                    Stop/freeze/destroy/reconciliation/janitor
@@ -59,6 +67,11 @@ runtime/python/
   Dockerfile                      Pinned supported runtime
   adapter.py                      Fixed JSON input / bounded output interface
   collector.py                    Fixed read-only bounded file-byte protocol
+runtime/browser/                  Pinned Playwright/Chromium runner (unix-socket framed protocol)
+runtime/analysis/, runtime/node/  Offline Python data and Node images
+runtime/outputs/                  Bounded output collector for code sandboxes
+apps/egress/                      Per-attempt egress proxy (allowlist, DNS pinning)
+apps/fixtures/                    Disclosed demo data page and airlock-forms-v1 destination
 profiles/tabulate-365/            Base manifest and preapproved case contract
 THIRD_PARTY_NOTICES.md            Copied source pins, licenses, modifications
 ```
@@ -73,7 +86,7 @@ Stack: Bun + TypeScript, Hono, PGlite, dockerode, React/Vite; Python 3.12 pinned
 4. **The worker cannot declare success.** `submit_candidate` advances only to freeze. An output field named `passed`, a forged JUnit file, pytest exit codes from inside the sandbox, or "all tests passed" in a log carry no authority. Timeouts, protocol errors, missing/duplicate/unknown case IDs and incomplete output cannot pass.
 5. **Cancellation has an execution effect.** A DB status change or aborted HTTP request is not termination. Revoke dispatch → stop the whole container → confirm → fence late results. Failed teardown stays visible and blocks reuse. Crash between intent and acknowledgement yields `unknown/interrupted`, never an invented receipt.
 6. **Ownership is checked at every access.** Task IDs, container names and digests are identifiers, not bearer tokens.
-7. **No secrets, no network, no host in the sandbox.** `--network none` for every task role; no model key, provider credential, Docker socket, host mount or cloud-metadata route inside any container. Provider credentials live only on VM A.
+7. **No secrets, no network, no host in the sandbox.** `--network none` for every code role (author, baseline, candidate, preview, hostile, analysis, node); no model key, provider credential, Docker socket, host mount, personal cookie or cloud-metadata route inside any container. Provider credentials live only on VM A. **The single exception is the fixed browser profile:** Chromium sits on a per-attempt internal network whose only reachable peer is that attempt's egress proxy, which enforces the owner's destination allowlist, refuses private/link-local/metadata addresses and connects only to the address it validated. Code and browser never share a writable volume or profile; the browser has no shell and no evaluate/CDP operation. This exception is not host execution, unrestricted network, weaker isolation or logged-in browsing.
 8. **Runtime tier is inspected, never assumed.** gVisor (`runsc`) is the floor; Kata on the VX1 sandbox host is the target; plain `runc` is not an acceptable shipped runtime. The supervisor inspects the effective runtime before every dispatch and records runtime name and guest `uname` in the verification record. Local macOS development runs on `runc` and must be labelled `dev-unsafe`; it is never a deployment configuration.
 9. **Every run record carries the five checkpoints:** host check (CPU virt, `/dev/kvm`, runtimes), execution log with exit codes, in-sandbox `hostname`/`uname` proof, an isolation probe that must be fully BLOCKED before agent work, and the "(no sandboxes)" teardown listing.
 10. **All runtime model calls go through Vultr Serverless Inference.** No other provider anywhere in the runtime path. Development assistants are not runtime calls.

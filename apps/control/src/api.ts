@@ -235,6 +235,34 @@ export function createApp(deps: ApiDeps) {
   });
   app.notFound((c) => c.json({ error: "not found" }, 404));
 
+  // Cross-site request forgery: the session cookie is SameSite=Strict, and on top of that every
+  // state-changing API request from a browser must come from this origin. Browsers send
+  // Sec-Fetch-Site and Origin on such requests; a cross-site value is refused. Non-browser clients
+  // (scripts, curl) send neither and are authenticated by the cookie they hold.
+  app.use("/api/*", async (c, next) => {
+    const method = c.req.method.toUpperCase();
+    if (method !== "GET" && method !== "HEAD" && method !== "OPTIONS") {
+      const site = c.req.header("sec-fetch-site");
+      if (site !== undefined && site !== "same-origin" && site !== "none") return c.json({ error: "cross-site request refused" }, 403);
+      const origin = c.req.header("origin");
+      if (origin !== undefined) {
+        let originHost: string | null = null;
+        try {
+          originHost = origin === "null" ? null : new URL(origin).host;
+        } catch {
+          originHost = null;
+        }
+        const host = c.req.header("x-forwarded-host") && trustedProxyRequest(c) ? c.req.header("x-forwarded-host") : c.req.header("host");
+        if (!originHost || !host || originHost !== host) return c.json({ error: "cross-origin request refused" }, 403);
+      }
+    }
+    await next();
+  });
+  const trustedProxyRequest = (c: Context<Env>): boolean => {
+    const peer = peerAddress(c);
+    return !!peer && trustedProxies.length > 0 && isTrustedProxy(peer);
+  };
+
   // Session resolution on every request; viewer when no valid cookie. At debug level every
   // request is logged with its outcome: method, path, status, duration, role and body sizes,
   // never a body, header or token.
