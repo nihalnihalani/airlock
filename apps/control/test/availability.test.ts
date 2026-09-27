@@ -2,8 +2,8 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { HostCheck } from "@airlock/contracts";
-import { RepairAvailabilityService, SCRIPTED_REASON, describeDiagnostics, receiptProblem } from "../src/availability.ts";
+import type { HostCheck, Task } from "@airlock/contracts";
+import { RepairAvailabilityService, SCRIPTED_REASON, describeDiagnostics, receiptProblem, type TaskLookup } from "../src/availability.ts";
 import { makeFixture, type Fixture } from "./helpers/doubles.ts";
 import { fakeHost } from "./helpers/fake-supervisor.ts";
 
@@ -16,7 +16,44 @@ afterAll(async () => {
   await fixture.cleanup();
 });
 
-const liveHost = (overrides: Partial<HostCheck> = {}) => fakeHost({ selectedRuntime: "kata", devUnsafe: false, availableRuntimes: ["runc", "kata"], ...overrides });
+const IMAGE = `sha256:${"a".repeat(64)}`;
+const ADAPTER = "b".repeat(64);
+const NOW = Date.parse("2026-09-30T00:00:00.000Z");
+const liveHost = (overrides: Partial<HostCheck> = {}) => fakeHost({ selectedRuntime: "kata", devUnsafe: false, availableRuntimes: ["runc", "kata"], runtimeImageId: IMAGE, ...overrides });
+
+/** This control plane's task records, as the gate run left them. */
+function gateTasks(overrides: Record<string, Partial<Task>> = {}, count = 3, passed = 2): Map<string, Task> {
+  const tasks = new Map<string, Task>();
+  for (let i = 0; i < count; i++) {
+    const id = `task-${i}`;
+    tasks.set(id, {
+      id,
+      owner: "operator",
+      profileId: "fx-1",
+      issueText: "x",
+      status: "done",
+      phase: "ready",
+      outcome: i < passed ? "CANDIDATE_PASSED_CHECKS" : "CHECKS_FAILED",
+      candidateDigest: "1".repeat(64),
+      liveGate: true,
+      generation: 1,
+      leaseId: null,
+      leaseUntil: null,
+      attempts: 1,
+      budget: { modelCallsUsed: 4, repairAttemptsUsed: 1 },
+      createdAt: "2026-09-27T09:00:00.000Z",
+      updatedAt: "2026-09-27T09:30:00.000Z",
+      ...(overrides[id] ?? {}),
+    } as Task);
+  }
+  return tasks;
+}
+const lookup = (tasks: Map<string, Task>): TaskLookup => ({
+  scanWhere: async <T,>(_kind: string, where: Record<string, unknown>) => {
+    const t = tasks.get(String(where.id));
+    return t ? [{ owner: t.owner, value: t as unknown as T }] : [];
+  },
+});
 function receipt(overrides: Record<string, unknown> = {}) {
   const passed = (overrides.passed as number | undefined) ?? 2;
   const total = (overrides.total as number | undefined) ?? 3;
@@ -31,23 +68,25 @@ function receipt(overrides: Record<string, unknown> = {}) {
     inferenceHost: "api.vultrinference.com",
     runtime: "kata",
     devUnsafe: false,
+    runtimeImageId: IMAGE,
+    adapterDigest: ADAPTER,
     attempts: Array.from({ length: total }, (_, i) => ({ taskId: `task-${i}`, outcome: i < passed ? "CANDIDATE_PASSED_CHECKS" : "CHECKS_FAILED", candidateDigest: "1".repeat(64), modelCalls: 4, modelHosts: ["api.vultrinference.com"], durationMs: 900 })),
     passed,
     total,
     ...overrides,
   };
 }
-async function fresh(files: Record<string, unknown>, model = "glm-5.3") {
+async function fresh(files: Record<string, unknown>, model = "glm-5.3", tasks: Map<string, Task> = gateTasks(), adapter = ADAPTER) {
   dir = await mkdtemp(join(tmpdir(), "airlock-evidence-"));
   for (const [name, value] of Object.entries(files)) await writeFile(join(dir, name), typeof value === "string" ? value : JSON.stringify(value));
-  return new RepairAvailabilityService({ driver: "vultr", model, evidenceDir: dir, repoRoot: tmpdir() });
+  return new RepairAvailabilityService({ driver: "vultr", model, evidenceDir: dir, repoRoot: tmpdir(), adapterDigestOf: async () => adapter, tasks: lookup(tasks), now: () => NOW });
 }
 
 describe("repair availability from live-gate receipts", () => {
   test("a matching 2/3 receipt makes repair available; the model matches with or without -normalize", async () => {
     const service = await fresh({ "a.json": receipt() });
     try {
-      const a = await service.evaluate(fixture.profile, liveHost({ runtimeImageId: "sha256:img" }));
+      const a = await service.evaluate(fixture.profile, liveHost());
       expect(a.available).toBe(true);
       expect(a.evidence?.passed).toBe(2);
       expect(a.runtime).toBe("kata");
@@ -61,7 +100,8 @@ describe("repair availability from live-gate receipts", () => {
     ["mismatched contract", { contractDigest: "e".repeat(64) }, {}, "running contract"],
     ["mismatched profile", { profileId: "other" }, {}, "not fx-1"],
     ["mismatched runtime", { runtime: "runsc" }, {}, "supervisor now selects kata"],
-    ["mismatched runtime image", { runtimeImageId: "sha256:old" }, { runtimeImageId: "sha256:new" }, "runtime image"],
+    ["mismatched runtime image", { runtimeImageId: `sha256:${"c".repeat(64)}` }, {}, "the supervisor now enforces"],
+    ["a supervisor that reports no image id", {}, { runtimeImageId: undefined }, "no enforced runtime image id"],
     ["dev-unsafe supervisor", {}, { devUnsafe: true, selectedRuntime: "runc" }, "dev-unsafe"],
     ["supervisor unreachable", {}, null, "supervisor unreachable"],
     ["1 of 3", { passed: 1, total: 3 }, {}, "passed 1 of 3"],
@@ -87,6 +127,93 @@ describe("repair availability from live-gate receipts", () => {
       expect(a.available).toBe(false);
       expect(a.reason).toContain("passed 0 of 3");
       expect(a.evidence?.recordedAt).toBe("2026-09-28T10:00:00.000Z");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a receipt measured under another adapter does not back repair", async () => {
+    const service = await fresh({ "a.json": receipt() }, "glm-5.3", gateTasks(), "f".repeat(64));
+    try {
+      const a = await service.evaluate(fixture.profile, liveHost());
+      expect(a.available).toBe(false);
+      expect(a.reason).toContain("measured under adapter bbbbbbbbbbbb");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("passes are counted from this control plane's task records, not the receipt: a claimed pass the store does not back fails the gate", async () => {
+    const service = await fresh({ "a.json": receipt() }, "glm-5.3", gateTasks({ "task-1": { outcome: "CHECKS_FAILED" } }));
+    try {
+      const a = await service.evaluate(fixture.profile, liveHost());
+      expect(a.available).toBe(false);
+      expect(a.reason).toContain("the task records confirm 1 passing attempt");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  for (const [name, tasks, reason] of [
+    ["an attempt unknown to this store", (() => { const t = gateTasks(); t.delete("task-2"); return t; })(), "task-2 is not a task of this control plane"],
+    ["an attempt that was not a live-gate task", gateTasks({ "task-0": { liveGate: undefined } }), "task-0 is not a live-gate task"],
+    ["an attempt that was a scripted diagnostic", gateTasks({ "task-0": { scriptedDriver: "forged-log" } }), "task-0 is not a live-gate task"],
+  ] as [string, Map<string, Task>, string][]) {
+    test(`a receipt listing ${name} does not back repair`, async () => {
+      const service = await fresh({ "a.json": receipt() }, "glm-5.3", tasks);
+      try {
+        const a = await service.evaluate(fixture.profile, liveHost());
+        expect(a.available).toBe(false);
+        expect(a.reason).toContain(reason);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+  }
+
+  test("a receipt dated in the future is refused, and it does not hide behind an older pass either", async () => {
+    const onlyFuture = await fresh({ "future.json": receipt({ recordedAt: "2026-10-30T00:00:00.000Z" }) });
+    try {
+      const a = await onlyFuture.evaluate(fixture.profile, liveHost());
+      expect(a.available).toBe(false);
+      expect(a.reason).toContain("1 invalid file ignored");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+    // Within the 5-minute skew allowance it is accepted.
+    const skewed = await fresh({ "a.json": receipt({ recordedAt: new Date(NOW + 60_000).toISOString() }) });
+    try {
+      expect((await skewed.evaluate(fixture.profile, liveHost())).available).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a newer invalid receipt is not silently skipped: an older pass does not back repair", async () => {
+    // Newer by its own recordedAt (schema-invalid: a scripted driver).
+    const byDate = await fresh({ "old.json": receipt(), "new.json": receipt({ driver: "scripted", recordedAt: "2026-09-28T10:00:00.000Z" }) });
+    try {
+      const a = await byDate.evaluate(fixture.profile, liveHost());
+      expect(a.available).toBe(false);
+      expect(a.reason).toContain("new.json is invalid");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+    // Unreadable, newer by file mtime.
+    const byMtime = await fresh({ "old.json": receipt(), "zz.json": "{not json" });
+    try {
+      await utimes(join(dir, "old.json"), new Date(NOW - 60_000), new Date(NOW - 60_000));
+      await utimes(join(dir, "zz.json"), new Date(NOW), new Date(NOW));
+      const a = await byMtime.evaluate(fixture.profile, liveHost());
+      expect(a.available).toBe(false);
+      expect(a.reason).toContain("zz.json is invalid");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+    // An OLDER invalid file does not withdraw a newer valid pass.
+    const older = await fresh({ "new.json": receipt(), "aa.json": receipt({ driver: "scripted", recordedAt: "2026-09-01T00:00:00.000Z" }) });
+    try {
+      expect((await older.evaluate(fixture.profile, liveHost())).available).toBe(true);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

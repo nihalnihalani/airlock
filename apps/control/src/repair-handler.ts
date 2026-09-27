@@ -54,12 +54,14 @@ import {
   type Operation,
   type Outcome,
   type ProfileManifest,
+  type RepairAvailability,
   type SourceManifest,
   type Task,
   type VerificationRecord,
 } from "@airlock/contracts";
 import { log } from "./log.ts";
 import type { LoadedProfile } from "./profiles.ts";
+import { redactTeardown } from "./redact.ts";
 import { MODEL_TOOLS, systemPrompt, taskMessage, type ToolSpec } from "./prompts.ts";
 import { DEFAULT_MAX_TOKENS as DRIVER_DEFAULT_MAX_TOKENS } from "./vultr-client.ts";
 import type { Store } from "./store/index.ts";
@@ -148,6 +150,17 @@ export interface RepairDeps {
   renewIntervalMs?: number;
   /** Backoff before each retry of a supervisor call refused with 429 (capacity); its length is the retry count. */
   capacityRetryDelaysMs?: number[];
+  /**
+   * AIRLOCK_PRODUCTION=1: a measurement taken on a dev-unsafe host or on plain runc is never a
+   * verdict here (the run ends INCONCLUSIVE), and a dev-unsafe supervisor starts no sandbox.
+   */
+  production?: boolean;
+  /**
+   * Re-evaluates live repair availability when a live task (not a diagnostic, not a live-gate
+   * attempt) is first claimed, so a task created before the latest receipt landed follows the
+   * latest evidence. Returns null when availability does not apply (e.g. a scripted driver).
+   */
+  repairAvailability?: (task: Task, profile: LoadedProfile, host: HostCheck) => Promise<Pick<RepairAvailability, "available" | "reason"> | null>;
 }
 
 export const STORE_KIND_VERIFICATIONS = "verifications";
@@ -193,7 +206,9 @@ const MIN_COMPLETION_ALLOWANCE = 1024;
 /** Characters per token for the conservative prompt estimate (fewer chars/token = more tokens charged). */
 const CHARS_PER_TOKEN = 3;
 const FEEDBACK_CAP = 4000;
-const MAX_RECONCILED_OPERATIONS = 100;
+/** Outstanding journal rows are reconciled in pages of this size, until none is left. */
+const RECONCILE_PAGE = 100;
+export const INVOKE_RECONCILIATION = "no supervisor operation read endpoint; one-shot sandboxes are bounded by their own deadline";
 const NUDGE_TEXT_ONLY = "If the fix is applied, call submit_candidate; otherwise continue or say why you cannot fix it.";
 const NUDGE_OUTPUT_LIMIT = "Your last turn hit the output limit before any action. Take the next action now with a tool call.";
 
@@ -321,7 +336,8 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
       return {
         clean: result.teardown.clean,
         detail: `${revoked}; destroyed; remaining containers=${result.teardown.containersRemaining.length} volumes=${result.teardown.volumesRemaining.length}`,
-        data: { teardown: result.teardown },
+        // Other tasks' containers and volumes in the host-wide listing are anonymised before storing.
+        data: { teardown: redactTeardown(result.teardown, new Set([ref.taskId])) },
       };
     } catch (error) {
       if (error instanceof SupervisorNotFoundError) return { clean: true, detail: `${revoked}; attempt unknown to supervisor (already destroyed)` };
@@ -349,6 +365,8 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
   async function runRepair(owner: string, initial: Task, ctx: TaskContext): Promise<Partial<Task>> {
     let task = initial;
     let liveAttempt: AttemptRef | null = null;
+    /** Set once this run has dispatched sandbox work: an infrastructure error after it ends INCONCLUSIVE (D7). */
+    let workStarted = false;
     let renewal: { stop(): void } | null = null;
     /** Set when the supervisor refused a renewal (404/409): the attempt has lost execution authority. */
     let authorityLost: string | null = null;
@@ -434,12 +452,16 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
       };
       const maxTokens = deps.maxTokens ?? DRIVER_DEFAULT_MAX_TOKENS;
       const minAllowance = Math.min(MIN_COMPLETION_ALLOWANCE, maxTokens);
-      // A run that starts on a task which already had an attempt, or had progressed past prepare,
-      // is a recovery (lost lease, controller restart, crash mid-verify): counted and bounded (D8).
-      const recovering = initial.attemptId !== undefined || initial.phase !== "prepare";
+      // A run that starts on a task which already had an attempt, had progressed past prepare, has
+      // a sealed candidate awaiting its verdict, or was claimed before (a second run-mode claim only
+      // happens after a lost lease or a restart, even when the earlier run cleared attemptId) is a
+      // recovery: counted and bounded (D8).
+      const recovering = initial.attemptId !== undefined || initial.phase !== "prepare" || initial.attempts > 1 || pendingCandidate(initial) !== null;
       const adapterDigest = await computeAdapterDigest(deps.runtimeDir, profile);
       const host = await deps.supervisor.host(ctx.signal);
-      await checkpoint({ phase: "prepare" });
+      // A recovering run keeps the phase it found until its recovery work is done: overwriting it
+      // with "prepare" first would let a second lost lease forget a sealed, unjudged candidate.
+      if (!recovering) await checkpoint({ phase: "prepare" });
       await ctx.event("phase", "prepare", `profile ${manifest.id} @ ${manifest.baselineCommit}; ${contract.cases.length} contract cases`, {
         contractDigest,
         adapterDigest,
@@ -474,6 +496,25 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
       if (task.attemptId) await checkpoint({ attemptId: undefined } as Partial<Task>);
       if (recovering && recoveries > limits.recoveries)
         return finish("INCONCLUSIVE", `recovery limit reached: the task was recovered ${recoveries} times (max ${limits.recoveries}) after lost leases or restarts`);
+      if (deps.production && (host.devUnsafe || host.selectedRuntime === "runc"))
+        return finish("INCONCLUSIVE", `production control plane (AIRLOCK_PRODUCTION=1): the supervisor runs ${host.selectedRuntime}${host.devUnsafe ? " with AIRLOCK_DEV_UNSAFE" : ""}; no sandbox is started on a dev-unsafe runtime`);
+
+      // A live task follows the latest repair evidence when it is first claimed (not the state at
+      // creation): a receipt that landed or was withdrawn meanwhile sets or clears repair-disabled.
+      if (!recovering && deps.repairAvailability && task.scriptedDriver === undefined && task.liveGate !== true) {
+        let reason: string | undefined;
+        try {
+          const availability = await deps.repairAvailability(task, profile, host);
+          if (availability) reason = availability.available ? undefined : `live repair unavailable: ${availability.reason}`.slice(0, 1024);
+          else reason = task.repairDisabledReason;
+        } catch (error) {
+          reason = `live repair unavailable: availability could not be evaluated (${errorMessage(error).slice(0, 300)})`;
+        }
+        if (reason !== task.repairDisabledReason) {
+          await checkpoint(reason === undefined ? ({ repairDisabledReason: undefined } as Partial<Task>) : { repairDisabledReason: reason });
+          await ctx.event("info", reason === undefined ? "Live repair available" : "Live repair unavailable", reason ?? "current live-gate evidence backs live repair; the task runs the repair attempts", { repairDisabledReason: reason ?? null });
+        }
+      }
 
       // A sealed candidate that was never judged is continued from verify (37 §Cancellation).
       const pending = pendingCandidate(initial);
@@ -529,6 +570,11 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
         });
         await deps.store.insertImmutable(owner, STORE_KIND_VERIFICATIONS, baselineRecord);
         await checkpoint({ baselineRecordId: baselineRecord.id });
+        const unsafe = productionRefusal(baselineRecord);
+        if (unsafe) {
+          await destroyLive("dev-unsafe measurement");
+          return finish("INCONCLUSIVE", unsafe);
+        }
         await ctx.event("check", baselineRecord.passed ? "Baseline reproduces the reported failure" : "Baseline does not show the reported failure", summarizeRecord(baselineRecord), {
           recordId: baselineRecord.id,
           passed: baselineRecord.passed,
@@ -536,6 +582,11 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
           completedCases: baselineRecord.completedCases,
           requiredCases: baselineRecord.requiredCases,
         });
+      }
+      const reusedUnsafe = productionRefusal(baselineRecord);
+      if (reusedUnsafe) {
+        await destroyLive("dev-unsafe measurement");
+        return finish("INCONCLUSIVE", reusedUnsafe);
       }
       const baseline = baselineVerdict(baselineRecord);
       if (baseline.outcome !== "REPRODUCED") {
@@ -596,14 +647,26 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
         return null;
       }
 
+      /**
+       * The sealed candidate awaiting its verdict: the last `candidates` entry without an outcome,
+       * whatever phase the task was left in (a recovery that lost its lease again may have left
+       * any phase on record). Only records from before `candidates` existed fall back to the phase.
+       */
       function pendingCandidate(from: Task): { attemptId: string; candidateDigest: string } | null {
-        if (from.phase !== "freeze" && from.phase !== "verify") return null;
         const list = from.candidates ?? [];
         const lastCandidate = list[list.length - 1];
-        if (lastCandidate) return lastCandidate.outcome === undefined && lastCandidate.candidateDigest === from.candidateDigest ? lastCandidate : null;
-        // Records written before `candidates` existed: a sealed digest without a verification.
+        if (lastCandidate) return lastCandidate.outcome === undefined && lastCandidate.candidateDigest ? lastCandidate : null;
+        if (from.phase !== "freeze" && from.phase !== "verify") return null;
         if (from.candidateDigest && !from.verificationRecordId) return { attemptId: from.attemptId ?? "unknown", candidateDigest: from.candidateDigest };
         return null;
+      }
+
+      /** In production, a measurement taken on a dev-unsafe host or on plain runc is not a verdict. */
+      function productionRefusal(record: VerificationRecord): string | null {
+        if (!deps.production) return null;
+        const insp = record.runtimeProfile.inspection;
+        if (!insp.devUnsafe && !record.runtimeProfile.host.devUnsafe && insp.runtime !== "runc") return null;
+        return `production control plane (AIRLOCK_PRODUCTION=1): the ${record.role} measurement ran on ${insp.runtime}${insp.devUnsafe || record.runtimeProfile.host.devUnsafe ? " (dev-unsafe)" : ""}; it is recorded but is not a verdict`;
       }
 
       function markCandidate(candidateDigest: string, patch: Partial<CandidateAttempt>): CandidateAttempt[] {
@@ -611,10 +674,22 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
       }
 
       async function reconcileOperations(): Promise<AttemptRef[]> {
-        const rows = (await deps.store.scanWhere<OperationRecord>(STORE_KIND_OPERATIONS, { taskId: task.id }))
-          .filter((r) => r.owner === owner && (r.value.state === "intent" || r.value.state === "unknown") && !r.value.reconciledAt)
-          .slice(0, MAX_RECONCILED_OPERATIONS);
         const toTearDown = new Map<string, AttemptRef>();
+        const done = new Set<string>();
+        // Every outstanding row, a page at a time, until none is left (a reconciled row is marked
+        // and never returned again; `done` guards against a store that has not caught up).
+        for (;;) {
+          const page = (await deps.store.scanWhere<OperationRecord>(STORE_KIND_OPERATIONS, { taskId: task.id }))
+            .filter((r) => r.owner === owner && (r.value.state === "intent" || r.value.state === "unknown") && !r.value.reconciledAt && !done.has(r.value.id))
+            .slice(0, RECONCILE_PAGE);
+          if (page.length === 0) break;
+          for (const r of page) done.add(r.value.id);
+          await reconcilePage(page, toTearDown);
+        }
+        return [...toTearDown.values()];
+      }
+
+      async function reconcilePage(rows: { value: OperationRecord }[], toTearDown: Map<string, AttemptRef>): Promise<void> {
         const found: { operationId: string; kind: string; attemptId?: string; state: string; reconciliation: string }[] = [];
         for (const { value: op } of rows) {
           let reconciliation: string;
@@ -628,14 +703,14 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
               if (!(error instanceof SupervisorNotFoundError) && op.generation !== undefined) toTearDown.set(op.attemptId, { taskId: task.id, attemptId: op.attemptId, generation: op.generation });
             }
           } else {
-            reconciliation = "one-shot invocation: its outcome is unknown and it is not replayed; the supervisor's own deadline bounds it";
+            // Not replayed; recorded as unknown (the supervisor has no operation read endpoint yet).
+            reconciliation = INVOKE_RECONCILIATION;
           }
           await deps.store.put(owner, STORE_KIND_OPERATIONS, { ...op, state: "unknown", reconciledAt: iso(), reconciliation });
           found.push({ operationId: op.operationId, kind: op.kind, ...(op.attemptId ? { attemptId: op.attemptId } : {}), state: op.state, reconciliation });
         }
         if (found.length > 0)
           await ctx.event("lifecycle", "Reconciled outstanding supervisor operations", found.map((f) => `${f.kind} ${f.operationId} (${f.state}): ${f.reconciliation}`).join("\n").slice(0, DETAIL_CAP), { operations: found });
-        return [...toTearDown.values()];
       }
 
       function baselineVerdict(record: VerificationRecord): { outcome: "REPRODUCED" | "NOT_REPRODUCED" | "INCONCLUSIVE"; reason: string } {
@@ -667,19 +742,23 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
         await checkpoint({ attemptId, generation });
         await ctx.event("lifecycle", "Creating author sandbox", `attempt ${attemptId}, generation ${generation}, deadline ${iso(deadlineMs)}; execution authorized for ${Math.round(authorizationMs / 1000)} s at a time, renewed while this run holds its lease`);
         let attempt: AttemptState;
+        // The ref is live BEFORE the request leaves: whatever happens to the call (503, timeout,
+        // abort), every failure path tears it down, and "unknown to the supervisor" counts as clean.
+        liveAttempt = ref;
+        workStarted = true;
         try {
           attempt = await journal("createAttempt", ref, (opts) =>
             deps.supervisor.createAttempt({ ref, profileId: manifest.id, role: "author", absoluteDeadline: iso(deadlineMs), authorizedUntil: authorizedUntil(deadlineMs) }, { ...opts, signal: ctx.signal }),
           );
         } catch (error) {
           if (!(error instanceof SupervisorFenceError) || ctx.signal.aborted) throw error;
+          liveAttempt = null;
           await ctx.event("error", "Sandbox refused by supervisor", errorMessage(error));
           // The supervisor destroys what it refuses; confirm that before reporting (D7).
           const confirm = await teardown(ref, journal);
           if (!confirm.clean) throw new TeardownFailedError(`the supervisor refused the author sandbox and its teardown could not be confirmed: ${confirm.detail}`);
           return { end: "INCONCLUSIVE", reason: `the supervisor refused the author sandbox (${errorMessage(error).slice(0, 400)}); no agent work was run` };
         }
-        liveAttempt = ref;
         startRenewal(ref, deadlineMs);
         await ctx.event("lifecycle", "Author sandbox created", `container ${attempt.container}; runtime ${attempt.inspection?.runtime ?? "unknown"}; probe ${attempt.probe?.allBlocked ? "all BLOCKED" : "NOT fully blocked"}`, {
           container: attempt.container,
@@ -814,6 +893,12 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
         });
         const inserted = await deps.store.insertImmutable(owner, STORE_KIND_VERIFICATIONS, record);
         if (!inserted) throw new Error(`verification record ${record.id} already exists`);
+        const unsafe = productionRefusal(record);
+        if (unsafe) {
+          await checkpoint({ candidates: markCandidate(bundle.candidateDigest, { verificationRecordId: record.id, outcome: "INCONCLUSIVE" }) });
+          await ctx.event("check", "Candidate measurement not a verdict", unsafe, { recordId: record.id, attemptId });
+          return { kind: "final", outcome: "INCONCLUSIVE", reason: unsafe };
+        }
         const verdict = record.outcome === "PASSED_CHECKS" || record.outcome === "CHECKS_FAILED" || record.outcome === "INCONCLUSIVE" ? record.outcome : record.passed ? "PASSED_CHECKS" : "CHECKS_FAILED";
         await checkpoint({ verificationRecordId: record.id, candidates: markCandidate(bundle.candidateDigest, { verificationRecordId: record.id, outcome: verdict }) });
         await ctx.event("check", record.passed ? "Candidate passed these checks" : "Candidate failed checks", summarizeRecord(record), {
@@ -833,6 +918,7 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
       /** One fresh one-shot sandbox per contract case (D3); a failed invocation leaves its case incomplete. */
       async function invokePerCase(role: "baseline" | "candidate", bundle: CandidateBundle | undefined): Promise<{ invocations: CaseInvocation[]; aggregate: InvokeResult | null }> {
         await ctx.guard();
+        workStarted = true;
         const totalMs = Math.min(caps.attemptTimeoutMs, caps.commandTimeoutMs * (contract.cases.length + 2));
         const overallDeadline = now() + totalMs;
         const invocations: CaseInvocation[] = [];
@@ -857,6 +943,8 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
                 { ...opts, timeoutMs: budgetMs + 30_000 },
               ),
             );
+            // The host-wide listing names other tasks' sandboxes: anonymised before it is stored.
+            result = { ...result, teardown: redactTeardown(result.teardown, new Set([task.id])) };
           } catch (error) {
             if (ctx.signal.aborted) throw new LostLeaseError();
             await ctx.event("error", `${role} invocation failed for ${c.id}`, bounded(errorMessage(error), 2000), { role, caseId: c.id });
@@ -1228,6 +1316,20 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
       if (error instanceof TeardownFailedError && !ctx.signal.aborted) {
         await ctx.event("error", "Teardown incomplete", bounded(error.message, 2000));
         return finish("INCONCLUSIVE", error.message.slice(0, 1500));
+      }
+      // D7: an infrastructure error once sandbox work started (supervisor unreachable, a 503 after
+      // the retries, a freeze that failed for a reason other than a fence, a blob digest mismatch)
+      // is an honest INCONCLUSIVE with the reason, but only after the teardown above was confirmed
+      // (an unconfirmed one threw already and leaves the task failed).
+      if (workStarted && !(error instanceof LostLeaseError) && !ctx.signal.aborted) {
+        const reason = `infrastructure error after sandbox work started: ${errorMessage(error)}`.slice(0, 1500);
+        try {
+          await ctx.event("error", "Run ended by an infrastructure error", bounded(reason, 2000));
+          return await finish("INCONCLUSIVE", reason);
+        } catch (recordError) {
+          if (recordError instanceof LostLeaseError) throw recordError;
+          throw error;
+        }
       }
       throw error;
     } finally {

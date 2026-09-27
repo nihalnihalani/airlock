@@ -4,7 +4,7 @@
  * dev-unsafe supervisor are provenance failures with no receipt.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { LiveGateReceipt } from "@airlock/contracts";
@@ -12,7 +12,10 @@ import { LiveGateReceipt } from "@airlock/contracts";
 const ROOT = resolve(import.meta.dir, "..");
 const CONTRACT = "c".repeat(64);
 
-type Mode = { scripted?: boolean; foreignHost?: boolean; devUnsafe?: boolean; failing?: number };
+const IMAGE = `sha256:${"a".repeat(64)}`;
+const ADAPTER = "b".repeat(64);
+
+type Mode = { scripted?: boolean; foreignHost?: boolean; devUnsafe?: boolean; failing?: number; noImage?: boolean; noAdapter?: boolean; recordImage?: string };
 
 function fakeControl(mode: Mode) {
   let n = 0;
@@ -24,7 +27,11 @@ function fakeControl(mode: Mode) {
     passed,
     candidateDigest: "d".repeat(64),
     contractDigest: CONTRACT,
-    runtimeProfile: { host: { devUnsafe: !!mode.devUnsafe }, inspection: { runtime: mode.devUnsafe ? "runc" : "kata", devUnsafe: !!mode.devUnsafe } },
+    ...(mode.noAdapter ? {} : { adapterDigest: ADAPTER }),
+    runtimeProfile: {
+      host: { devUnsafe: !!mode.devUnsafe },
+      inspection: { runtime: mode.devUnsafe ? "runc" : "kata", devUnsafe: !!mode.devUnsafe, ...(mode.noImage ? {} : { imageId: mode.recordImage ?? IMAGE }) },
+    },
   });
   const server = Bun.serve({
     port: 0,
@@ -32,10 +39,13 @@ function fakeControl(mode: Mode) {
     async fetch(req) {
       const url = new URL(req.url);
       if (url.pathname === "/api/session") return new Response(JSON.stringify({ role: "operator" }), { headers: { "set-cookie": "airlock_session=abc; Path=/" } });
-      if (url.pathname === "/api/host") return Response.json({ selectedRuntime: mode.devUnsafe ? "runc" : "kata", devUnsafe: !!mode.devUnsafe, runtimeImageId: "sha256:img" });
+      if (url.pathname === "/api/host") return Response.json({ selectedRuntime: mode.devUnsafe ? "runc" : "kata", devUnsafe: !!mode.devUnsafe, ...(mode.noImage ? {} : { runtimeImageId: IMAGE }) });
       if (url.pathname === "/api/tasks" && req.method === "POST") {
-        if (url.searchParams.get("liveGate") !== "1") return Response.json({ error: "expected liveGate" }, { status: 400 });
-        createdBodies.push(await req.text());
+        // The real API reads `liveGate` from the JSON body (CreateTaskRequest), never the query.
+        const text = await req.text();
+        const body = JSON.parse(text) as { liveGate?: unknown };
+        if (body.liveGate !== true) return Response.json({ error: "expected liveGate: true in the body" }, { status: 400 });
+        createdBodies.push(text);
         const id = `task-${++n}`;
         const passed = n > (mode.failing ?? 0);
         const task = { id, status: "done", phase: "ready", outcome: passed ? "CANDIDATE_PASSED_CHECKS" : "CHECKS_FAILED", candidateDigest: "d".repeat(64), createdAt: new Date().toISOString(), ...(mode.scripted ? { scriptedDriver: "diagnostic" } : {}) };
@@ -67,15 +77,29 @@ function fakeControl(mode: Mode) {
 }
 
 // Async spawn: the fake control API runs in this process and must keep serving meanwhile.
+// The child's stdout/stderr go to files, not pipes. Evidence: under `bun test scripts/<file>` from
+// the repo root (a name filter, not a path: Bun 1.3.2 walks ~140k files including research/ and
+// node_modules), every child spawned with `stdout: "pipe"` got a write-only non-pipe fd 1/2, so
+// `sh -c "echo ok"` exited 1 and `bun -e 'console.log(1)'` produced "" with exit 0 — the "exit 1,
+// no output" failures reported earlier. File-backed stdio behaves the same under `bun test
+// ./scripts/…`, `bun test scripts/…` and from scripts/.
 async function runGate(controlUrl: string, out: string, extra: string[] = []) {
-  const proc = Bun.spawn(["bun", join(ROOT, "scripts/live-gate.ts"), "--out", out, ...extra], {
-    cwd: ROOT,
-    env: { ...process.env, AIRLOCK_CONTROL_URL: controlUrl, AIRLOCK_OPERATOR_PASSWORD: "op-test-password" },
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
-  return { code, stdout, stderr };
+  const logs = mkdtempSync(join(tmpdir(), "airlock-gate-log-"));
+  try {
+    const stdoutPath = join(logs, "stdout.txt");
+    const stderrPath = join(logs, "stderr.txt");
+    const proc = Bun.spawn(["bun", join(ROOT, "scripts/live-gate.ts"), "--out", out, ...extra], {
+      cwd: ROOT,
+      env: { ...process.env, AIRLOCK_CONTROL_URL: controlUrl, AIRLOCK_OPERATOR_PASSWORD: "op-test-password" },
+      stdout: Bun.file(stdoutPath),
+      stderr: Bun.file(stderrPath),
+    });
+    const code = await proc.exited;
+    const read = (p: string) => (existsSync(p) ? readFileSync(p, "utf8") : "");
+    return { code, stdout: read(stdoutPath), stderr: read(stderrPath) };
+  } finally {
+    rmSync(logs, { recursive: true, force: true });
+  }
 }
 
 describe("live gate", () => {
@@ -90,7 +114,7 @@ describe("live gate", () => {
       expect(files).toHaveLength(1);
       const text = readFileSync(join(out, files[0]!), "utf8");
       const receipt = LiveGateReceipt.parse(JSON.parse(text));
-      expect(receipt).toMatchObject({ profileId: "tabulate-365", contractDigest: CONTRACT, model: "glm-5.3-normalize", runtime: "kata", passed: 2, total: 3, runtimeImageId: "sha256:img" });
+      expect(receipt).toMatchObject({ profileId: "tabulate-365", contractDigest: CONTRACT, model: "glm-5.3-normalize", runtime: "kata", passed: 2, total: 3, runtimeImageId: IMAGE, adapterDigest: ADAPTER });
       expect(receipt.attempts.every((a) => a.modelHosts.join() === "api.vultrinference.com" && a.modelCalls === 2)).toBe(true);
       // No issue text, cookie or password in the receipt.
       expect(text).not.toContain("maxheadercolwidths");
@@ -107,18 +131,37 @@ describe("live gate", () => {
     }
   }, 60_000);
 
-  for (const [name, mode, extra] of [
-    ["scripted diagnostic tasks", { scripted: true }, ["--n", "1"]],
-    ["a model call served from another host", { foreignHost: true }, ["--n", "1"]],
-    ["a dev-unsafe supervisor", { devUnsafe: true }, ["--n", "1"]],
-  ] as [string, Mode, string[]][]) {
+  test("--allow-dev-unsafe is a rehearsal: no receipt even when the supervisor is not dev-unsafe", async () => {
+    const fake = fakeControl({});
+    const out = mkdtempSync(join(tmpdir(), "airlock-gate-out-"));
+    try {
+      const r = await runGate(fake.url, out, ["--allow-dev-unsafe"]);
+      expect(r.stdout).toContain("LIVE GATE: 3/3");
+      expect(r.stdout).toContain("no receipt written");
+      expect(r.code).toBe(1);
+      expect(readdirSync(out)).toHaveLength(0);
+    } finally {
+      fake.stop();
+      rmSync(out, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  for (const [name, mode, extra, why] of [
+    ["a run with no runtime image id", { noImage: true }, ["--n", "1"], "runtime image id"],
+    ["a run whose records name no adapter digest", { noAdapter: true }, ["--n", "1"], "adapter digest"],
+    ["a record that ran another image than the supervisor enforces", { recordImage: `sha256:${"e".repeat(64)}` }, ["--n", "1"], "the supervisor enforces"],
+    ["scripted diagnostic tasks", { scripted: true }, ["--n", "1"], "scripted diagnostic"],
+    ["a model call served from another host", { foreignHost: true }, ["--n", "1"], "is not the vultr driver on api.vultrinference.com"],
+    ["a dev-unsafe supervisor", { devUnsafe: true }, ["--n", "1"], "dev-unsafe"],
+  ] as [string, Mode, string[], string][]) {
     test(`refuses ${name}: exit 2, no receipt`, async () => {
       const fake = fakeControl(mode);
       const out = mkdtempSync(join(tmpdir(), "airlock-gate-out-"));
       try {
         const r = await runGate(fake.url, out, extra);
+        expect(r.stderr).toContain("LIVE GATE INVALID (provenance)");
+        expect(r.stderr).toContain(why);
         expect(r.code).toBe(2);
-        expect(r.stderr).toContain("provenance");
         expect(readdirSync(out)).toHaveLength(0);
       } finally {
         fake.stop();

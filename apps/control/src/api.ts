@@ -39,6 +39,7 @@ import type { AvailabilityService, DiagnosticScript } from "./availability.ts";
 import type { TaskEventBus } from "./events.ts";
 import { log } from "./log.ts";
 import type { LoadedProfile } from "./profiles.ts";
+import { redactBlastRadiusCard } from "./redact.ts";
 import { ExportIntegrityError } from "./artifacts/index.ts";
 import { ARTIFACT_KIND_BUNDLE, STORE_KIND_VERIFICATIONS, computeAdapterDigest, type ArtifactStoreLike } from "./repair-handler.ts";
 import { LoginRateLimited, SESSION_COOKIE, readCookie, type SessionRecord, type SessionService } from "./sessions.ts";
@@ -107,6 +108,12 @@ export interface ApiDeps {
    * on its peer no matter what headers it carries. Empty or absent: headers are never trusted.
    */
   trustedProxies?: string[];
+  /**
+   * AIRLOCK_PRODUCTION=1: tasks are refused while the supervisor is dev-unsafe, and a record
+   * measured on a dev-unsafe host or plain runc (or, for export, without a fully BLOCKED isolation
+   * probe on both records) is never previewed or exported.
+   */
+  production?: boolean;
   now?: () => number;
   /** SSE poll interval (ms) as a safety net behind the bus. */
   ssePollMs?: number;
@@ -128,6 +135,29 @@ const DRIFT_REFUSAL = "configuration changed since verification";
 /** Worker heartbeat record (written by TaskWorker.tick on every poll). */
 const WORKER_STATUS = { owner: "system", kind: "worker-status", id: "tasks" } as const;
 const TERMINAL = new Set<Task["status"]>(["cancelled", "done", "failed"]);
+/** Rate-limit memory per map; past it, expired entries go first, then the oldest. */
+const RATE_KEYS_CAP = 1000;
+export const PREDATES_IMAGE_IDENTITY = "verification record predates image identity; re-run verification";
+
+/**
+ * Records `keys` as used at `at`. Bounded without resetting everyone's limit: entries older than
+ * the interval (they no longer limit anything) are evicted first, then the least recently used.
+ */
+export function rememberRateKeys(map: Map<string, number>, keys: string[], at: number, intervalMs: number, cap = RATE_KEYS_CAP): void {
+  for (const k of keys) {
+    map.delete(k);
+    map.set(k, at);
+  }
+  if (map.size <= cap) return;
+  for (const [k, t] of map) {
+    if (map.size <= cap) return;
+    if (at - t >= intervalMs && !keys.includes(k)) map.delete(k);
+  }
+  for (const k of map.keys()) {
+    if (map.size <= cap) return;
+    if (!keys.includes(k)) map.delete(k);
+  }
+}
 
 export function createApp(deps: ApiDeps) {
   const now = () => deps.now?.() ?? Date.now();
@@ -293,7 +323,13 @@ export function createApp(deps: ApiDeps) {
     const requested = c.req.query("profileId");
     const profile = requested ? deps.profiles.get(requested) : [...deps.profiles.values()][0];
     if (!profile) throw new AppError("no such profile", 404);
-    return c.json(await repairAvailability(profile));
+    const availability = await repairAvailability(profile);
+    // Instance ids and the model name are for signed-in operators and judges only.
+    if (!c.get("session")) {
+      const { instances: _instances, model: _model, ...open } = availability;
+      return c.json(open);
+    }
+    return c.json(availability);
   });
   app.get("/api/diagnostics", (c) => {
     requireRole(c, "operator", "judge");
@@ -318,6 +354,11 @@ export function createApp(deps: ApiDeps) {
     const liveGate = body.liveGate === true;
     if (liveGate && session.role !== "operator") throw new AppError("liveGate runs require the operator role", 403);
     if (liveGate && scriptedDriver !== undefined) throw new AppError("a live-gate run cannot use a scripted driver", 422);
+    if (deps.production) {
+      const host = await deps.supervisor.host();
+      if (host.devUnsafe || host.selectedRuntime === "runc")
+        throw new AppError(`this production control plane refuses new tasks: the supervisor runs ${host.selectedRuntime}${host.devUnsafe ? " with AIRLOCK_DEV_UNSAFE" : ""} (gVisor or Kata required)`, 503);
+    }
     let repairDisabledReason: string | undefined;
     if (scriptedDriver === undefined && !liveGate && deps.availability?.driver === "vultr") {
       const availability = await repairAvailability(deps.profiles.get(body.profileId)!);
@@ -508,6 +549,7 @@ export function createApp(deps: ApiDeps) {
     const verification = await deps.store.get<VerificationRecord>(owner, STORE_KIND_VERIFICATIONS, task.verificationRecordId);
     if (!verification || verification.candidateDigest !== task.candidateDigest) throw new AppError("verification record missing or for a different candidate", 409);
     if (!verification.passed) throw new AppError("candidate did not pass checks; preview refused", 409);
+    refuseUnsafeRecord(verification, "preview refused");
     if (canonicalJson(body.input).length > 65536) throw new AppError("preview input exceeds 64 KiB", 413);
     const bundle = await deps.artifacts.getJson<CandidateBundle>(ARTIFACT_KIND_BUNDLE, task.candidateDigest);
     if (!bundle) throw new AppError("sealed candidate bundle missing", 409);
@@ -515,23 +557,27 @@ export function createApp(deps: ApiDeps) {
     const profile = deps.profiles.get(task.profileId);
     if (!profile) throw new AppError("profile no longer loaded", 409);
     // CLAUDE.md §3.3: preview uses exactly the runtime image, adapter and contract it was verified under.
-    await refuseDrift(verification, profile, "preview refused");
+    await refuseDrift(verification, profile, "preview refused", { newAuthorization: true });
     const request: AdapterRequest = { schemaVersion: 1, cases: [{ id: "preview", input: body.input }] };
     const deadlineMs = Math.min(profile.manifest.caps.attemptTimeoutMs, profile.manifest.caps.commandTimeoutMs * 3);
     // Only a preview that actually dispatches a sandbox run counts against the interval, which is
     // kept per session AND per client key: logging in again does not buy a fresh budget.
     const keys = [`session:${session.id}`, `client:${clientKey(c)}`];
     if (keys.some((k) => now() - (previewLast.get(k) ?? 0) < previewMinIntervalMs)) throw new AppError(`previews are limited to one per ${Math.ceil(previewMinIntervalMs / 1000)} s per session and client`, 429);
-    if (previewLast.size > 1000) previewLast.clear();
-    for (const k of keys) previewLast.set(k, now());
+    rememberRateKeys(previewLast, keys, now(), previewMinIntervalMs);
     const result = await deps.supervisor.invoke(
       { taskId: task.id, profileId: task.profileId, role: "preview", bundle, request, absoluteDeadline: new Date(now() + deadlineMs).toISOString() },
       { timeoutMs: deadlineMs + 30_000 },
     );
-    // The supervisor's own inspection of the preview sandbox must name the verified image and runtime.
-    if (result.inspection.imageDigest !== verification.runtimeImageDigest || result.inspection.runtime !== verification.runtimeProfile.inspection.runtime) {
-      log.warn("preview refused: sandbox runtime differs from verification", { taskId: task.id, verifiedImage: verification.runtimeImageDigest, previewImage: result.inspection.imageDigest, verifiedRuntime: verification.runtimeProfile.inspection.runtime, previewRuntime: result.inspection.runtime });
-      throw new AppError(`${DRIFT_REFUSAL} (preview sandbox ran image ${result.inspection.imageDigest.slice(0, 80)} on ${result.inspection.runtime}; verified ${verification.runtimeImageDigest.slice(0, 80)} on ${verification.runtimeProfile.inspection.runtime}); preview refused`, 409);
+    // The supervisor's own inspection of the preview sandbox must name the verified image and runtime
+    // (and, when both carry one, the same local image id).
+    const verifiedImageId = verification.runtimeProfile.inspection.imageId;
+    const imageIdDiffers = !!verifiedImageId && !!result.inspection.imageId && result.inspection.imageId !== verifiedImageId;
+    if (imageIdDiffers || result.inspection.imageDigest !== verification.runtimeImageDigest || result.inspection.runtime !== verification.runtimeProfile.inspection.runtime) {
+      log.warn("preview refused: sandbox runtime differs from verification", { taskId: task.id, verifiedImage: verification.runtimeImageDigest, previewImage: result.inspection.imageDigest, verifiedImageId: verifiedImageId ?? null, previewImageId: result.inspection.imageId ?? null, verifiedRuntime: verification.runtimeProfile.inspection.runtime, previewRuntime: result.inspection.runtime });
+      const ran = imageIdDiffers ? `${result.inspection.imageId!.slice(0, 80)}` : result.inspection.imageDigest.slice(0, 80);
+      const verified = imageIdDiffers ? verifiedImageId!.slice(0, 80) : verification.runtimeImageDigest.slice(0, 80);
+      throw new AppError(`${DRIFT_REFUSAL} (preview sandbox ran image ${ran} on ${result.inspection.runtime}; verified ${verified} on ${verification.runtimeProfile.inspection.runtime}); preview refused`, 409);
     }
     const observation = result.observations.find((o) => o.caseId === "preview");
     return c.json({ candidateDigest: task.candidateDigest, ...(observation ? { observation } : {}), exec: result.exec, inspection: result.inspection });
@@ -539,7 +585,7 @@ export function createApp(deps: ApiDeps) {
 
   app.post("/api/tasks/:id/export", async (c) => {
     const { session, owner, task } = await authorizeTask(c);
-    const eligible = await exportEligibility(owner, task);
+    const eligible = await exportEligibility(owner, task, { newAuthorization: true });
     const seal = await sealExport(owner, task, eligible);
     const existing = (await deps.store.list<ExportGrant>(session.owner, STORE_KIND_GRANTS)).find(
       (g) => g.taskId === task.id && g.sealId === seal.id && g.zipDigest === seal.zipDigest && Date.parse(g.expiresAt) > now(),
@@ -579,7 +625,7 @@ export function createApp(deps: ApiDeps) {
     const { owner, task } = await loadTask(grant.taskId);
     if (!canAccess(session, owner)) throw new AppError("grant not found", 404);
     // Eligibility is checked when the grant is used, not only when it was issued.
-    const eligible = await exportEligibility(owner, task);
+    const eligible = await exportEligibility(owner, task, { newAuthorization: false });
     if (eligible.verification.id !== grant.verificationRecordId || eligible.verificationRecordDigest !== grant.verificationRecordDigest || task.candidateDigest !== grant.candidateDigest)
       throw new AppError("task no longer matches this grant", 409);
     const seal = await deps.artifacts.getJson<ExportSeal>(ARTIFACT_KIND_EXPORT, grant.sealId);
@@ -602,7 +648,7 @@ export function createApp(deps: ApiDeps) {
    * reported failure reproduced and the regression cases held) under the same contract and adapter.
    * A failed or unverified repair never reaches the passing-candidate export.
    */
-  async function exportEligibility(owner: string, task: Task): Promise<{ verification: VerificationRecord; baseline: VerificationRecord; verificationRecordDigest: string; baselineRecordDigest: string }> {
+  async function exportEligibility(owner: string, task: Task, options: { newAuthorization: boolean }): Promise<{ verification: VerificationRecord; baseline: VerificationRecord; verificationRecordDigest: string; baselineRecordDigest: string }> {
     if (task.status !== "done" || task.outcome !== "CANDIDATE_PASSED_CHECKS") throw new AppError(`only a candidate that passed its checks can be exported (task ${task.status}${task.outcome ? `, ${task.outcome}` : ""})`, 409);
     if (!task.candidateDigest || !task.verificationRecordId || !task.baselineRecordId) throw new AppError("task has no verified candidate to export", 409);
     const verification = await deps.store.get<VerificationRecord>(owner, STORE_KIND_VERIFICATIONS, task.verificationRecordId);
@@ -613,11 +659,21 @@ export function createApp(deps: ApiDeps) {
     if (!baseline || baseline.role !== "baseline" || baseline.taskId !== task.id || !baseline.passed) throw new AppError("baseline did not reproduce the reported failure under the frozen contract; export refused", 409);
     if (baseline.contractDigest !== verification.contractDigest || baseline.adapterDigest !== verification.adapterDigest) throw new AppError("baseline and candidate were measured under different contracts or adapters; export refused", 409);
     if (baseline.runtimeImageDigest !== verification.runtimeImageDigest) throw new AppError("baseline and candidate were measured on different runtime images; export refused", 409);
+    const baselineImageId = baseline.runtimeProfile.inspection.imageId;
+    const candidateImageId = verification.runtimeProfile.inspection.imageId;
+    if (baselineImageId && candidateImageId && baselineImageId !== candidateImageId) throw new AppError("baseline and candidate were measured on different runtime image ids; export refused", 409);
+    refuseUnsafeRecord(baseline, "export refused");
+    refuseUnsafeRecord(verification, "export refused");
+    // M6: in production both records must carry checkpoint 4, fully BLOCKED.
+    if (deps.production)
+      for (const record of [baseline, verification])
+        if (record.runtimeProfile.probe?.allBlocked !== true)
+          throw new AppError(`the ${record.role} record carries no fully BLOCKED isolation probe (checkpoint 4); export refused`, 409);
     // Drift refuses a new grant AND the download of an already-sealed zip: evidence measured under a
     // configuration that is no longer the running one is not handed out as current.
     const profile = deps.profiles.get(task.profileId);
     if (!profile) throw new AppError("profile no longer loaded", 409);
-    await refuseDrift(verification, profile, "export refused");
+    await refuseDrift(verification, profile, "export refused", options);
     return { verification, baseline, verificationRecordDigest: await sha256(canonicalJson(verification)), baselineRecordDigest: await sha256(canonicalJson(baseline)) };
   }
 
@@ -676,7 +732,7 @@ export function createApp(deps: ApiDeps) {
   // Judge role only (37 §hostile panel). Limited per client key, not per session (a re-login is
   // the same client), plus a global interval and one run at a time across every client.
   app.post("/api/hostile", async (c) => {
-    requireRole(c, "judge");
+    const session = requireRole(c, "judge");
     const body = await readJson(c, z.object({ command: z.string().min(1).max(4096), profileId: z.string().max(64).optional() }));
     const profileId = body.profileId ?? [...deps.profiles.keys()][0];
     if (!profileId || !deps.profiles.has(profileId)) throw new AppError("no such profile", 422);
@@ -684,8 +740,7 @@ export function createApp(deps: ApiDeps) {
     if (hostileInFlight) throw new AppError("a hostile run is already in progress; try again when it finishes", 429);
     if (now() - (hostileLast.get(key) ?? 0) < deps.hostileMinIntervalMs) throw new AppError(`hostile runs are limited to one per ${Math.ceil(deps.hostileMinIntervalMs / 1000)} s per client`, 429);
     if (now() - hostileGlobalLast < hostileGlobalMinIntervalMs) throw new AppError(`hostile runs are limited to one per ${Math.ceil(hostileGlobalMinIntervalMs / 1000)} s overall`, 429);
-    if (hostileLast.size > 1000) hostileLast.clear();
-    hostileLast.set(key, now());
+    rememberRateKeys(hostileLast, [key], now(), deps.hostileMinIntervalMs);
     hostileGlobalLast = now();
     hostileInFlight = true;
     try {
@@ -693,7 +748,10 @@ export function createApp(deps: ApiDeps) {
       const card: BlastRadiusCard = await deps.supervisor.hostile({ profileId, command: body.command });
       const healthyAfter = await controlPlaneHealthy();
       card.survived.controlPlane = { healthyBefore, healthyAfter, checkedAt: iso() };
-      return c.json(card);
+      // Other tasks' attempts and sandboxes are counted, never named, except to an operator.
+      if (session.role === "operator") return c.json(card);
+      const own = new Set((await deps.store.list<Task>(session.owner, STORE_KIND_TASKS)).map((t) => t.id));
+      return c.json(redactBlastRadiusCard(card, own));
     } finally {
       hostileInFlight = false;
     }
@@ -730,7 +788,15 @@ export function createApp(deps: ApiDeps) {
    * supervisor's current host check (selected runtime and, when it reports one in the same form,
    * the enforced runtime image id).
    */
-  async function refuseDrift(verification: VerificationRecord, profile: LoadedProfile, action: string): Promise<void> {
+  /** Production (AIRLOCK_PRODUCTION=1): a record measured dev-unsafe or on plain runc is never served. */
+  function refuseUnsafeRecord(record: VerificationRecord, action: string): void {
+    if (!deps.production) return;
+    const insp = record.runtimeProfile.inspection;
+    if (insp.devUnsafe || record.runtimeProfile.host.devUnsafe || insp.runtime === "runc")
+      throw new AppError(`the ${record.role} record was measured on ${insp.runtime}${insp.devUnsafe || record.runtimeProfile.host.devUnsafe ? " (dev-unsafe)" : ""}; a production control plane does not serve it; ${action}`, 409);
+  }
+
+  async function refuseDrift(verification: VerificationRecord, profile: LoadedProfile, action: string, options: { newAuthorization: boolean }): Promise<void> {
     const drift: string[] = [];
     let adapterDigest: string;
     try {
@@ -743,11 +809,24 @@ export function createApp(deps: ApiDeps) {
     const host = await deps.supervisor.host();
     const verifiedRuntime = verification.runtimeProfile.inspection.runtime;
     if (host.selectedRuntime !== verifiedRuntime) drift.push(`runtime ${host.selectedRuntime} ≠ verified ${verifiedRuntime}`);
-    // HostCheck.runtimeImageId is an image id (`sha256:<id>`); the record carries the inspected
-    // image's repo digest when it has one (`name@sha256:…`), else its id. Compare like with like;
-    // the preview sandbox's own inspection is compared after the run either way.
+    // HostCheck.runtimeImageId is a local image id (`sha256:<id>`). A record carries the inspected
+    // image id (`inspection.imageId`) when the supervisor reports it; older records carry only
+    // `runtimeImageDigest`: the repo digest when the image has one (`name@sha256:…`, not comparable
+    // with an id), else the id itself. Compare like with like; a record whose identity cannot be
+    // compared is refused new grants and previews (fail closed). The preview sandbox's own
+    // inspection is compared after the run either way.
+    const verifiedImageId = verification.runtimeProfile.inspection.imageId;
     const verifiedImage = verification.runtimeImageDigest;
-    if (host.runtimeImageId && !verifiedImage.includes("@") && host.runtimeImageId !== verifiedImage) drift.push(`runtime image ${host.runtimeImageId.slice(0, 80)} ≠ verified ${verifiedImage.slice(0, 80)}`);
+    if (host.runtimeImageId) {
+      if (verifiedImageId) {
+        if (verifiedImageId !== host.runtimeImageId) drift.push(`runtime image ${host.runtimeImageId.slice(0, 80)} ≠ verified ${verifiedImageId.slice(0, 80)}`);
+      } else if (!verifiedImage.includes("@")) {
+        if (verifiedImage !== host.runtimeImageId) drift.push(`runtime image ${host.runtimeImageId.slice(0, 80)} ≠ verified ${verifiedImage.slice(0, 80)}`);
+      } else if (options.newAuthorization) {
+        log.warn("refused: verification record predates image identity", { taskId: verification.taskId, action, verifiedImage: verifiedImage.slice(0, 120) });
+        throw new AppError(`${PREDATES_IMAGE_IDENTITY}; ${action}`, 409);
+      }
+    }
     if (drift.length) {
       log.warn("refused: configuration drift since verification", { taskId: verification.taskId, action, drift });
       throw new AppError(`${DRIFT_REFUSAL} (${drift.join("; ")}); ${action}`, 409);

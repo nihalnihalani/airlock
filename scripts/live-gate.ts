@@ -15,7 +15,10 @@
  *   - every task was created by this run (ids from our own POSTs, createdAt after the run began);
  *   - no task is a labelled diagnostic (`task.scriptedDriver` unset);
  *   - every model event names a vultr model (not `scripted:`) served from api.vultrinference.com;
- *   - the supervisor host check is not dev-unsafe, and each verification record ran on its runtime.
+ *   - the supervisor host check is not dev-unsafe, and each verification record ran on its runtime;
+ *   - one adapter digest (from the verification records) and one runtime image id (the supervisor's
+ *     enforced image, matching every record that names its own) bind the receipt; either missing
+ *     means no receipt.
  * A provenance failure invalidates the whole run (exit 2, no receipt). Otherwise a receipt is
  * written to <out>/<UTC timestamp>.json whether the gate passes or not (a failing receipt withdraws
  * availability), and the exit code is 0 only if passed >= 2 of >= 3.
@@ -130,6 +133,12 @@ async function main() {
   const attempts: LiveGateReceipt["attempts"] = [];
   const models = new Set<string>();
   const contractDigests = new Set<string>();
+  // Bound identities (a receipt backs repair only for this exact image and adapter): the adapter
+  // digest every verification record was measured under, and the image id the supervisor enforces
+  // (cross-checked against each record's own inspected image id when the record carries one).
+  const adapterDigests = new Set<string>();
+  const imageIds = new Set<string>();
+  if (host.runtimeImageId) imageIds.add(host.runtimeImageId);
   for (let i = 0; i < args.n; i++) {
     const t0 = Date.now();
     const created = await fetch(`${BASE}/api/tasks`, { method: "POST", headers: H, body: JSON.stringify({ profileId: args.profile, issueText, liveGate: true }) });
@@ -176,6 +185,12 @@ async function main() {
         if (!args.allowDevUnsafe) throw new ProvenanceError(`task ${task.id}: ${record.role} ran dev-unsafe`);
       } else if (insp.runtime !== host.selectedRuntime) throw new ProvenanceError(`task ${task.id}: ${record.role} ran on ${insp.runtime}, the supervisor selects ${host.selectedRuntime}`);
       if (record.contractDigest !== contractDigest) throw new ProvenanceError(`task ${task.id}: ${record.role} record was measured under another contract`);
+      if (typeof record.adapterDigest === "string" && record.adapterDigest) adapterDigests.add(record.adapterDigest);
+      const imageId = insp.imageId;
+      if (imageId) {
+        if (host.runtimeImageId && imageId !== host.runtimeImageId) throw new ProvenanceError(`task ${task.id}: ${record.role} ran image ${imageId}; the supervisor enforces ${host.runtimeImageId}`);
+        imageIds.add(imageId);
+      }
     }
     const passed = task.status === "done" && task.outcome === "CANDIDATE_PASSED_CHECKS" && view.verification?.passed === true && view.verification.candidateDigest === task.candidateDigest && modelEvents.length > 0;
     // A pass the records do not back (no model call, record/digest mismatch) is never counted as one.
@@ -197,12 +212,16 @@ async function main() {
   const gatePassed = passedCount >= MIN_PASSED && attempts.length >= MIN_TOTAL;
   console.log(`\nLIVE GATE: ${passedCount}/${attempts.length} passed the external comparator (need ${MIN_PASSED} of ${MIN_TOTAL}). ${gatePassed ? "PASS" : "FAIL"}`);
 
-  if (host.devUnsafe) {
-    console.log("dev-unsafe rehearsal: no receipt written (a receipt requires gVisor or Kata).");
+  if (host.devUnsafe || args.allowDevUnsafe) {
+    console.log("dev-unsafe rehearsal: no receipt written (a receipt requires gVisor or Kata and is never written with --allow-dev-unsafe).");
     process.exit(1);
   }
   const model = [...models][0];
   if (!model) throw new ProvenanceError("no model call was recorded in any attempt; nothing attests a live Vultr repair");
+  if (adapterDigests.size !== 1) throw new ProvenanceError(adapterDigests.size === 0 ? "no verification record names an adapter digest; the receipt cannot be bound to an adapter" : `the attempts were measured under different adapters: ${[...adapterDigests].map((d) => d.slice(0, 12)).join(", ")}`);
+  if (imageIds.size !== 1) throw new ProvenanceError(imageIds.size === 0 ? "neither the supervisor host check nor any verification record names a runtime image id; the receipt cannot be bound to an image" : `the attempts ran on different runtime images: ${[...imageIds].join(", ")}`);
+  const runtimeImageId = [...imageIds][0] as string;
+  if (!/^sha256:[a-f0-9]{64}$/.test(runtimeImageId)) throw new ProvenanceError(`runtime image id "${runtimeImageId.slice(0, 80)}" is not a local image id (sha256:<64 hex>)`);
   const recordedAt = new Date().toISOString();
   const receipt = LiveGateReceipt.parse({
     schemaVersion: 1,
@@ -215,7 +234,8 @@ async function main() {
     inferenceHost: PINNED_HOST,
     runtime: host.selectedRuntime,
     devUnsafe: false,
-    ...(host.runtimeImageId ? { runtimeImageId: host.runtimeImageId } : {}),
+    runtimeImageId,
+    adapterDigest: [...adapterDigests][0],
     attempts,
     passed: passedCount,
     total: attempts.length,

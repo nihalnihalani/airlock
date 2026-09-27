@@ -3,12 +3,12 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
-import type { RepairAvailability, Task, VerificationRecord } from "@airlock/contracts";
-import { ARTIFACT_KIND_EXPORT, CONTENT_SECURITY_POLICY, createApp, STORE_KIND_GRANTS, type ApiDeps } from "../src/api.ts";
+import type { BlastRadiusCard, RepairAvailability, Task, VerificationRecord } from "@airlock/contracts";
+import { ARTIFACT_KIND_EXPORT, CONTENT_SECURITY_POLICY, createApp, PREDATES_IMAGE_IDENTITY, rememberRateKeys, STORE_KIND_GRANTS, type ApiDeps } from "../src/api.ts";
 import { RepairAvailabilityService, SCRIPTED_REASON } from "../src/availability.ts";
 import { exportBundle } from "../src/artifacts/index.ts";
 import { TaskEventBus } from "../src/events.ts";
-import { ARTIFACT_KIND_BUNDLE, STORE_KIND_VERIFICATIONS } from "../src/repair-handler.ts";
+import { ARTIFACT_KIND_BUNDLE, STORE_KIND_VERIFICATIONS, computeAdapterDigest } from "../src/repair-handler.ts";
 import { SessionService } from "../src/sessions.ts";
 import { createStore, type Store } from "../src/store/index.ts";
 import { exportBundleDouble, FX_FIXED_SOURCE, fixtureObserve, makeFixture, MemoryArtifactStore, scriptedDriverDouble, zipFilesDouble, type Fixture } from "./helpers/doubles.ts";
@@ -900,7 +900,8 @@ describe("hostile panel (D10, U3)", () => {
 describe("repair availability (U5/G1) and diagnostics (G6)", () => {
   const receipt = (overrides: Record<string, unknown> = {}) => ({
     schemaVersion: 1,
-    recordedAt: "2026-09-27T10:00:00.000Z",
+    // Never in the future (a receipt dated more than 5 minutes ahead is refused).
+    recordedAt: new Date(Date.now() - 3_600_000).toISOString(),
     revision: "c7580dc",
     profileId: "fx-1",
     contractDigest: fixture.profile.contractDigest,
@@ -909,25 +910,43 @@ describe("repair availability (U5/G1) and diagnostics (G6)", () => {
     inferenceHost: "api.vultrinference.com",
     runtime: "kata",
     devUnsafe: false,
-    attempts: ["a", "b", "c"].map((id, i) => ({ taskId: `task-${id}`, outcome: i < 2 ? "CANDIDATE_PASSED_CHECKS" : "CHECKS_FAILED", candidateDigest: "1".repeat(64), modelCalls: 5, modelHosts: ["api.vultrinference.com"], durationMs: 1000 })),
+    runtimeImageId: GATE_IMAGE,
+    adapterDigest: overrides.adapterDigest ?? "0".repeat(64),
+    attempts: ["a", "b", "c"].map((id, i) => ({ taskId: `task-gate-${id}`, outcome: i < 2 ? "CANDIDATE_PASSED_CHECKS" : "CHECKS_FAILED", candidateDigest: "1".repeat(64), modelCalls: 5, modelHosts: ["api.vultrinference.com"], durationMs: 1000 })),
     passed: 2,
     total: 3,
     ...overrides,
   });
-  const liveHost = () => fakeHost({ selectedRuntime: "kata", devUnsafe: false, availableRuntimes: ["runc", "kata"], instanceId: "vm-b-123" });
+  const GATE_IMAGE = `sha256:${"a".repeat(64)}`;
+  const liveHost = () => fakeHost({ selectedRuntime: "kata", devUnsafe: false, availableRuntimes: ["runc", "kata"], instanceId: "vm-b-123", runtimeImageId: GATE_IMAGE });
+  /** The gate run's tasks, as this control plane recorded them. */
+  const seedGateTasks = async (store: Store) => {
+    for (const [i, id] of ["a", "b", "c"].entries()) {
+      const at = new Date().toISOString();
+      await store.put("operator", "tasks", { id: `task-gate-${id}`, owner: "operator", profileId: "fx-1", issueText: "x", status: "done", phase: "ready", outcome: i < 2 ? "CANDIDATE_PASSED_CHECKS" : "CHECKS_FAILED", candidateDigest: "1".repeat(64), liveGate: true, generation: 1, leaseId: null, leaseUntil: null, attempts: 1, budget: { modelCallsUsed: 5, repairAttemptsUsed: 1 }, createdAt: at, updatedAt: at } satisfies Task);
+    }
+  };
 
   test("signed-out readers see availability; a live task created without evidence is marked repair-disabled; a passing receipt enables repair", async () => {
     const evidenceDir = await mkdtemp(join(tmpdir(), "airlock-gate-"));
-    const availability = new RepairAvailabilityService({ driver: "vultr", model: "glm-5.3", evidenceDir, repoRoot: tmpdir(), controlInstanceId: "vm-a-456" });
     const supervisor = new FakeSupervisor({ profile: fixture.profile, observe: fixtureObserve, host: liveHost() });
-    const ctx = await makeCtx({ supervisor, extra: { availability, scriptedDrivers: ["slow"], diagnostics: [{ name: "slow", title: "Runaway command", description: "sleeps" }] } });
+    const ctx = await makeCtx({ supervisor, extra: { scriptedDrivers: ["slow"], diagnostics: [{ name: "slow", title: "Runaway command", description: "sleeps" }] } });
+    const availability = new RepairAvailabilityService({ driver: "vultr", model: "glm-5.3", evidenceDir, repoRoot: tmpdir(), controlInstanceId: "vm-a-456", adapterDigestOf: (p) => computeAdapterDigest(fixture.runtimeDir, p), tasks: ctx.store });
+    ctx.deps.availability = availability;
+    const app = createApp(ctx.deps);
+    ctx.app = app;
     try {
       const none = (await (await ctx.app.request("/api/repair-availability")).json()) as RepairAvailability;
       expect(none.available).toBe(false);
       expect(none.reason).toContain("no valid live-gate receipt");
-      expect(none.instances).toEqual({ control: "vm-a-456", execution: "vm-b-123" });
+      // Signed out: no instance ids and no model name.
+      expect(none.instances).toBeUndefined();
+      expect(none.model).toBeUndefined();
       expect(none.driver).toBe("vultr");
       const op = await login(ctx.app, OPERATOR);
+      const signedIn = (await (await ctx.app.request("/api/repair-availability", { headers: { cookie: op } })).json()) as RepairAvailability;
+      expect(signedIn.instances).toEqual({ control: "vm-a-456", execution: "vm-b-123" });
+      expect(signedIn.model).toBe("glm-5.3");
       const created = (await (await ctx.app.request("/api/tasks", json({ profileId: "fx-1", issueText: "compute(0) raises" }, op))).json()) as Task;
       expect(created.repairDisabledReason).toContain("live repair unavailable");
       expect(created.scriptedDriver).toBeUndefined();
@@ -943,7 +962,9 @@ describe("repair availability (U5/G1) and diagnostics (G6)", () => {
       expect(gate.repairDisabledReason).toBeUndefined();
       expect((await ctx.app.request("/api/tasks", json({ profileId: "fx-1", issueText: "x", liveGate: true }, judge))).status).toBe(403);
 
-      await writeFile(join(evidenceDir, "2026-09-27T10-00-00Z.json"), JSON.stringify(receipt()));
+      await seedGateTasks(ctx.store);
+      const adapterDigest = await computeAdapterDigest(fixture.runtimeDir, fixture.profile);
+      await writeFile(join(evidenceDir, "2026-09-27T10-00-00Z.json"), JSON.stringify(receipt({ adapterDigest })));
       const ok = (await (await ctx.app.request("/api/repair-availability?profileId=fx-1")).json()) as RepairAvailability;
       expect(ok.available).toBe(true);
       expect(ok.evidence).toMatchObject({ passed: 2, attempts: 3, model: "glm-5.3-normalize", runtime: "kata", profileId: "fx-1" });
@@ -1049,5 +1070,225 @@ describe("security headers (U6)", () => {
       await ctx.close();
       if (!hasRepoDist) await rm(dist, { recursive: true, force: true });
     }
+  });
+});
+
+// ---- milestone 2 review fixes ---------------------------------------------------------------------
+
+describe("should-fix 1: a judge's hostile card names none of another client's tasks", () => {
+  class SiblingSupervisor extends FakeSupervisor {
+    ownTaskId = "";
+    override async hostile(input: { profileId: string; command: string }): Promise<BlastRadiusCard> {
+      const card = await super.hostile(input);
+      const mine = this.ownTaskId;
+      return {
+        ...card,
+        survived: {
+          ...card.survived,
+          otherAttemptsRunning: 2,
+          siblings: [
+            { attemptId: "att-mine", taskId: mine, runningBefore: true, runningAfter: true },
+            { attemptId: "att-secret", taskId: "task-secret", runningBefore: true, runningAfter: true },
+          ],
+        },
+        teardown: {
+          ...card.teardown,
+          host: {
+            listedAt: new Date().toISOString(),
+            scope: "host",
+            containers: [
+              { name: `airlock-author-${mine}-att-mine`, taskId: mine, role: "author", state: "running" },
+              { name: "airlock-author-task-secret-att-secret", taskId: "task-secret", role: "author", state: "running" },
+            ],
+            volumes: [`airlock-ws-${mine}-att-mine`, "airlock-ws-task-secret-att-secret"],
+          },
+        },
+      };
+    }
+  }
+
+  test("siblings and host listing entries of other tasks keep role, state and counts but lose their ids and names", async () => {
+    const supervisor = new SiblingSupervisor({ profile: fixture.profile, observe: fixtureObserve });
+    const ctx = await makeCtx({ supervisor });
+    try {
+      const judge = await login(ctx.app, JUDGE);
+      const created = (await (await ctx.app.request("/api/tasks", json({ profileId: "fx-1", issueText: "x" }, judge))).json()) as Task;
+      supervisor.ownTaskId = created.id;
+      const res = await ctx.app.request("/api/hostile", json({ command: "true" }, judge));
+      expect(res.status).toBe(200);
+      const text = await res.text();
+      expect(text).not.toContain("task-secret");
+      expect(text).not.toContain("att-secret");
+      const card = JSON.parse(text) as BlastRadiusCard;
+      expect(card.survived.otherAttemptsRunning).toBe(2);
+      expect(card.survived.siblings).toEqual([
+        { attemptId: "att-mine", taskId: created.id, runningBefore: true, runningAfter: true },
+        { attemptId: "other", taskId: "other", runningBefore: true, runningAfter: true },
+      ]);
+      expect(card.teardown.host!.containers).toEqual([
+        { name: `airlock-author-${created.id}-att-mine`, taskId: created.id, role: "author", state: "running" },
+        { name: "other-task container", taskId: "other", role: "author", state: "running" },
+      ]);
+      expect(card.teardown.host!.volumes).toEqual([`airlock-ws-${created.id}-att-mine`, "other-task volume"]);
+    } finally {
+      await ctx.close();
+    }
+  });
+});
+
+describe("should-fix 5: image identity binds preview and export", () => {
+  /** A supervisor whose sandboxes report the given inspection fields. */
+  class ImageSupervisor extends FakeSupervisor {
+    invokeImage: { imageDigest?: string; imageId?: string | null } = {};
+    previewImageId: string | null = null;
+    override async invoke(input: Parameters<FakeSupervisor["invoke"]>[0], opts?: Parameters<FakeSupervisor["invoke"]>[1]) {
+      const result = await super.invoke(input, opts);
+      const inspection = { ...result.inspection };
+      if (this.invokeImage.imageDigest) inspection.imageDigest = this.invokeImage.imageDigest;
+      if (this.invokeImage.imageId === null) delete inspection.imageId;
+      else if (this.invokeImage.imageId) inspection.imageId = this.invokeImage.imageId;
+      if (input.role === "preview" && this.previewImageId) inspection.imageId = this.previewImageId;
+      return { ...result, inspection };
+    }
+  }
+
+  test("a record's imageId is compared with the host's enforced image id", async () => {
+    const supervisor = new ImageSupervisor({ profile: fixture.profile, observe: fixtureObserve });
+    const ctx = await makeCtx({ withWorker: true, supervisor });
+    try {
+      const op = await login(ctx.app, OPERATOR);
+      const task = await completedTask(ctx, op);
+      supervisor.hostCheck = { ...supervisor.hostCheck, runtimeImageId: `sha256:${"9".repeat(64)}` };
+      const p = await ctx.app.request(`/api/tasks/${task.id}/preview`, json({ candidateDigest: task.candidateDigest, input: { x: 5 } }, op));
+      expect(p.status).toBe(409);
+      expect(await errorOf(p)).toContain("runtime image");
+      supervisor.hostCheck = { ...supervisor.hostCheck, runtimeImageId: "sha256:fakeimage" };
+      expect((await ctx.app.request(`/api/tasks/${task.id}/preview`, json({ candidateDigest: task.candidateDigest, input: { x: 5 } }, op))).status).toBe(200);
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  test("a record that carries only a repo digest cannot be compared: new grants and previews are refused, an issued grant still downloads", async () => {
+    const supervisor = new ImageSupervisor({ profile: fixture.profile, observe: fixtureObserve });
+    supervisor.invokeImage = { imageDigest: `airlock/python@sha256:${"7".repeat(64)}`, imageId: null };
+    const ctx = await makeCtx({ withWorker: true, supervisor });
+    try {
+      const op = await login(ctx.app, OPERATOR);
+      const task = await completedTask(ctx, op);
+      // Before the supervisor pins an image id, nothing is comparable and the grant is issued.
+      const grant = (await (await ctx.app.request(`/api/tasks/${task.id}/export`, json({}, op))).json()) as { url: string };
+      supervisor.hostCheck = { ...supervisor.hostCheck, runtimeImageId: "sha256:fakeimage" };
+      const p = await ctx.app.request(`/api/tasks/${task.id}/preview`, json({ candidateDigest: task.candidateDigest, input: { x: 5 } }, op));
+      expect(p.status).toBe(409);
+      expect(await errorOf(p)).toContain(PREDATES_IMAGE_IDENTITY);
+      // Another session asks for a new grant: refused.
+      const judgeGrant = await ctx.app.request(`/api/tasks/${task.id}/export`, json({}, op));
+      expect(judgeGrant.status).toBe(409);
+      expect(await errorOf(judgeGrant)).toContain(PREDATES_IMAGE_IDENTITY);
+      expect((await ctx.app.request(grant.url, { headers: { cookie: op } })).status).toBe(200);
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  test("a preview sandbox reporting another image id than the verification is refused after the run", async () => {
+    const supervisor = new ImageSupervisor({ profile: fixture.profile, observe: fixtureObserve });
+    const ctx = await makeCtx({ withWorker: true, supervisor });
+    try {
+      const op = await login(ctx.app, OPERATOR);
+      const task = await completedTask(ctx, op);
+      supervisor.previewImageId = `sha256:${"5".repeat(64)}`;
+      const res = await ctx.app.request(`/api/tasks/${task.id}/preview`, json({ candidateDigest: task.candidateDigest, input: { x: 5 } }, op));
+      expect(res.status).toBe(409);
+      expect(await errorOf(res)).toContain("5555555555");
+    } finally {
+      await ctx.close();
+    }
+  });
+});
+
+describe("D4/D11/M6 production mode", () => {
+  test("a dev-unsafe supervisor refuses new tasks in production", async () => {
+    const ctx = await makeCtx({ extra: { production: true } });
+    try {
+      const op = await login(ctx.app, OPERATOR);
+      const res = await ctx.app.request("/api/tasks", json({ profileId: "fx-1", issueText: "x" }, op));
+      expect(res.status).toBe(503);
+      expect(await errorOf(res)).toContain("gVisor or Kata required");
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  test("records measured on runc are never previewed or exported in production", async () => {
+    const ctx = await makeCtx({ withWorker: true });
+    try {
+      const op = await login(ctx.app, OPERATOR);
+      const task = await completedTask(ctx, op);
+      ctx.deps.production = true;
+      const app = createApp(ctx.deps);
+      const p = await app.request(`/api/tasks/${task.id}/preview`, json({ candidateDigest: task.candidateDigest, input: { x: 5 } }, op));
+      expect(p.status).toBe(409);
+      expect(await errorOf(p)).toContain("does not serve it");
+      const e = await app.request(`/api/tasks/${task.id}/export`, json({}, op));
+      expect(e.status).toBe(409);
+      expect(await errorOf(e)).toContain("does not serve it");
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  test("export in production requires a fully BLOCKED probe on both records (a resumed verification without one is refused)", async () => {
+    const kata = { host: fakeHost({ selectedRuntime: "kata", devUnsafe: false, availableRuntimes: ["kata"], runtimeImageId: "sha256:fakeimage" }), inspection: { runtime: "kata" as const, devUnsafe: false } };
+    // A full run: the baseline and the candidate records both carry the author probe.
+    const full = await makeCtx({ withWorker: true, supervisor: new FakeSupervisor({ profile: fixture.profile, observe: fixtureObserve, ...kata }), extra: { production: true } });
+    try {
+      const op = await login(full.app, OPERATOR);
+      const task = await completedTask(full, op);
+      expect((await full.app.request(`/api/tasks/${task.id}/export`, json({}, op))).status).toBe(201);
+    } finally {
+      await full.close();
+    }
+    // A verification resumed with no stored probe: neither record has checkpoint 4.
+    const resumed = await makeCtx({ withWorker: true, supervisor: new FakeSupervisor({ profile: fixture.profile, observe: fixtureObserve, ...kata }), extra: { production: true } });
+    try {
+      const h = resumed.harness!;
+      const bytes = Buffer.from(FX_FIXED_SOURCE, "utf8");
+      const file = { path: "lib/mod.py", byteLength: bytes.byteLength, sha256: sha(bytes), contentBase64: bytes.toString("base64") };
+      const { buildManifestDouble } = await import("./helpers/doubles.ts");
+      const { candidateDigestOf } = await import("@airlock/contracts");
+      const manifest = buildManifestDouble(fixture.profile.manifest, [file]);
+      const candidateDigest = await candidateDigestOf(manifest);
+      await h.artifacts.putBlob(bytes);
+      await h.artifacts.putImmutableJson("bundle", candidateDigest, { manifest, candidateDigest, files: [file] });
+      const t = await h.newTask({ phase: "verify", attemptId: "att-gone", generation: 1, candidateDigest, candidates: [{ attemptId: "att-gone", candidateDigest }], budget: { modelCallsUsed: 4, repairAttemptsUsed: 1 } });
+      const done = await h.waitFor(t.id);
+      expect(done.outcome).toBe("CANDIDATE_PASSED_CHECKS");
+      const op = await login(resumed.app, OPERATOR);
+      const res = await resumed.app.request(`/api/tasks/${t.id}/export`, json({}, op));
+      expect(res.status).toBe(409);
+      expect(await errorOf(res)).toContain("no fully BLOCKED isolation probe");
+    } finally {
+      await resumed.close();
+    }
+  });
+});
+
+describe("rate-limit memory is bounded without resetting every client", () => {
+  test("past the cap, expired entries are evicted first and a client inside its interval keeps its limit", () => {
+    const map = new Map<string, number>();
+    rememberRateKeys(map, ["active"], 5_000, 10_000, 3);
+    rememberRateKeys(map, ["stale-1"], 0, 10_000, 3);
+    rememberRateKeys(map, ["stale-2"], 0, 10_000, 3);
+    // Two more keys at t=12 000: the stale ones (older than the interval) go, "active" stays.
+    rememberRateKeys(map, ["new-1"], 12_000, 10_000, 3);
+    rememberRateKeys(map, ["new-2"], 12_000, 10_000, 3);
+    expect(map.size).toBe(3);
+    expect(map.has("active")).toBe(true);
+    expect(map.has("stale-1") || map.has("stale-2")).toBe(false);
+    // Never cleared wholesale: with every entry live, only the least recently used goes.
+    rememberRateKeys(map, ["new-3"], 12_500, 10_000, 3);
+    expect([...map.keys()]).toEqual(["new-1", "new-2", "new-3"]);
   });
 });

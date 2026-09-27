@@ -12,7 +12,7 @@ import { inferenceFetch, loadConfig, redactConfig, ConfigError } from "./config.
 import { TaskEventBus } from "./events.ts";
 import { log } from "./log.ts";
 import { loadProfilesReport } from "./profiles.ts";
-import { createRepairHandler, type DriverSource } from "./repair-handler.ts";
+import { computeAdapterDigest, createRepairHandler, type DriverSource } from "./repair-handler.ts";
 import { openScriptedCatalog, type ScriptedCatalog } from "./scripted.ts";
 import { SessionService } from "./sessions.ts";
 import { createStore } from "./store/index.ts";
@@ -52,6 +52,8 @@ async function main() {
     const host = await supervisor.host();
     log.info("supervisor reachable", { url: config.supervisorUrl, ok: health.ok, runtime: host.selectedRuntime, devUnsafe: host.devUnsafe, instanceId: host.instanceId ?? null });
     if (host.devUnsafe) log.warn("supervisor reports devUnsafe=true (plain runc): local development only, never a deployment");
+    if (config.production && (host.devUnsafe || host.selectedRuntime === "runc"))
+      log.error("AIRLOCK_PRODUCTION=1 with a dev-unsafe supervisor: new tasks are refused and dev-unsafe records are never previewed or exported", { runtime: host.selectedRuntime });
   } catch (error) {
     log.warn("supervisor not reachable at start; tasks will fail until it is", { url: config.supervisorUrl, error });
   }
@@ -92,6 +94,9 @@ async function main() {
     evidenceDir: config.liveGateEvidenceDir,
     repoRoot: config.repoRoot,
     controlInstanceId: config.instanceId,
+    // A receipt is bound to the adapter that would run now and to this plane's own task records.
+    adapterDigestOf: (profile) => computeAdapterDigest(config.runtimeDir, profile),
+    tasks: store,
   });
 
   const bus = new TaskEventBus();
@@ -110,6 +115,10 @@ async function main() {
     authorizationMs: Math.round((WORKER_LEASE_MS * 2) / 3),
     maxTokens: config.modelMaxTokens,
     ...(config.modelReasoningEffort ? { reasoningEffort: config.modelReasoningEffort } : {}),
+    production: config.production,
+    // A live task follows the latest live-gate evidence when it is first claimed, not only the
+    // state when it was created (a scripted control plane has no live repair to gate).
+    repairAvailability: async (_task, profile, host) => (availability.driver === "vultr" ? availability.evaluate(profile, host) : null),
   });
   const worker = new TaskWorker(store, handler, { bus, leaseMs: WORKER_LEASE_MS, pollMs: 1000, concurrency: 2 });
   const sessions = new SessionService(store, {
@@ -139,6 +148,7 @@ async function main() {
     availability,
     webDist: config.webDist,
     trustedProxies: config.trustedProxies,
+    production: config.production,
   });
   if (config.trustedProxies.length > 0)
     log.info("AIRLOCK_TRUST_PROXY: the login rate limit keys on the reverse proxy's X-Forwarded-For hop for requests arriving from these peers; other peers are keyed on their own address", { trustedProxies: config.trustedProxies });

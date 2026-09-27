@@ -1,15 +1,15 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { candidateDigestOf, type AttemptRef, type RunEvent, type Task, type VerificationRecord } from "@airlock/contracts";
-import { SupervisorCapacityError, SupervisorFenceError, SupervisorUnavailableError } from "../src/supervisor-client.ts";
-import { STORE_KIND_OPERATIONS, STORE_KIND_VERIFICATIONS, countOccurrences, sliceLines, type OperationRecord } from "../src/repair-handler.ts";
+import { candidateDigestOf, type AttemptRef, type HostListing, type RunEvent, type Task, type VerificationRecord } from "@airlock/contracts";
+import { SupervisorCapacityError, SupervisorError, SupervisorFenceError, SupervisorUnavailableError } from "../src/supervisor-client.ts";
+import { INVOKE_RECONCILIATION, STORE_KIND_ATTEMPT_PROBES, STORE_KIND_OPERATIONS, STORE_KIND_VERIFICATIONS, countOccurrences, sliceLines, type OperationRecord } from "../src/repair-handler.ts";
 import { validateEnvelope as realValidateEnvelope } from "../src/artifacts/index.ts";
 import { loadProfile } from "../src/profiles.ts";
 import { loadScriptedTurns } from "../src/scripted.ts";
 import { createScriptedDriver } from "../src/vultr-client.ts";
 import { FX_FIXED_SOURCE, FX_BROKEN_SOURCE, buildManifestDouble, fixtureObserve, makeFixture, scriptedDriverDouble, type Fixture, type ScriptedTurn } from "./helpers/doubles.ts";
-import { FakeSupervisor, okExec } from "./helpers/fake-supervisor.ts";
+import { FakeSupervisor, fakeHost, fakeProbe, okExec } from "./helpers/fake-supervisor.ts";
 import { makeHarness, OWNER, type Harness } from "./helpers/harness.ts";
 
 let fixture: Fixture;
@@ -1339,6 +1339,323 @@ describe("U5 repair disabled", () => {
       expect(s.task.outcome).toBe("NOT_REPRODUCED");
     } finally {
       await s.close();
+    }
+  });
+});
+
+// ---- milestone 2 review fixes ---------------------------------------------------------------------
+
+/** What the previous controller left behind: a sealed, unjudged candidate from attempt `att-sealed`. */
+async function sealedCandidate(h: Harness) {
+  const bytes = Buffer.from(FX_FIXED_SOURCE, "utf8");
+  const file = { path: "lib/mod.py", byteLength: bytes.byteLength, sha256: createHash("sha256").update(bytes).digest("hex"), contentBase64: bytes.toString("base64") };
+  const manifest = buildManifestDouble(fixture.profile.manifest, [file]);
+  const candidateDigest = await candidateDigestOf(manifest);
+  await h.artifacts.putBlob(bytes);
+  await h.artifacts.putImmutableJson("bundle", candidateDigest, { manifest, candidateDigest, files: [file] });
+  return candidateDigest;
+}
+
+describe("should-fix 2: a recovery never orphans a sealed candidate", () => {
+  test("the lease is lost during the stale-attempt teardown after sealing: the next run verifies the sealed candidate, no new model attempt", async () => {
+    let harness: Harness | null = null;
+    let lost = false;
+    class LoseLeaseOnRevoke extends FakeSupervisor {
+      override async revoke(input: { ref: AttemptRef }, opts?: Parameters<FakeSupervisor["revoke"]>[1]) {
+        if (!lost && input.ref.attemptId === "att-sealed") {
+          lost = true;
+          harness!.worker.abort(input.ref.taskId); // the lease is gone mid-teardown; the worker requeues
+        }
+        return super.revoke(input, opts);
+      }
+    }
+    const supervisor = new LoseLeaseOnRevoke({ profile: fixture.profile, observe: fixtureObserve });
+    const driver = scriptedDriverDouble(repairScript(FX_FIXED_SOURCE));
+    const h = await makeHarness(fixture, supervisor, driver);
+    harness = h;
+    try {
+      const candidateDigest = await sealedCandidate(h);
+      const task = await h.newTask({ phase: "verify", attemptId: "att-sealed", generation: 1, candidateDigest, candidates: [{ attemptId: "att-sealed", candidateDigest }], budget: { modelCallsUsed: 4, repairAttemptsUsed: 1 } });
+      h.worker.start();
+      const result = await h.waitFor(task.id);
+      expect(lost).toBe(true);
+      expect(result.outcome).toBe("CANDIDATE_PASSED_CHECKS");
+      expect(result.candidateDigest).toBe(candidateDigest);
+      expect(result.candidates).toEqual([{ attemptId: "att-sealed", candidateDigest, verificationRecordId: result.verificationRecordId!, outcome: "PASSED_CHECKS" }]);
+      expect(driver.calls).toBe(0);
+      expect(supervisor.createdAttempts).toHaveLength(0);
+      expect(result.budget.recoveries).toBe(2);
+      expect(result.budget.repairAttemptsUsed).toBe(1);
+    } finally {
+      await h.close();
+    }
+  });
+
+  test("a sealed, unjudged candidate is resumed whatever phase was left on record", async () => {
+    const supervisor = new FakeSupervisor({ profile: fixture.profile, observe: fixtureObserve });
+    const driver = scriptedDriverDouble(repairScript(FX_FIXED_SOURCE));
+    const h = await makeHarness(fixture, supervisor, driver);
+    try {
+      const candidateDigest = await sealedCandidate(h);
+      const task = await h.newTask({ phase: "prepare", attempts: 1, candidateDigest, candidates: [{ attemptId: "att-sealed", candidateDigest }], budget: { modelCallsUsed: 4, repairAttemptsUsed: 1 } });
+      h.worker.start();
+      const result = await h.waitFor(task.id);
+      expect(result.outcome).toBe("CANDIDATE_PASSED_CHECKS");
+      expect(driver.calls).toBe(0);
+      expect(supervisor.createdAttempts).toHaveLength(0);
+    } finally {
+      await h.close();
+    }
+  });
+
+  test("a run that resumes after a lost lease counts as a recovery even when attemptId was cleared", async () => {
+    const s = await runWith(scriptedDriverDouble(repairScript(FX_FIXED_SOURCE)), { task: { phase: "prepare", attempts: 1 } });
+    try {
+      expect(s.task.outcome).toBe("CANDIDATE_PASSED_CHECKS");
+      expect(s.task.budget.recoveries).toBe(1);
+      expect(s.events.some((e) => e.title === "Recovering task")).toBe(true);
+    } finally {
+      await s.close();
+    }
+  });
+});
+
+describe("M6 the resumed verification carries the author probe", () => {
+  test("the candidate record of a resumed verification carries the stored checkpoint-4 probe", async () => {
+    const supervisor = new FakeSupervisor({ profile: fixture.profile, observe: fixtureObserve });
+    const h = await makeHarness(fixture, supervisor, scriptedDriverDouble([]));
+    try {
+      const candidateDigest = await sealedCandidate(h);
+      await h.store.insertImmutable(OWNER, STORE_KIND_ATTEMPT_PROBES, { id: "att-sealed", taskId: "task-1", probe: fakeProbe(true), createdAt: new Date().toISOString() });
+      const task = await h.newTask({ phase: "verify", attemptId: "att-sealed", generation: 1, candidateDigest, candidates: [{ attemptId: "att-sealed", candidateDigest }], budget: { modelCallsUsed: 4, repairAttemptsUsed: 1 } });
+      h.worker.start();
+      const result = await h.waitFor(task.id);
+      expect(result.outcome).toBe("CANDIDATE_PASSED_CHECKS");
+      const record = await h.store.get<VerificationRecord>(OWNER, STORE_KIND_VERIFICATIONS, result.verificationRecordId!);
+      expect(record?.runtimeProfile.probe?.allBlocked).toBe(true);
+    } finally {
+      await h.close();
+    }
+  });
+});
+
+describe("should-fix 3: an uncertain createAttempt is always torn down", () => {
+  test("createAttempt answered 503 (nothing created): teardown is attempted, 404 counts as clean, outcome INCONCLUSIVE", async () => {
+    let attemptId = "";
+    class Create503 extends FakeSupervisor {
+      override async createAttempt(input: Parameters<FakeSupervisor["createAttempt"]>[0], opts?: Parameters<FakeSupervisor["createAttempt"]>[1]): ReturnType<FakeSupervisor["createAttempt"]> {
+        attemptId = input.ref.attemptId;
+        await this.dispatch("createAttempt", input, opts, input.ref.attemptId);
+        throw new SupervisorUnavailableError("supervisor unavailable (503 after retries)");
+      }
+    }
+    const driver = scriptedDriverDouble(repairScript(FX_FIXED_SOURCE));
+    const s = await runWith(driver, { SupervisorClass: Create503 });
+    try {
+      expect(s.supervisor.operations.map((o) => `${o.kind}:${o.attemptId === attemptId ? "it" : "-"}`)).toContain("revoke:it");
+      expect(s.task.status).toBe("done");
+      expect(s.task.outcome).toBe("INCONCLUSIVE");
+      expect(s.events.find((e) => e.title === "Outcome INCONCLUSIVE")?.detail).toContain("503 after retries");
+      expect(s.events.some((e) => e.title === "Attempt destroyed after failure")).toBe(true);
+      expect(driver.calls).toBe(0);
+    } finally {
+      await s.close();
+    }
+  });
+
+  test("createAttempt timed out after the supervisor made the sandbox: it is revoked and destroyed", async () => {
+    class CreateTimesOut extends FakeSupervisor {
+      override async createAttempt(input: Parameters<FakeSupervisor["createAttempt"]>[0], opts?: Parameters<FakeSupervisor["createAttempt"]>[1]): ReturnType<FakeSupervisor["createAttempt"]> {
+        await super.createAttempt(input, opts);
+        throw new SupervisorError("createAttempt timed out", 0);
+      }
+    }
+    const s = await runWith(scriptedDriverDouble(repairScript(FX_FIXED_SOURCE)), { SupervisorClass: CreateTimesOut });
+    try {
+      expect(s.supervisor.attempts.size).toBe(0);
+      expect(s.supervisor.destroyed).toHaveLength(1);
+      expect(s.task.outcome).toBe("INCONCLUSIVE");
+    } finally {
+      await s.close();
+    }
+  });
+});
+
+describe("D7 infrastructure errors after sandbox work started", () => {
+  test("a non-fence freeze failure ends INCONCLUSIVE with the reason once the teardown is confirmed", async () => {
+    class FreezeDown extends FakeSupervisor {
+      override async freeze(): Promise<never> {
+        throw new SupervisorUnavailableError("supervisor unavailable during freeze");
+      }
+    }
+    const s = await runWith(scriptedDriverDouble(repairScript(FX_FIXED_SOURCE)), { SupervisorClass: FreezeDown });
+    try {
+      expect(s.task.status).toBe("done");
+      expect(s.task.outcome).toBe("INCONCLUSIVE");
+      expect(s.events.find((e) => e.title === "Outcome INCONCLUSIVE")?.detail).toContain("supervisor unavailable during freeze");
+      expect(s.supervisor.attempts.size).toBe(0);
+    } finally {
+      await s.close();
+    }
+  });
+
+  test("a blob digest mismatch while sealing ends INCONCLUSIVE with the reason", async () => {
+    const s = await runWith(scriptedDriverDouble(repairScript(FX_FIXED_SOURCE)), {
+      before: async (_sup, h) => {
+        h.artifacts.putBlob = async () => "0".repeat(64);
+      },
+    });
+    try {
+      expect(s.task.outcome).toBe("INCONCLUSIVE");
+      expect(s.events.find((e) => e.title === "Outcome INCONCLUSIVE")?.detail).toContain("blob digest mismatch");
+      expect(s.supervisor.attempts.size).toBe(0);
+    } finally {
+      await s.close();
+    }
+  });
+
+  test("the same failure with an unconfirmed teardown stays failed", async () => {
+    class FreezeDownDestroyStuck extends FakeSupervisor {
+      override async freeze(): Promise<never> {
+        throw new SupervisorUnavailableError("supervisor unavailable during freeze");
+      }
+      override async destroy(input: { ref: AttemptRef }, opts?: Parameters<FakeSupervisor["destroy"]>[1]) {
+        const result = await super.destroy(input, opts);
+        return { teardown: { ...result.teardown, clean: false, containersRemaining: ["airlock-stuck"] } };
+      }
+    }
+    const s = await runWith(scriptedDriverDouble(repairScript(FX_FIXED_SOURCE)), { SupervisorClass: FreezeDownDestroyStuck });
+    try {
+      expect(s.task.status).toBe("failed");
+      expect(s.task.outcome).toBeUndefined();
+      expect(s.task.error).toContain("teardown incomplete");
+    } finally {
+      await s.close();
+    }
+  });
+});
+
+describe("should-fix 1: other tasks' identities never reach this task's records", () => {
+  const listing = (): HostListing => ({
+    listedAt: new Date().toISOString(),
+    scope: "host",
+    containers: [
+      { name: "airlock-author-task-1-att-x", taskId: "task-1", role: "author", state: "running" },
+      { name: "airlock-author-task-secret-att-y", taskId: "task-secret", role: "author", state: "running" },
+    ],
+    volumes: ["airlock-ws-task-1-att-x", "airlock-ws-task-secret-att-y"],
+  });
+
+  test("host listings in verification records and teardown events are redacted to this task", async () => {
+    const s = await runWith(scriptedDriverDouble(repairScript(FX_FIXED_SOURCE)), { supervisor: { teardownHost: listing } });
+    try {
+      expect(s.task.outcome).toBe("CANDIDATE_PASSED_CHECKS");
+      const record = await s.h.store.get<VerificationRecord>(OWNER, STORE_KIND_VERIFICATIONS, s.task.verificationRecordId!);
+      const host = record!.runtimeProfile.teardown.host!;
+      expect(host.containers).toEqual([
+        { name: "airlock-author-task-1-att-x", taskId: "task-1", role: "author", state: "running" },
+        { name: "other-task container", taskId: "other", role: "author", state: "running" },
+      ]);
+      expect(host.volumes).toEqual(["airlock-ws-task-1-att-x", "other-task volume"]);
+      // Nothing stored for this task names the other task.
+      const everything = JSON.stringify(s.events) + JSON.stringify(await s.h.store.list(OWNER, STORE_KIND_VERIFICATIONS));
+      expect(everything).not.toContain("task-secret");
+    } finally {
+      await s.close();
+    }
+  });
+});
+
+describe("M8 reconciliation pages through every outstanding row", () => {
+  test("150 outstanding invoke intents are all reconciled as unknown with the documented reason", async () => {
+    const s = await runWith(scriptedDriverDouble(repairScript(FX_FIXED_SOURCE)), {
+      task: { phase: "verify", budget: { modelCallsUsed: 1, repairAttemptsUsed: 1 } },
+      before: async (_sup, h) => {
+        for (let i = 0; i < 150; i++)
+          await h.store.put(OWNER, STORE_KIND_OPERATIONS, { id: `op-old-${i}`, operationId: `op-old-${i}`, requestDigest: "d".repeat(64), kind: "invoke", taskId: "task-1", state: "intent", createdAt: new Date().toISOString() } satisfies OperationRecord);
+      },
+    });
+    try {
+      const rows = (await s.h.store.list<OperationRecord>(OWNER, STORE_KIND_OPERATIONS)).filter((r) => r.id.startsWith("op-old-"));
+      expect(rows).toHaveLength(150);
+      expect(rows.every((r) => r.state === "unknown" && r.reconciledAt && r.reconciliation === INVOKE_RECONCILIATION)).toBe(true);
+    } finally {
+      await s.close();
+    }
+  });
+});
+
+describe("D4/D11 production refuses dev-unsafe measurements", () => {
+  test("a dev-unsafe supervisor starts no sandbox in production: INCONCLUSIVE", async () => {
+    const driver = scriptedDriverDouble(repairScript(FX_FIXED_SOURCE));
+    const s = await runWith(driver, { handler: { production: true } });
+    try {
+      expect(s.task.outcome).toBe("INCONCLUSIVE");
+      expect(s.events.find((e) => e.title === "Outcome INCONCLUSIVE")?.detail).toContain("AIRLOCK_PRODUCTION=1");
+      expect(s.supervisor.createdAttempts).toHaveLength(0);
+      expect(s.supervisor.invocations).toHaveLength(0);
+      expect(driver.calls).toBe(0);
+    } finally {
+      await s.close();
+    }
+  });
+
+  test("a baseline measured on runc is recorded but is not a verdict in production", async () => {
+    const driver = scriptedDriverDouble(repairScript(FX_FIXED_SOURCE));
+    const s = await runWith(driver, { handler: { production: true }, supervisor: { host: fakeHost({ selectedRuntime: "kata", devUnsafe: false, availableRuntimes: ["kata"] }) } });
+    try {
+      expect(s.task.outcome).toBe("INCONCLUSIVE");
+      expect(s.task.baselineRecordId).toBeDefined();
+      expect(s.events.find((e) => e.title === "Outcome INCONCLUSIVE")?.detail).toContain("baseline measurement ran on runc");
+      expect(driver.calls).toBe(0);
+      expect(s.supervisor.attempts.size).toBe(0);
+    } finally {
+      await s.close();
+    }
+  });
+
+  test("the same run on kata passes in production", async () => {
+    const s = await runWith(scriptedDriverDouble(repairScript(FX_FIXED_SOURCE)), {
+      handler: { production: true },
+      supervisor: { host: fakeHost({ selectedRuntime: "kata", devUnsafe: false, availableRuntimes: ["kata"] }), inspection: { runtime: "kata", devUnsafe: false } },
+    });
+    try {
+      expect(s.task.outcome).toBe("CANDIDATE_PASSED_CHECKS");
+    } finally {
+      await s.close();
+    }
+  });
+});
+
+describe("repair availability follows the latest evidence when a live task is first claimed", () => {
+  test("a task created while repair was unavailable runs the repair once a receipt backs it", async () => {
+    const driver = scriptedDriverDouble(repairScript(FX_FIXED_SOURCE));
+    const s = await runWith(driver, { task: { repairDisabledReason: "live repair unavailable: no receipt" }, handler: { repairAvailability: async () => ({ available: true, reason: "gate passed" }) } });
+    try {
+      expect(s.task.outcome).toBe("CANDIDATE_PASSED_CHECKS");
+      expect(s.task.repairDisabledReason).toBeUndefined();
+      expect(s.events.some((e) => e.title === "Live repair available")).toBe(true);
+    } finally {
+      await s.close();
+    }
+  });
+
+  test("a task created while repair was available is repair-disabled when a later receipt withdrew it; diagnostics and gate runs are untouched", async () => {
+    const withdrawn = async () => ({ available: false, reason: "newest live-gate receipt passed 0 of 3" });
+    const driver = scriptedDriverDouble(repairScript(FX_FIXED_SOURCE));
+    const s = await runWith(driver, { handler: { repairAvailability: withdrawn } });
+    try {
+      expect(s.task.outcome).toBe("REPRODUCED_UNRESOLVED");
+      expect(s.task.repairDisabledReason).toBe("live repair unavailable: newest live-gate receipt passed 0 of 3");
+      expect(driver.calls).toBe(0);
+    } finally {
+      await s.close();
+    }
+    const gate = await runWith(scriptedDriverDouble(repairScript(FX_FIXED_SOURCE)), { task: { liveGate: true }, handler: { repairAvailability: withdrawn } });
+    try {
+      expect(gate.task.outcome).toBe("CANDIDATE_PASSED_CHECKS");
+    } finally {
+      await gate.close();
     }
   });
 });

@@ -14,6 +14,7 @@ import type {
   CandidateBundle,
   ExecResult,
   HostCheck,
+  HostListing,
   InvokeResult,
   IsolationProbe,
   Observation,
@@ -57,6 +58,7 @@ export function fakeInspection(container: string, overrides: Partial<RuntimeInsp
     runtime: "runc",
     devUnsafe: true,
     imageDigest: "sha256:fakeimage",
+    imageId: "sha256:fakeimage",
     guestUname: "Linux fake 6.1.0 #1 SMP x86_64",
     guestHostname: container,
     checks: {
@@ -88,8 +90,8 @@ export function okExec(overrides: Partial<ExecResult> = {}): ExecResult {
   return { status: "succeeded", exitCode: 0, stdout: "", stderr: "", truncated: false, timedOut: false, durationMs: 5, ...overrides };
 }
 
-function cleanTeardown(): TeardownRecord {
-  return { destroyedAt: new Date().toISOString(), containersRemaining: [], volumesRemaining: [], clean: true };
+function cleanTeardown(host?: HostListing): TeardownRecord {
+  return { destroyedAt: new Date().toISOString(), containersRemaining: [], volumesRemaining: [], clean: true, ...(host ? { host } : {}) };
 }
 
 export interface FakeAttempt {
@@ -119,6 +121,10 @@ export interface FakeSupervisorOptions {
   onDispatch?: (kind: string, operation: Operation) => Promise<void> | void;
   /** Freeze envelope `rejected` entries (collector rejections) to add. */
   freezeRejected?: (files: Map<string, string>) => { path: string; reason: string }[];
+  /** Overrides applied to every inspection this fake reports (runtime, devUnsafe, imageId…). */
+  inspection?: Partial<RuntimeInspection>;
+  /** Host-wide listing attached to every teardown record (destroy, invoke, hostile). */
+  teardownHost?: () => HostListing;
 }
 
 export class FakeSupervisor implements SupervisorClient {
@@ -175,7 +181,7 @@ export class FakeSupervisor implements SupervisorClient {
     await this.dispatch("createAttempt", input, opts, input.ref.attemptId);
     this.createdAttempts.push({ attemptId: input.ref.attemptId, absoluteDeadline: input.absoluteDeadline, ...(input.authorizedUntil ? { authorizedUntil: input.authorizedUntil } : {}) });
     if (input.profileId !== this.options.profile.manifest.id) throw new SupervisorFenceError("unknown profile");
-    const inspection = fakeInspection(`airlock-${input.ref.attemptId}`, this.options.inspectionPassed === false ? { allPassed: false } : {});
+    const inspection = fakeInspection(`airlock-${input.ref.attemptId}`, { ...(this.options.inspection ?? {}), ...(this.options.inspectionPassed === false ? { allPassed: false } : {}) });
     const probe = fakeProbe(this.options.probeBlocked !== false);
     if (!inspection.allPassed || !probe.allBlocked) throw new SupervisorFenceError("inspection or probe failed; sandbox destroyed");
     const files = new Map<string, string>();
@@ -248,7 +254,7 @@ export class FakeSupervisor implements SupervisorClient {
     this.attempts.delete(input.ref.attemptId);
     this.tombstones.set(input.ref.attemptId, { ref: attempt.ref, role: attempt.role, container: attempt.container, status: "destroyed", deadline: attempt.deadline });
     this.destroyed.push(input.ref.attemptId);
-    return { teardown: cleanTeardown() };
+    return { teardown: cleanTeardown(this.options.teardownHost?.()) };
   }
 
   async getAttempt(attemptId: string): Promise<AttemptState> {
@@ -304,11 +310,11 @@ export class FakeSupervisor implements SupervisorClient {
       operationId: `op-fake-${this.invocations.length}`,
       role: input.role,
       container,
-      inspection: fakeInspection(container),
+      inspection: fakeInspection(container, this.options.inspection ?? {}),
       exec,
       observations,
       protocolErrors: Array.isArray(decided) ? [] : (decided.protocolErrors ?? []),
-      teardown: cleanTeardown(),
+      teardown: cleanTeardown(this.options.teardownHost?.()),
     };
   }
 
@@ -318,11 +324,11 @@ export class FakeSupervisor implements SupervisorClient {
     return {
       operationId: `op-hostile-${this.hostileCommands.length}`,
       container,
-      inspection: fakeInspection(container),
+      inspection: fakeInspection(container, this.options.inspection ?? {}),
       exec: okExec({ status: "failed", exitCode: 137, stderr: "Killed" }),
       died: { container, runtime: "runc", guestUname: "Linux fake", reason: "command terminated" },
       survived: { supervisorHealthy: true, hostSentinelUnchanged: true, otherAttemptsRunning: this.attempts.size, hostUptimeSeconds: 100 },
-      teardown: cleanTeardown(),
+      teardown: cleanTeardown(this.options.teardownHost?.()),
     };
   }
 }

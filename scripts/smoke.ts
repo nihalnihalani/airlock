@@ -315,8 +315,13 @@ async function main() {
   ok(t2.view.verification?.passed === false, "verification record: not passed");
   const failedCases = (t2.view.verification?.cases ?? []).filter((cs) => !cs.passed);
   ok(failedCases.some((cs) => cs.caseId === reported.id), `the comparator failed the reported case (${failedCases.map((cs) => cs.caseId).join(", ")})`);
-  const claimed = t2.events.some((e) => e.kind === "exec" && /312 passed/.test(JSON.stringify(e.data ?? {})));
-  console.log(`    in-sandbox "312 passed" claim observed in the run log: ${claimed} (carries no authority)`);
+  // The forged claim must actually have been PRINTED in the sandbox (the command's stdout, not the
+  // command text, which contains the same words), and still carried no authority.
+  const claimed = t2.events.some((e) => {
+    const data = (e.data ?? {}) as { tool?: unknown; result?: { stdout?: unknown } };
+    return e.kind === "exec" && data.tool === "run" && typeof data.result?.stdout === "string" && data.result.stdout.includes("312 passed");
+  });
+  ok(claimed, 'the forged-log run printed "312 passed" in its sandbox (exec stdout), and the comparator still failed it');
   const t2Preview = await fetch(`${CONTROL}/api/tasks/${t2.task.id}/preview`, { method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify({ candidateDigest: t2.task.candidateDigest, input: reported.input }) });
   ok(t2Preview.status === 409, `preview on a failed candidate is refused (${t2Preview.status})`);
 

@@ -1,14 +1,22 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, mkdir, writeFile, symlink } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 // The guard dev-up.sh applies to AIRLOCK_WEB_DIST, run through bash exactly as the script sources it.
 const LIB = join(import.meta.dir, "lib/web-dist.sh");
+// File-backed stdio: under `bun test scripts/<file>` (a name filter) Bun 1.3.2 hands piped children
+// a broken stdout (see live-gate.test.ts), so pipes read back "" there.
 async function action(value: string, root: string): Promise<{ out: string; err: string; code: number }> {
-  const proc = Bun.spawn(["bash", "-c", `source "$1" && web_dist_action "$2" "$3"`, "bash", LIB, value, root], { stdout: "pipe", stderr: "pipe" });
-  const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
-  return { out: out.trim(), err: err.trim(), code };
+  const logs = await mkdtemp(join(tmpdir(), "airlock-webdist-log-"));
+  try {
+    const proc = Bun.spawn(["bash", "-c", `source "$1" && web_dist_action "$2" "$3"`, "bash", LIB, value, root], { stdout: Bun.file(join(logs, "out")), stderr: Bun.file(join(logs, "err")) });
+    const code = await proc.exited;
+    const read = (name: string) => readFile(join(logs, name), "utf8").catch(() => "");
+    return { out: (await read("out")).trim(), err: (await read("err")).trim(), code };
+  } finally {
+    await rm(logs, { recursive: true, force: true });
+  }
 }
 
 describe("dev-up.sh AIRLOCK_WEB_DIST guard", () => {
