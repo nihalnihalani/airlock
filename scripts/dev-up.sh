@@ -7,11 +7,13 @@
 #   scripts/dev-up.sh --detach   start both and return; stop with scripts/dev-down.sh
 #
 # Secrets: a random SUPERVISOR_TOKEN and role passwords are generated once into data/dev.env
-# (gitignored) when absent. Nothing is read from or written to the repository tree.
+# (gitignored) when absent. A conventional .env at the repository root (also gitignored) is loaded
+# afterwards and overrides it; put VULTR_INFERENCE_API_KEY, AIRLOCK_MODEL and any overrides there.
+# Variables already exported in the calling shell win over both files.
 #
 # Model driver: scripted by default (AIRLOCK_MODEL_DRIVER=scripted:apps/control/test/fixtures/scripted),
-# i.e. the labelled diagnostic candidate and the forged-log script; never a live repair. Export
-# VULTR_INFERENCE_API_KEY, AIRLOCK_MODEL and AIRLOCK_MODEL_DRIVER=vultr for live inference.
+# i.e. the labelled diagnostic candidate and the forged-log script; never a live repair. Set
+# VULTR_INFERENCE_API_KEY, AIRLOCK_MODEL and AIRLOCK_MODEL_DRIVER=vultr (in .env) for live inference.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -40,10 +42,18 @@ if [[ ! -f "$DEV_ENV" ]]; then
   umask 022
   echo "generated $DEV_ENV"
 fi
+# Precedence: calling shell > .env > data/dev.env. Both files are gitignored. The caller's exports
+# are snapshotted first and re-applied last, so a file never overrides an explicit export.
+CALLER_EXPORTS="$(export -p)"
 set -a
 # shellcheck disable=SC1090
 source "$DEV_ENV"
+if [[ -f "$ROOT/.env" ]]; then
+  # shellcheck disable=SC1091
+  source "$ROOT/.env"
+fi
 set +a
+eval "$CALLER_EXPORTS"
 
 # --- environment ------------------------------------------------------------------------------
 export DOCKER_HOST="${DOCKER_HOST:-unix://$HOME/.colima/default/docker.sock}"

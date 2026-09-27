@@ -60,7 +60,7 @@ In the UI, sign in with the operator password, choose the `tabulate-365` profile
 
 ## Configuration
 
-Secrets come from the environment only. `.env.example` lists the deployment shape; nothing under `data/` is committed.
+Secrets come from the environment only. For local work, put `VULTR_INFERENCE_API_KEY`, `AIRLOCK_MODEL` and any overrides in a conventional `.env` at the repository root (gitignored; `dev-up.sh` loads it after the generated `data/dev.env`, and variables exported in your shell win over both). `.env.example` lists the deployment shape; nothing under `data/` or `.env` is committed.
 
 ### Control plane (`apps/control`)
 
