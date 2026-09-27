@@ -11,6 +11,8 @@ research/raw/
 
 # Airlock
 data/
+# Committed fixture data (the rule above is unanchored and would hide it).
+!apps/fixtures/data/
 *.sqlite
 .env
 __pycache__/
