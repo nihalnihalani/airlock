@@ -24,6 +24,7 @@ stop_one() { # name
 # Control first so it stops driving the supervisor; then the supervisor, which stops its sandboxes.
 stop_one control
 stop_one supervisor
+stop_one fixtures
 
 # Report anything the supervisor still owns. It removes its own containers on the next start
 # (janitor); listing here makes a failed teardown visible instead of silent.
