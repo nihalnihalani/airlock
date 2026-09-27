@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Task } from "@airlock/contracts";
-import { issueTitle, relativeTime, sortTasks, taskBadge, taskDot, taskRowView, TITLE_MAX } from "../src/lib/taskList";
+import { issueTitle, pollAction, relativeTime, ROSTER_STALE_POLLS, sortTasks, staleRosterMessage, taskBadge, taskDot, taskRowView, TITLE_MAX } from "../src/lib/taskList";
 
 function task(patch: Partial<Task> = {}): Task {
   return {
@@ -94,5 +94,16 @@ describe("taskRowView / sortTasks", () => {
     const b = task({ id: "b", createdAt: "2026-01-02T00:00:00.000Z" });
     const c = task({ id: "c", createdAt: "2026-01-02T00:00:00.000Z" });
     expect(sortTasks([a, c, b]).map((t) => t.id)).toEqual(["b", "c", "a"]);
+  });
+});
+
+describe("pollAction", () => {
+  test("a slow request is not aborted by the next tick; a stalled one is restarted", () => {
+    const poll = 3000;
+    expect(pollAction(null, 10_000, poll)).toBe("fetch");
+    expect(pollAction(10_000, 10_000 + poll, poll)).toBe("skip");
+    expect(pollAction(10_000, 10_000 + poll * ROSTER_STALE_POLLS - 1, poll)).toBe("skip");
+    expect(pollAction(10_000, 10_000 + poll * ROSTER_STALE_POLLS, poll)).toBe("restart");
+    expect(staleRosterMessage(10_000, 19_000)).toContain("9 s");
   });
 });

@@ -104,3 +104,23 @@ export function taskRowView(task: Task, nowMs: number): TaskRowView {
 export function sortTasks(tasks: readonly Task[]): Task[] {
   return tasks.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
 }
+
+/** A roster request pending this many poll intervals is treated as stalled and restarted. */
+export const ROSTER_STALE_POLLS = 3;
+
+export type PollAction = "fetch" | "skip" | "restart";
+
+/**
+ * What a poll tick does. Nothing in flight: fetch. A request still pending: skip the tick, so a slow
+ * API is allowed to answer instead of being aborted every interval. Pending for
+ * ROSTER_STALE_POLLS intervals: restart it, and the caller says the list is stale.
+ */
+export function pollAction(inflightSinceMs: number | null, nowMs: number, pollMs: number): PollAction {
+  if (inflightSinceMs === null) return "fetch";
+  return nowMs - inflightSinceMs >= pollMs * ROSTER_STALE_POLLS ? "restart" : "skip";
+}
+
+export function staleRosterMessage(inflightSinceMs: number, nowMs: number): string {
+  const seconds = Math.max(0, Math.round((nowMs - inflightSinceMs) / 1000));
+  return `The case list has not refreshed for ${seconds} s (the API has not answered); retrying.`;
+}

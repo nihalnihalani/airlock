@@ -6,7 +6,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { Task } from "@airlock/contracts";
 import { describeError, listTasks } from "../lib/api";
-import { sortTasks } from "../lib/taskList";
+import { pollAction, sortTasks, staleRosterMessage } from "../lib/taskList";
 
 const POLL_MS = 3000;
 
@@ -19,14 +19,21 @@ export interface TaskList {
 export function useTaskList(): TaskList {
   const [tasks, setTasks] = useState<Task[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const inflight = useRef<AbortController | null>(null);
+  const inflight = useRef<{ controller: AbortController; since: number } | null>(null);
 
-  /** Fetch now; `poll` skips the tick while a previous fetch is still out, so a slow API still answers. */
+  /** Fetch now (`poll` false), or as a poll tick: see `pollAction` for skip/restart. */
   const load = useCallback((poll: boolean) => {
-    if (poll && inflight.current && !inflight.current.signal.aborted) return;
-    inflight.current?.abort();
+    const now = Date.now();
+    const pending = inflight.current;
+    if (poll && pending) {
+      if (pollAction(pending.since, now, POLL_MS) === "skip") return;
+      // Stalled: say so where the list is, then retry.
+      setError(staleRosterMessage(pending.since, now));
+    }
+    pending?.controller.abort();
     const controller = new AbortController();
-    inflight.current = controller;
+    const entry = { controller, since: now };
+    inflight.current = entry;
     listTasks(controller.signal)
       .then((list) => {
         if (controller.signal.aborted) return;
@@ -38,7 +45,7 @@ export function useTaskList(): TaskList {
         setError(describeError(err));
       })
       .finally(() => {
-        if (inflight.current === controller) inflight.current = null;
+        if (inflight.current === entry) inflight.current = null;
       });
   }, []);
   const refresh = useCallback(() => load(false), [load]);
@@ -65,7 +72,7 @@ export function useTaskList(): TaskList {
     return () => {
       stop();
       document.removeEventListener("visibilitychange", onVisibility);
-      inflight.current?.abort();
+      inflight.current?.controller.abort();
     };
   }, [refresh, poll]);
 
