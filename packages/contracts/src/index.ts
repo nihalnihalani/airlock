@@ -102,6 +102,13 @@ export const HostCheck = z.object({
   selectedRuntime: RuntimeName,
   /** True only for local development on plain runc. Never true in a deployment. */
   devUnsafe: z.boolean(),
+  /** Checkpoint 3 comparison: the host's own `uname -a` and hostname, beside each guest's. */
+  hostUname: z.string().max(512).optional(),
+  hostHostname: z.string().max(128).optional(),
+  /** "Show me the instance": the Vultr instance id of the execution host, when deployed. */
+  instanceId: z.string().max(128).optional(),
+  /** Image identity the supervisor enforces on every sandbox (`sha256:<id>`), when pinned. */
+  runtimeImageId: z.string().max(128).optional(),
 });
 export type HostCheck = z.infer<typeof HostCheck>;
 
@@ -148,12 +155,26 @@ export const IsolationProbe = z.object({
 });
 export type IsolationProbe = z.infer<typeof IsolationProbe>;
 
+/**
+ * Every Airlock-owned resource on the execution host at one instant. A task-scoped empty listing is
+ * not host-wide zero; "(no sandboxes)" is shown only when `containers` and `volumes` are both empty.
+ */
+export const HostListing = z.object({
+  listedAt: isoDate,
+  scope: z.literal("host"),
+  containers: z.array(z.object({ name: z.string(), taskId: z.string().optional(), role: z.string().optional(), state: z.string().optional() })),
+  volumes: z.array(z.string()),
+});
+export type HostListing = z.infer<typeof HostListing>;
+
 /** Checkpoint 5: after teardown, what the supervisor still owns for this attempt. Must be empty. */
 export const TeardownRecord = z.object({
   destroyedAt: isoDate,
   containersRemaining: z.array(z.string()),
   volumesRemaining: z.array(z.string()),
   clean: z.boolean(),
+  /** The host-wide listing taken right after this teardown. */
+  host: HostListing.optional(),
 });
 export type TeardownRecord = z.infer<typeof TeardownRecord>;
 
@@ -190,6 +211,13 @@ export const Caps = z.object({
   maxFileBytes: z.number().int().positive(),
   maxTotalBytes: z.number().int().positive(),
   maxFiles: z.number().int().positive(),
+  /** Model calls per repair attempt (the task-wide ceiling is `maxModelCalls`). Default: `maxModelCalls`. */
+  maxModelCallsPerAttempt: z.number().int().positive().optional(),
+  /** Model tokens (prompt + completion) per task and per attempt; see `DEFAULT_TOKEN_BUDGET`. */
+  maxTokens: z.number().int().positive().optional(),
+  maxTokensPerAttempt: z.number().int().positive().optional(),
+  /** Controller recoveries (lost lease, restart) before a task ends INCONCLUSIVE. Default 3. */
+  maxRecoveries: z.number().int().positive().optional(),
   /**
    * Hard size of the per-attempt `/workspace` (a size-capped tmpfs volume held by the supervisor;
    * never host disk). Defaults to `DEFAULT_WORKSPACE_BYTES` when a profile omits it.
@@ -202,6 +230,9 @@ export const DEFAULT_WORKSPACE_BYTES = 134217728;
 export function workspaceBytesOf(caps: Pick<Caps, "workspaceBytes">): number {
   return caps.workspaceBytes ?? DEFAULT_WORKSPACE_BYTES;
 }
+/** 2M tokens per task, 1M per attempt: the bounds applied when a profile omits them. */
+export const DEFAULT_TOKEN_BUDGET = { task: 2_000_000, attempt: 1_000_000 } as const;
+export const DEFAULT_MAX_RECOVERIES = 3;
 
 /** `profiles/<id>/profile.json`. The reference commit is maintainer-only and never reaches the agent. */
 export const ProfileManifest = z.object({
@@ -373,7 +404,15 @@ export const CreateAttemptRequest = z.object({
   profileId: plainId,
   role: SandboxRole,
   absoluteDeadline: isoDate,
+  /**
+   * Short renewable execution authorization, capped by `absoluteDeadline`. The controller renews it
+   * while its worker lease is live; expiry revokes dispatch and stops the container like the
+   * deadline does. Absent: authorized until the deadline (older controllers).
+   */
+  authorizedUntil: isoDate.optional(),
 });
+/** Extends an attempt's execution authorization. Never past the deadline; never revives revoked work. */
+export const RenewRequest = z.object({ ref: AttemptRef, operation: Operation, authorizedUntil: isoDate });
 export const AttemptState = z.object({
   ref: AttemptRef,
   role: SandboxRole,
@@ -382,6 +421,7 @@ export const AttemptState = z.object({
   inspection: RuntimeInspection.optional(),
   probe: IsolationProbe.optional(),
   deadline: isoDate,
+  authorizedUntil: isoDate.optional(),
 });
 export type AttemptState = z.infer<typeof AttemptState>;
 
@@ -463,7 +503,13 @@ export const BlastRadiusCard = z.object({
     hostSentinelUnchanged: z.boolean(),
     otherAttemptsRunning: z.number().int().nonnegative(),
     hostUptimeSeconds: z.number().nonnegative(),
+    /** Each other live attempt, checked before and after the hostile run (not just a count). */
+    siblings: z.array(z.object({ attemptId: z.string(), taskId: z.string(), runningBefore: z.boolean(), runningAfter: z.boolean() })).optional(),
+    /** Filled by the control plane: its own health around the run. */
+    controlPlane: z.object({ healthyBefore: z.boolean(), healthyAfter: z.boolean(), checkedAt: isoDate }).optional(),
   }),
+  /** Scratch files written into the hostile sandbox's workspace before the command, and how many remained after it. */
+  workspace: z.object({ filesBefore: z.number().int().nonnegative(), filesAfter: z.number().int().nonnegative().nullable() }).optional(),
   teardown: TeardownRecord,
 });
 export type BlastRadiusCard = z.infer<typeof BlastRadiusCard>;
@@ -505,6 +551,8 @@ export const VerificationRecord = z.object({
   runtimeProfile: RuntimeProfileRecord,
   /** For baseline: did the reported failure reproduce. For candidate: did all cases pass. */
   passed: z.boolean(),
+  /** The comparator's verdict in words (records before this field carry only `passed`). */
+  outcome: z.enum(["REPRODUCED", "NOT_REPRODUCED", "INCONCLUSIVE", "PASSED_CHECKS", "CHECKS_FAILED"]).optional(),
   createdAt: isoDate,
 });
 export type VerificationRecord = z.infer<typeof VerificationRecord>;
@@ -555,7 +603,23 @@ export type ExportGrant = z.infer<typeof ExportGrant>;
 export const Budget = z.object({
   modelCallsUsed: z.number().int().nonnegative(),
   repairAttemptsUsed: z.number().int().nonnegative(),
+  /** Prompt + completion tokens charged so far (a conservative estimate when usage is absent). */
+  tokensUsed: z.number().int().nonnegative().optional(),
+  /** Model calls and tokens charged to the current attempt. */
+  attemptModelCalls: z.number().int().nonnegative().optional(),
+  attemptTokens: z.number().int().nonnegative().optional(),
+  /** Controller recoveries (lost lease, restart, verify crash) so far. */
+  recoveries: z.number().int().nonnegative().optional(),
 });
+
+/** One sealed candidate and its external comparison; a task may produce one per repair attempt. */
+export const CandidateAttempt = z.object({
+  attemptId: plainId,
+  candidateDigest: sha256Hex,
+  verificationRecordId: plainId.optional(),
+  outcome: z.enum(["PASSED_CHECKS", "CHECKS_FAILED", "INCONCLUSIVE"]).optional(),
+});
+export type CandidateAttempt = z.infer<typeof CandidateAttempt>;
 
 export const Task = z.object({
   id: plainId,
@@ -581,6 +645,13 @@ export const Task = z.object({
   baselineRecordId: plainId.optional(),
   candidateDigest: sha256Hex.optional(),
   verificationRecordId: plainId.optional(),
+  /** Every candidate this task sealed, in order; the last is `candidateDigest`. */
+  candidates: z.array(CandidateAttempt).optional(),
+  /**
+   * Set when the task was created while live repair was not backed by current evidence: it runs
+   * reproduction and baseline only, and ends without a repair attempt. Never set on diagnostics.
+   */
+  repairDisabledReason: z.string().max(1024).optional(),
   createdAt: isoDate,
   updatedAt: isoDate,
 });
@@ -683,6 +754,56 @@ export const ContractCaseTitle = z.object({
 });
 export type ContractCaseTitle = z.infer<typeof ContractCaseTitle>;
 
+/**
+ * Whether the live repair promise is currently backed by evidence (a committed live-gate receipt
+ * matching the running profile, model and runtime). When not, the UI offers diagnosis only.
+ */
+export const RepairAvailability = z.object({
+  available: z.boolean(),
+  reason: z.string().max(1024),
+  driver: z.string(),
+  model: z.string().optional(),
+  runtime: RuntimeName.optional(),
+  evidence: z
+    .object({ path: z.string(), passed: z.number().int().nonnegative(), attempts: z.number().int().nonnegative(), revision: z.string(), recordedAt: isoDate, model: z.string(), runtime: z.string(), profileId: z.string(), contractDigest: sha256Hex })
+    .optional(),
+  /** Vultr instance ids of the control plane and the execution host, when deployed. */
+  instances: z.object({ control: z.string().optional(), execution: z.string().optional() }).optional(),
+});
+export type RepairAvailability = z.infer<typeof RepairAvailability>;
+
+/**
+ * A committed live-gate receipt (`docs/evidence/live-gate/*.json`): fresh live Vultr repair attempts
+ * judged by the external comparator. Provenance is checked from the run's own events (driver,
+ * inference host), never from a supplied model name.
+ */
+export const LiveGateReceipt = z.object({
+  schemaVersion: z.literal(SCHEMA_VERSION),
+  recordedAt: isoDate,
+  revision: z.string().max(64),
+  profileId: plainId,
+  contractDigest: sha256Hex,
+  driver: z.literal("vultr"),
+  model: z.string().max(128),
+  inferenceHost: z.literal("api.vultrinference.com"),
+  runtime: RuntimeName,
+  devUnsafe: z.literal(false),
+  runtimeImageId: z.string().max(128).optional(),
+  attempts: z.array(
+    z.object({
+      taskId: plainId,
+      outcome: z.string().max(64),
+      candidateDigest: sha256Hex.optional(),
+      modelCalls: z.number().int().nonnegative(),
+      modelHosts: z.array(z.string().max(256)),
+      durationMs: z.number().int().nonnegative(),
+    }),
+  ),
+  passed: z.number().int().nonnegative(),
+  total: z.number().int().nonnegative(),
+});
+export type LiveGateReceipt = z.infer<typeof LiveGateReceipt>;
+
 export const TaskView = z.object({
   task: Task,
   baseline: VerificationRecord.optional(),
@@ -729,7 +850,7 @@ export async function sha256(text: string | Uint8Array): Promise<string> {
 export async function candidateDigestOf(manifest: SourceManifest): Promise<string> {
   const sorted: SourceManifest = {
     ...manifest,
-    replacements: [...manifest.replacements].sort((a, b) => a.path.localeCompare(b.path)),
+    replacements: [...manifest.replacements].sort((a, b) => compareCodePoints(a.path, b.path)),
   };
   return sha256(canonicalJson(sorted));
 }
@@ -738,4 +859,21 @@ export async function candidateDigestOf(manifest: SourceManifest): Promise<strin
 export async function requestDigestOf(body: Record<string, unknown>): Promise<string> {
   const { operation, ...rest } = body as { operation?: { operationId: string } };
   return sha256(canonicalJson({ ...rest, operation: { operationId: operation?.operationId } }));
+}
+
+/**
+ * Locale-independent ordering by Unicode code point: the one ordering for every digest input.
+ * (`localeCompare` depends on the process locale; UTF-16 `<` misorders astral characters.)
+ */
+export function compareCodePoints(a: string, b: string): number {
+  const ia = a[Symbol.iterator]();
+  const ib = b[Symbol.iterator]();
+  for (;;) {
+    const x = ia.next();
+    const y = ib.next();
+    if (x.done || y.done) return x.done && y.done ? 0 : x.done ? -1 : 1;
+    const cx = x.value.codePointAt(0)!;
+    const cy = y.value.codePointAt(0)!;
+    if (cx !== cy) return cx < cy ? -1 : 1;
+  }
 }
