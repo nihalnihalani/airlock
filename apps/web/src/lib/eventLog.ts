@@ -2,9 +2,16 @@
  * Pure event-log state: bounded, deduplicated by `seq`, always sorted. The SSE hook feeds it and
  * components read it; keeping it pure makes reconnect/replay behavior testable without a DOM.
  */
-import { RunEvent } from "@airlock/contracts";
+import { EventKind, RunEvent } from "@airlock/contracts";
 
 export const MAX_EVENTS = 4000;
+
+/**
+ * SSE event names that carry a RunEvent. The control API names each event after its `kind`
+ * (`event: phase`, `event: exec`, …), and EventSource delivers a named event only to a listener
+ * registered for that name, never to `onmessage`; unnamed `message` events are accepted too.
+ */
+export const RUN_EVENT_NAMES: readonly string[] = [...EventKind.options, "message"];
 /** RunEvent.detail is capped at 64 KiB by the contract; allow headroom for the envelope. */
 export const MAX_PAYLOAD_CHARS = 96 * 1024;
 

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { RunEvent } from "@airlock/contracts";
-import { appendEvents, emptyLog, MAX_EVENTS, MAX_PAYLOAD_CHARS, parseEventPayload } from "../src/lib/eventLog";
+import { appendEvents, emptyLog, MAX_EVENTS, MAX_PAYLOAD_CHARS, parseEventPayload, RUN_EVENT_NAMES } from "../src/lib/eventLog";
 
 function ev(seq: number, kind: RunEvent["kind"] = "info"): RunEvent {
   return {
@@ -58,5 +58,17 @@ describe("appendEvents", () => {
     expect(log.dropped).toBe(25);
     expect(log.events[0]?.seq).toBe(25);
     expect(log.lastSeq).toBe(MAX_EVENTS + 24);
+  });
+});
+
+describe("RUN_EVENT_NAMES", () => {
+  test("covers every RunEvent kind the control API names its SSE events after", () => {
+    for (const kind of ["phase", "model", "tool", "exec", "check", "artifact", "lifecycle", "error", "info"]) {
+      expect(RUN_EVENT_NAMES).toContain(kind);
+    }
+    expect(RUN_EVENT_NAMES).toContain("message");
+    // `task` (a snapshot) and `end` are control frames, not RunEvents.
+    expect(RUN_EVENT_NAMES).not.toContain("task");
+    expect(RUN_EVENT_NAMES).not.toContain("end");
   });
 });

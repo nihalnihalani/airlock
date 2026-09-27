@@ -8,7 +8,7 @@
  * - `status` is visible in the UI so a stalled or dead stream is never mistaken for "no news".
  */
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import { appendEvents, emptyLog, noteMalformed, parseEventPayload, type EventLog } from "../lib/eventLog";
+import { appendEvents, emptyLog, noteMalformed, parseEventPayload, RUN_EVENT_NAMES, type EventLog } from "../lib/eventLog";
 import type { RunEvent } from "@airlock/contracts";
 
 export type StreamStatus = "idle" | "connecting" | "open" | "reconnecting" | "closed" | "ended" | "unsupported";
@@ -107,13 +107,15 @@ export function useTaskEvents(taskId: string | null, active: boolean, autoReconn
       setStatus("open");
       setNote(null);
     };
-    source.onmessage = (msg: MessageEvent<unknown>) => {
+    const onRunEvent = (msg: MessageEvent<unknown>) => {
       if (disposed) return;
       const data = typeof msg.data === "string" ? msg.data : "";
       const parsed = parseEventPayload(data);
       if (parsed.ok) enqueue(parsed.event);
       else dispatch({ type: "malformed" });
     };
+    // Named events (`event: <kind>`) never reach `onmessage`; listen for each kind by name.
+    for (const name of RUN_EVENT_NAMES) source.addEventListener(name, onRunEvent as EventListener);
     // Optional named terminal event. If the server never sends it, nothing changes.
     source.addEventListener("end", () => {
       if (disposed) return;
