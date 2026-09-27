@@ -123,6 +123,8 @@ export const RuntimeInspection = z.object({
   runtime: RuntimeName,
   devUnsafe: z.boolean(),
   imageDigest: z.string(),
+  /** The effective local image id (`sha256:…`), always comparable with HostCheck.runtimeImageId. */
+  imageId: z.string().max(128).optional(),
   /** Checkpoint 3: read from inside the sandbox. Untrusted text, bounded. */
   guestUname: z.string().max(512),
   guestHostname: z.string().max(128),
@@ -805,7 +807,9 @@ export const LiveGateReceipt = z.object({
   inferenceHost: z.literal("api.vultrinference.com"),
   runtime: RuntimeName,
   devUnsafe: z.literal(false),
-  runtimeImageId: z.string().max(128).optional(),
+  /** Bound identities: a receipt backs repair only for this exact image and adapter. */
+  runtimeImageId: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  adapterDigest: sha256Hex,
   attempts: z.array(
     z.object({
       taskId: plainId,
