@@ -74,9 +74,16 @@ if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
   echo "runtime image $IMAGE is missing; building it (runtime/python/build.sh tabulate-365)"
   "$ROOT/runtime/python/build.sh" tabulate-365 >/dev/null
 fi
-if [[ ! -f "$AIRLOCK_WEB_DIST/index.html" ]]; then
-  echo "apps/web/dist missing; building the web UI"
+# Always rebuild the web UI: dist/ is gitignored and depends on apps/web/src, packages/contracts,
+# vite.config.ts and the lockfile, so a dist left from an earlier checkout would silently serve a
+# stale bundle after a pull. The build takes about a second, and the control plane reads dist
+# files per request, so this is right even when the stack is already running.
+if [[ "$AIRLOCK_WEB_DIST" == "$ROOT/apps/web/dist" ]]; then
+  echo "building the web UI into apps/web/dist"
   (cd "$ROOT/apps/web" && bunx vite build >/dev/null)
+elif [[ ! -f "$AIRLOCK_WEB_DIST/index.html" ]]; then
+  echo "AIRLOCK_WEB_DIST=$AIRLOCK_WEB_DIST has no index.html; build it first (bun run --cwd apps/web build)" >&2
+  exit 2
 fi
 
 # --- idempotent start -----------------------------------------------------------------------------
