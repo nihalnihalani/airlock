@@ -2,10 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { loadScriptedTurns, openScriptedCatalog } from "../src/scripted.ts";
 import { createScriptedDriver } from "../src/vultr-client.ts";
 
-const fixtures = new URL("./fixtures/scripted/", import.meta.url).pathname;
+// fileURLToPath, not URL.pathname: a checkout path with a space would otherwise read as %20.
+const fixtures = fileURLToPath(new URL("./fixtures/scripted/", import.meta.url));
 
 describe("scripted catalog", () => {
   test("directory lists the fixtures; contentFile is inlined; a fresh driver replays per task", async () => {
