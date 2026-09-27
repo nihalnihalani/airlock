@@ -332,7 +332,11 @@ export class Supervisor {
     this.deadlineTimers.set(record.attemptId, timer);
   }
 
-  /** The absolute deadline: revoke and stop regardless of the caller. */
+  /**
+   * The absolute deadline: revoke and stop regardless of the caller. Like `revoke`, the stop is
+   * confirmed by inspection; a stop that fails or is not confirmed leaves the row `unknown` (visible,
+   * dispatch closed) and the janitor keeps retrying the stop (CLAUDE.md §3.5).
+   */
   async expire(attemptId: string): Promise<void> {
     await this.withLock(attemptId, async () => {
       const record = this.journal.getAttempt(attemptId);
@@ -340,8 +344,26 @@ export class Supervisor {
       this.log(`attempt ${attemptId}: deadline reached; revoking and stopping`);
       this.journal.revoke(attemptId, "revoked");
       this.closeDispatch(attemptId);
-      await this.api.stopContainer(record.container, STOP_SECONDS);
+      await this.stopAndConfirm(record, "deadline");
     });
+  }
+
+  /** Stop a revoked attempt's container and confirm it; on failure or an unconfirmed stop, mark `unknown`. */
+  private async stopAndConfirm(record: AttemptRecord, reason: string): Promise<boolean> {
+    try {
+      await this.api.stopContainer(record.container, STOP_SECONDS);
+      const detail = await this.api.inspectContainer(record.container);
+      if (detail?.state.running) {
+        this.journal.updateAttempt(record.attemptId, { status: "unknown" });
+        this.log(`attempt ${record.attemptId}: container still running after ${reason} stop; marked unknown`);
+        return false;
+      }
+      return true;
+    } catch (error) {
+      this.journal.updateAttempt(record.attemptId, { status: "unknown" });
+      this.log(`attempt ${record.attemptId}: stop after ${reason} failed: ${describe(error)}; marked unknown`);
+      return false;
+    }
   }
 
   async createAttempt(body: CreateAttemptRequest): Promise<OperationResponse> {
@@ -708,6 +730,23 @@ export class Supervisor {
     const report = { expired: [] as string[], destroyed: [] as string[], removedUnknown: [] as string[] };
     const nowMs = Date.now();
     const nowIso = new Date(nowMs).toISOString();
+
+    // A revoked row whose stop was never confirmed (`unknown`) keeps getting its stop retried until
+    // the container is confirmed stopped; only then is it recorded `stopped`.
+    for (const record of this.journal.listAttempts()) {
+      if (!record.revoked || record.status !== "unknown") continue;
+      await this.withLock(record.attemptId, async () => {
+        const current = this.journal.getAttempt(record.attemptId);
+        if (!current || current.status !== "unknown") return;
+        const detail = await this.api.inspectContainer(current.container);
+        if (!detail?.state.running) return;
+        this.log(`attempt ${current.attemptId}: unknown and still running; retrying the stop`);
+        if (await this.stopAndConfirm(current, "janitor")) {
+          this.journal.updateAttempt(current.attemptId, { status: "stopped" });
+          report.expired.push(current.attemptId);
+        }
+      });
+    }
 
     for (const record of this.journal.expiredAttempts(nowIso)) {
       if (!record.revoked) {

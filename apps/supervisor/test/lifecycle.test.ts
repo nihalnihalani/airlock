@@ -222,6 +222,31 @@ describe("lifecycle", () => {
     core.stop();
   });
 
+  test("a deadline stop that fails is recorded `unknown` (not a completed revoke) and the janitor retries the stop", async () => {
+    const docker = new FakeDocker(defaultHandler());
+    const { core, journal } = makeCore(docker);
+    const base = { ref: REF, profileId: PROFILE.id, role: "author" as const, absoluteDeadline: future(250) };
+    await core.createAttempt({ ...base, operation: await operationFor("create-deadline-fail", base) });
+    docker.stopError = (name) => (name === "airlocktest-author-task1-att1" ? Object.assign(new Error("docker unavailable"), { statusCode: 500 }) : undefined);
+    await new Promise((r) => setTimeout(r, 500));
+    const failed = journal.getAttempt("att1");
+    expect(failed?.revoked).toBe(true);
+    expect(failed?.status).toBe("unknown");
+    expect(docker.containers.get("airlocktest-author-task1-att1")?.running).toBe(true);
+    expect(docker.calls.filter((c) => c.startsWith("stopContainer airlocktest-author-task1-att1")).length).toBe(1);
+    // Dispatch is closed either way.
+    const late = await core.authorTool(REF, await operationFor("tool-late", { ref: REF, args: { kind: "exec" as const, command: "echo hi" } }), { kind: "exec", command: "echo hi" }).catch((e) => e as SupervisorError);
+    expect((late as SupervisorError).code).toBe("revoked");
+    // Docker is back: the janitor re-stops the container and only then records the stop as confirmed.
+    docker.stopError = undefined;
+    await core.janitor();
+    expect(docker.calls.filter((c) => c.startsWith("stopContainer airlocktest-author-task1-att1")).length).toBe(2);
+    expect(docker.containers.get("airlocktest-author-task1-att1")?.running).toBe(false);
+    expect(journal.getAttempt("att1")?.status).toBe("stopped");
+    expect(journal.getAttempt("att1")?.revoked).toBe(true);
+    core.stop();
+  });
+
   test("the absolute deadline revokes and stops regardless of the caller", async () => {
     const docker = new FakeDocker(defaultHandler());
     const { core, journal } = makeCore(docker);

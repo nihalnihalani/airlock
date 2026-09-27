@@ -138,8 +138,12 @@ export class FakeDocker implements DockerApi {
     if (!c) throw Object.assign(new Error("no such container"), { statusCode: 404 });
     c.running = true;
   }
+  /** When set, `stopContainer` throws this for the named container instead of stopping it (Docker API fault). */
+  stopError: ((name: string) => Error | undefined) | undefined;
   async stopContainer(name: string, timeoutSeconds: number) {
-    this.record(`stopContainer ${name} t=${timeoutSeconds}`);
+    const error = this.stopError?.(name);
+    this.record(`stopContainer ${name} t=${timeoutSeconds}${error ? " (FAIL)" : ""}`);
+    if (error) throw error;
     const c = this.containers.get(name);
     if (c) c.running = false;
   }
