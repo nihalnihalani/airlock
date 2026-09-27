@@ -33,7 +33,7 @@ interface Ctx {
   close: () => Promise<void>;
 }
 
-async function makeCtx(options: { withWorker?: boolean; now?: () => number; webDist?: string } = {}): Promise<Ctx> {
+async function makeCtx(options: { withWorker?: boolean; now?: () => number; webDist?: string; trustProxy?: boolean } = {}): Promise<Ctx> {
   const supervisor = new FakeSupervisor({ profile: fixture.profile, observe: fixtureObserve });
   let harness: Harness | null = null;
   let store: Store;
@@ -70,6 +70,7 @@ async function makeCtx(options: { withWorker?: boolean; now?: () => number; webD
     ssePollMs: 20,
     ...(options.now ? { now: options.now } : {}),
     ...(options.webDist ? { webDist: options.webDist } : {}),
+    ...(options.trustProxy ? { trustProxy: true } : {}),
   });
   return { app, store, supervisor, artifacts, harness, bus, close: async () => (harness ? harness.close() : store.close()) };
 }
@@ -107,6 +108,32 @@ describe("sessions", () => {
       expect(await (await ctx.app.request("/api/session", { headers: { cookie: op } })).json()).toEqual({ role: "viewer" });
       // Tampered cookie value never resolves.
       expect(await (await ctx.app.request("/api/session", { headers: { cookie: "airlock_session=../../x" } })).json()).toEqual({ role: "viewer" });
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  test("login rate limit cannot be evaded by rotating X-Forwarded-For (proxy headers are ignored unless trusted)", async () => {
+    const ctx = await makeCtx();
+    try {
+      let last = 0;
+      for (let i = 0; i < 12; i++) last = (await ctx.app.request("/api/session", { ...json({ password: "wrong-wrong" }), headers: { "content-type": "application/json", "x-forwarded-for": `10.0.0.${i}`, "x-real-ip": `10.1.0.${i}` } })).status;
+      expect(last).toBe(429);
+      // A correct password on a locked-out key is refused too: no guessing budget beyond the limit.
+      expect((await ctx.app.request("/api/session", { ...json({ password: OPERATOR }), headers: { "content-type": "application/json", "x-forwarded-for": "10.0.0.99" } })).status).toBe(429);
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  test("with a trusted proxy the limit is keyed on the rightmost X-Forwarded-For hop, so a rotating client-supplied leftmost entry does not evade it", async () => {
+    const ctx = await makeCtx({ trustProxy: true });
+    try {
+      let last = 0;
+      for (let i = 0; i < 12; i++) last = (await ctx.app.request("/api/session", { ...json({ password: "wrong-wrong" }), headers: { "content-type": "application/json", "x-forwarded-for": `10.0.0.${i}, 203.0.113.7` } })).status;
+      expect(last).toBe(429);
+      // Another client behind the same proxy has its own budget.
+      expect((await ctx.app.request("/api/session", { ...json({ password: "wrong-wrong" }), headers: { "content-type": "application/json", "x-forwarded-for": "10.0.0.1, 203.0.113.8" } })).status).toBe(401);
     } finally {
       await ctx.close();
     }

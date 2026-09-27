@@ -100,7 +100,9 @@ async function main() {
     hostileMinIntervalMs: config.hostileMinIntervalMs,
     scriptedDrivers,
     webDist: config.webDist,
+    trustProxy: config.trustProxy,
   });
+  if (config.trustProxy) console.log({ timestamp: new Date().toISOString(), message: "AIRLOCK_TRUST_PROXY=1: the login rate limit keys on the reverse proxy's X-Forwarded-For hop" });
   if (config.webDist) console.log({ timestamp: new Date().toISOString(), message: "serving web UI", dir: config.webDist });
   else console.warn("no web UI directory (apps/web/dist); only /api is served. Build it with: bun run --cwd apps/web build");
 

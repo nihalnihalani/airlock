@@ -28,6 +28,7 @@ bunx tsc --noEmit -p tsconfig.json  # from apps/control
 | `PORT` / `CONTROL_BIND` | no | `3000` / `0.0.0.0` | Listener. |
 | `AIRLOCK_WEB_DIST` | no | `<repo>/apps/web/dist` | Built web UI served at `/` (SPA fallback to `index.html`); `/api/*` always takes precedence. Unset and missing → only `/api` is served (logged). `none` disables. |
 | `AIRLOCK_INSECURE_COOKIES` | no | unset | `1` drops the cookie `Secure` flag for plain-http local development only. |
+| `AIRLOCK_TRUST_PROXY` | no | unset | `1` only when a reverse proxy in front of this process sets `X-Forwarded-For`: the login rate limit then keys on the proxy's (rightmost) hop. Unset, those headers are ignored as attacker-supplied and the limit keys on the socket peer address. |
 | `AIRLOCK_SESSION_TTL_MS`, `AIRLOCK_EXPORT_GRANT_TTL_MS`, `AIRLOCK_HOSTILE_MIN_INTERVAL_MS` | no | 12 h, 24 h, 10 s | Lifetimes and the per-session hostile-run rate limit. |
 
 Start-up refuses on a missing token, a missing key for the vultr driver, an unreadable profiles
@@ -52,7 +53,7 @@ Cookie `airlock_session` (HttpOnly, SameSite=Strict, sha256 of the token stored)
 
 | Route | Role | Notes |
 |---|---|---|
-| `POST /api/session {password}` → `{role}` | any | Login; rate limited per client (10/min). `DELETE` logs out; `GET` returns the current role. |
+| `POST /api/session {password}` → `{role}` | any | Login; rate limited per client (10/min), keyed on the socket peer address (or the trusted proxy's `X-Forwarded-For` hop with `AIRLOCK_TRUST_PROXY=1`); a client-supplied header never opens a fresh budget. `DELETE` logs out; `GET` returns the current role. |
 | `GET /api/profiles` | any | `ProfileManifest[]` without the maintainer commit. |
 | `GET /api/host` | any | Supervisor `HostCheck`. |
 | `POST /api/tasks` `CreateTaskRequest` → `Task` (201) | operator, judge | Profile must be loaded (422 otherwise). |

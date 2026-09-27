@@ -25,6 +25,7 @@ export interface Config {
   webDist: string | null;
   /** Cookie `Secure` flag; true unless AIRLOCK_INSECURE_COOKIES=1 (local http). */
   secureCookies: boolean;
+  trustProxy: boolean;
   sessionTtlMs: number;
   exportGrantTtlMs: number;
   hostileMinIntervalMs: number;
@@ -114,6 +115,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     driver,
     vultr: { apiKey, baseUrl, model },
     secureCookies: env.AIRLOCK_INSECURE_COOKIES !== "1",
+    trustProxy: env.AIRLOCK_TRUST_PROXY?.trim() === "1",
     sessionTtlMs: intEnv(env, "AIRLOCK_SESSION_TTL_MS", 12 * 60 * 60 * 1000, 60_000, 30 * 24 * 60 * 60 * 1000),
     exportGrantTtlMs: intEnv(env, "AIRLOCK_EXPORT_GRANT_TTL_MS", 24 * 60 * 60 * 1000, 60_000, 30 * 24 * 60 * 60 * 1000),
     hostileMinIntervalMs: intEnv(env, "AIRLOCK_HOSTILE_MIN_INTERVAL_MS", 10_000, 0, 3_600_000),

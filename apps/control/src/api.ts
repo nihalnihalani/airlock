@@ -74,6 +74,12 @@ export interface ApiDeps {
   scriptedDrivers?: string[] | null;
   /** Built web UI directory served for every non-/api GET (SPA fallback to index.html). */
   webDist?: string | null;
+  /**
+   * Only when a reverse proxy in front of this process is known to overwrite/append
+   * X-Forwarded-For does the login limiter key on the proxy's (rightmost) hop; otherwise those
+   * headers are attacker-supplied and the socket peer address is used.
+   */
+  trustProxy?: boolean;
   now?: () => number;
   /** SSE poll interval (ms) as a safety net behind the bus. */
   ssePollMs?: number;
@@ -151,7 +157,29 @@ export function createApp(deps: ApiDeps) {
     const { referenceCommitMaintainerOnly: _omit, ...rest } = m;
     return rest;
   };
-  const clientKey = (c: Context<Env>) => c.req.header("x-forwarded-for")?.split(",")[0]?.trim() || c.req.header("x-real-ip") || "local";
+  // The login limiter's key. X-Forwarded-For / X-Real-IP are client-controlled unless a trusted
+  // proxy sets them, and even then only the hop the proxy appended (the rightmost) is its word;
+  // rotating the leftmost entry must not buy a fresh budget. Without a trusted proxy the key is
+  // the socket peer address (Bun's server.requestIP); when that is unknown every client shares
+  // one bucket, which fails closed rather than open.
+  const peerAddress = (c: Context<Env>): string | null => {
+    const server = c.env as { requestIP?: (req: Request) => { address: string } | null } | undefined;
+    try {
+      const ip = server?.requestIP?.(c.req.raw)?.address;
+      return typeof ip === "string" && ip.length > 0 ? ip.slice(0, 128) : null;
+    } catch {
+      return null;
+    }
+  };
+  const clientKey = (c: Context<Env>): string => {
+    if (deps.trustProxy) {
+      const hops = (c.req.header("x-forwarded-for") ?? "").split(",").map((h) => h.trim()).filter(Boolean);
+      const hop = hops.at(-1) ?? c.req.header("x-real-ip")?.trim();
+      if (hop) return `proxy:${hop.slice(0, 128)}`;
+    }
+    const peer = peerAddress(c);
+    return peer ? `peer:${peer}` : "unknown";
+  };
 
   // ---- session --------------------------------------------------------------------------------
   app.post("/api/session", async (c) => {
