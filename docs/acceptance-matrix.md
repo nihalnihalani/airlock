@@ -121,3 +121,63 @@ The rows above are the verifier's results at the recorded revisions and are unch
 | DA R1 form submissions on non-adapter sites not refused | runner mutation guard + worker removal | 31bf40f, 179542f; real Chromium on httpbin + in-image harness |
 
 A re-run of `scripts/acceptance/local.ts` at the final revision is the next local step; Vultr rows stay BLOCKED until access is available.
+
+## Re-run at `c39340c`: 2026-09-27, verifier_tester
+
+**Revision:** `c39340c6091a32ff8203fba5fd205bccac8614fd` (HEAD).
+
+**How it was run:**
+- The stack ran from a `git archive` export of HEAD, with `bun install` and **nothing copied in**. The export was taken fresh, the stack was started from it, and it was stopped after the run.
+- All child processes had a clean environment: `env -i`, and the driver ran from the export directory so Bun did not load the repo `.env`.
+- Images: `airlock-browser:dev` was rebuilt from the export's `runtime/browser` and gave the identical id `sha256:edeea738…`, so it matches HEAD. `airlock-egress:dev` is `sha256:4be8332c…`, and `runtime/` is otherwise unchanged.
+
+**Evidence:** `docs/evidence/local/run-c39340c/` (per-row JSON plus `results.json`) and `docs/evidence/local/unit/at-c39340c/`.
+
+**Scope:** every row is either real local runc (dev-unsafe) or unit, with the scripted driver only. Every Vultr and live-model row from the sections above (A11, A16, A23, A24, D1, D2, D5 live, D9, D14 public URL and video) stays **BLOCKED**. Nothing here measures a deployment.
+
+### Integration: 18 PASS, 0 FAIL
+
+| Row | Requirement | Environment | Time (UTC) | Result | Evidence (`run-c39340c/`) |
+|---|---|---|---|---|---|
+| A1 | fresh CSV → analysis → outputs match their sha256; the input change is reflected | real local runc | 10:32:12 | PASS | `A1-analysis-fresh-csv.json` |
+| A2 | web-research on example.com, screenshot is a valid PNG | real local runc | 10:32:20 | PASS | `B1-web-research-example-com.json` |
+| A9/A15 | browser egress refusals and stale ref (agent path) | real local runc | 10:32:28 | PASS | `K4-browser-egress-and-stale-ref.json` |
+| A3 | repair diagnostic, forged log, sealed export | real local runc | 10:32:47 | PASS | `C1-repair-diagnostic-forged-export.json` |
+| A4 | two-judge isolation (404) | real local runc | 10:32:47 | PASS | `T1-two-judge-isolation.json` |
+| A5 | SSE close/reopen replay | real local runc | 10:32:59 | PASS | `T2-sse-close-reopen-replay.json` |
+| A6 | cancel mid-run (repair) | real local runc | 10:33:42 | PASS | `T3-cancel-mid-run-repair.json` |
+| A7 | cancel mid-run (browser) | real local runc | 10:33:58 | PASS | `T4-cancel-mid-run-browser.json` |
+| A8/A9/A15 | takeover, human stale ref, proxy deny of iana.org, no secrets in container Env | real local runc | 10:34:26 | PASS | `T5-takeover-and-stale-ref.json` |
+| A10 | proposals: 409, 409, 410, reject | real local runc | 10:35:36 | PASS | `T6-proposal-decide-semantics.json` |
+| A12/A14 | hostile panel (5 commands), health, no secrets | real local runc | 10:36:26 | PASS | `K1-hostile-panel.json` |
+| A13 | fork bomb with a running sibling | real local runc | 10:37:08 | PASS | `K2-hostile-with-running-sibling.json` |
+| A19 | timeout cleanup | real local runc | 10:37:49 | PASS | `K3-timeout-cleanup.json` |
+| A21 | unsupported capabilities labelled; arbitrary-site submit refused | real local runc | 10:37:57 | PASS | `D1-unsupported-labelled-and-refused.json` |
+| **A25 (new)** | **Browser mutation guard (DA R1).** `egressAllow: ["httpbin.org"]`. **Human path:** clicking "Submit order" on `https://httpbin.org/forms/post` produces a runner `mutation_blocked` event (`POST https://httpbin.org/post`, count 1); the page never reaches httpbin's `/post` echo; a `GET https://httpbin.org/get` on the same site still returns 200. **Agent path:** the scripted `browser_click` on the same ref completes, the blocked mutation is recorded in the task's events, and the task ends `RESULT_VERIFIED` with cleanup `confirmed`. | real local runc | 10:38:24 | PASS | `M1-browser-mutation-guard.json` |
+| A17 | supervisor restart during an author attempt | real local runc | 10:39:54 | PASS | `K5-supervisor-restart-during-author.json` |
+| **A26 (new)** | **F3 sweep.** The supervisor was SIGKILLed during the author command and kept down, so the task ended `done/INCONCLUSIVE` with cleanup `failed`, and the container was still on the host. After a clean restart, cleanup went `retrying` → `confirmed` **11 s later** ("supervisor confirmed teardown of 1 attempt(s) on cleanup retry 1"). Status and outcome were unchanged, and the host was empty (no containers or volumes in the dev namespace). | real local runc | 10:40:23 | PASS | `K7-finished-task-cleanup-sweep.json` |
+| A20 | final host cleanup (containers, networks, volumes, `/listing` all empty) | real local runc | 10:40:26 | PASS | `K6-final-host-cleanup.json` |
+
+### Unit suites at `c39340c`: 10 PASS, 0 FAIL
+
+All suites ran from the fresh export (`unit/at-c39340c/`):
+
+| Suite | Result |
+|---|---|
+| apps/control | 384 pass / 0 fail |
+| apps/supervisor (real Docker) | 207 pass / 0 fail |
+| apps/web | 126 pass / 0 fail |
+| apps/egress | 35 pass / 0 fail |
+| apps/fixtures | 41 pass / 0 fail, from a fresh checkout with no files copied in: **F1 is confirmed fixed** |
+| scripts | 11 pass / 0 fail |
+| runtime/browser (`node --test`) | 27 pass / 0 fail |
+| pytest | 134 passed, 3 skipped (reference clone absent, APFS, case-insensitive file system) |
+| typecheck | clean |
+
+### Status of the earlier findings at `c39340c`
+
+| Finding | Status | Evidence |
+|---|---|---|
+| F1 | resolved | fresh-export fixtures suite passes and the fixtures service starts |
+| F2 | resolved | supervisor suite 207/207 |
+| F3 | resolved | A26 |

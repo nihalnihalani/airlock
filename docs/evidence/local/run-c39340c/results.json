@@ -1,0 +1,1073 @@
+{
+  "updatedAt": "2026-09-27T10:40:26.819Z",
+  "revision": "c39340c6091a32ff8203fba5fd205bccac8614fd",
+  "dirtyTree": null,
+  "rows": [
+    {
+      "id": "A1-analysis-fresh-csv",
+      "requirement": "Useful work (a): fresh CSV upload → general analysis task → summary.json + chart.png downloaded via /api/artifacts match recorded sha256; summary reflects the fresh input; changed input → changed output",
+      "command": "bun scripts/acceptance/local.ts A1-analysis-fresh-csv",
+      "environment": "real local runc (dev-unsafe, Colima); stack = git archive of c39340c6091a",
+      "timestamp": "2026-09-27T10:32:12.661Z",
+      "revision": "c39340c6091a32ff8203fba5fd205bccac8614fd",
+      "result": "PASS",
+      "evidence": "docs/evidence/local/run-c39340c/A1-analysis-fresh-csv.json",
+      "checks": [
+        {
+          "ok": true,
+          "what": "run1: upload → 201"
+        },
+        {
+          "ok": true,
+          "what": "run1: upload sha256 recorded = sha256(bytes sent)"
+        },
+        {
+          "ok": true,
+          "what": "run1: create general analysis task → 201 "
+        },
+        {
+          "ok": true,
+          "what": "run1: task-06dcbe3375f98a0d done/RESULT_VERIFIED (done/RESULT_VERIFIED)"
+        },
+        {
+          "ok": true,
+          "what": "run1: cleanup confirmed (confirmed)"
+        },
+        {
+          "ok": true,
+          "what": "run1: /api/artifacts/art-92f66970b6dbc9ee8312 (chart.png) bytes sha256 = recorded 279a53e59a98"
+        },
+        {
+          "ok": true,
+          "what": "run1: /api/tasks/:id/artifacts/art-92f66970b6dbc9ee8312 bytes identical"
+        },
+        {
+          "ok": true,
+          "what": "run1: /api/artifacts/art-af58b3d6a7e3132c9ab1 (summary.json) bytes sha256 = recorded 70f944219d09"
+        },
+        {
+          "ok": true,
+          "what": "run1: /api/tasks/:id/artifacts/art-af58b3d6a7e3132c9ab1 bytes identical"
+        },
+        {
+          "ok": true,
+          "what": "run2: upload → 201"
+        },
+        {
+          "ok": true,
+          "what": "run2: upload sha256 recorded = sha256(bytes sent)"
+        },
+        {
+          "ok": true,
+          "what": "run2: create general analysis task → 201 "
+        },
+        {
+          "ok": true,
+          "what": "run2: task-5d44c0c3566ffdd6 done/RESULT_VERIFIED (done/RESULT_VERIFIED)"
+        },
+        {
+          "ok": true,
+          "what": "run2: cleanup confirmed (confirmed)"
+        },
+        {
+          "ok": true,
+          "what": "run2: /api/artifacts/art-f1205372ffd5cfbe50f2 (chart.png) bytes sha256 = recorded 2133f4785277"
+        },
+        {
+          "ok": true,
+          "what": "run2: /api/tasks/:id/artifacts/art-f1205372ffd5cfbe50f2 bytes identical"
+        },
+        {
+          "ok": true,
+          "what": "run2: /api/artifacts/art-2fadb65512ecccf7a4e0 (summary.json) bytes sha256 = recorded bef2cff342b8"
+        },
+        {
+          "ok": true,
+          "what": "run2: /api/tasks/:id/artifacts/art-2fadb65512ecccf7a4e0 bytes identical"
+        },
+        {
+          "ok": true,
+          "what": "run1: both summary.json and chart.png were produced (chart.png, summary.json)"
+        },
+        {
+          "ok": true,
+          "what": "run1: chart.png is a valid PNG 600x350"
+        },
+        {
+          "ok": true,
+          "what": "run1: summary sum_a=2994.93 rows=6 matches locally computed 2994.93/6"
+        },
+        {
+          "ok": true,
+          "what": "run1: summary names the uploaded input's sha256"
+        },
+        {
+          "ok": true,
+          "what": "run1: no secret-bearing env var names inside the analysis sandbox (names: GPG_KEY,HOME,HOSTNAME,LANG,MPLBACKEND,MPLCONFIGDIR,PATH,PIP_NO_INDEX,PWD,PYTHONDONTWRITEBYTECODE,PYTHONUNBUFFERED,PYTHON_SHA256,PYTHON_VERSION,SHLVL)"
+        },
+        {
+          "ok": true,
+          "what": "run2: both summary.json and chart.png were produced (chart.png, summary.json)"
+        },
+        {
+          "ok": true,
+          "what": "run2: chart.png is a valid PNG 600x350"
+        },
+        {
+          "ok": true,
+          "what": "run2: summary sum_a=6897.97 rows=13 matches locally computed 6897.97/13"
+        },
+        {
+          "ok": true,
+          "what": "run2: summary names the uploaded input's sha256"
+        },
+        {
+          "ok": true,
+          "what": "run2: no secret-bearing env var names inside the analysis sandbox (names: GPG_KEY,HOME,HOSTNAME,LANG,MPLBACKEND,MPLCONFIGDIR,PATH,PIP_NO_INDEX,PWD,PYTHONDONTWRITEBYTECODE,PYTHONUNBUFFERED,PYTHON_SHA256,PYTHON_VERSION,SHLVL)"
+        },
+        {
+          "ok": true,
+          "what": "different input → different summary.json and chart.png digests"
+        },
+        {
+          "ok": true,
+          "what": "upstream-general-analysis: upload → 201"
+        },
+        {
+          "ok": true,
+          "what": "upstream-general-analysis: upload sha256 recorded = sha256(bytes sent)"
+        },
+        {
+          "ok": true,
+          "what": "upstream-general-analysis: create general analysis task → 201 "
+        },
+        {
+          "ok": true,
+          "what": "upstream-general-analysis: task-b0ff8fc758dc7430 done/RESULT_VERIFIED (done/RESULT_VERIFIED)"
+        },
+        {
+          "ok": true,
+          "what": "upstream-general-analysis: cleanup confirmed (confirmed)"
+        },
+        {
+          "ok": true,
+          "what": "upstream-general-analysis: /api/artifacts/art-64041e46d7ebea1944b5 (columns.csv) bytes sha256 = recorded e950759183cc"
+        },
+        {
+          "ok": true,
+          "what": "upstream-general-analysis: /api/tasks/:id/artifacts/art-64041e46d7ebea1944b5 bytes identical"
+        },
+        {
+          "ok": true,
+          "what": "upstream-general-analysis: /api/artifacts/art-9c158fb3966ad6af16d3 (summary.json) bytes sha256 = recorded 9c9c11e49222"
+        },
+        {
+          "ok": true,
+          "what": "upstream-general-analysis: /api/tasks/:id/artifacts/art-9c158fb3966ad6af16d3 bytes identical"
+        },
+        {
+          "ok": true,
+          "what": "upstream general-analysis summary answer \"10 rows x 3 columns\" reflects the fresh input (10 rows)"
+        }
+      ]
+    },
+    {
+      "id": "B1-web-research-example-com",
+      "requirement": "Useful work (b): web-research on a public allowlisted site (example.com) — Chromium navigates, observes, screenshot artifact is a valid PNG",
+      "command": "bun scripts/acceptance/local.ts B1-web-research-example-com",
+      "environment": "real local runc (dev-unsafe, Colima); stack = git archive of c39340c6091a",
+      "timestamp": "2026-09-27T10:32:20.738Z",
+      "revision": "c39340c6091a32ff8203fba5fd205bccac8614fd",
+      "result": "PASS",
+      "evidence": "docs/evidence/local/run-c39340c/B1-web-research-example-com.json",
+      "checks": [
+        {
+          "ok": true,
+          "what": "create web-research task → 201"
+        },
+        {
+          "ok": true,
+          "what": "done/RESULT_VERIFIED (done/RESULT_VERIFIED)"
+        },
+        {
+          "ok": true,
+          "what": "browser_navigate completed with HTTP 200"
+        },
+        {
+          "ok": true,
+          "what": "browser_observe completed"
+        },
+        {
+          "ok": true,
+          "what": "browser container isolation probe: direct metadata/DNS/TCP/docker socket/host mounts all BLOCKED"
+        },
+        {
+          "ok": true,
+          "what": "a screenshot artifact was stored"
+        },
+        {
+          "ok": true,
+          "what": "screenshot bytes sha256 = recorded, valid PNG 1280x800"
+        },
+        {
+          "ok": true,
+          "what": "teardown clean; host listing (no sandboxes)"
+        }
+      ]
+    },
+    {
+      "id": "K4-browser-egress-and-stale-ref",
+      "requirement": "Containment (browser): direct egress blocked, metadata blocked, disallowed domain blocked (egress decisions); stale browser refs rejected (agent path)",
+      "command": "bun scripts/acceptance/local.ts K4-browser-egress-and-stale-ref",
+      "environment": "real local runc (dev-unsafe, Colima); stack = git archive of c39340c6091a",
+      "timestamp": "2026-09-27T10:32:28.801Z",
+      "revision": "c39340c6091a32ff8203fba5fd205bccac8614fd",
+      "result": "PASS",
+      "evidence": "docs/evidence/local/run-c39340c/K4-browser-egress-and-stale-ref.json",
+      "checks": [
+        {
+          "ok": true,
+          "what": "create → 201"
+        },
+        {
+          "ok": true,
+          "what": "navigate to 169.254.169.254 never completed (failed)"
+        },
+        {
+          "ok": true,
+          "what": "navigate to example.org never completed (failed)"
+        },
+        {
+          "ok": true,
+          "what": "navigate to 10.0.0.1 never completed (failed)"
+        },
+        {
+          "ok": true,
+          "what": "navigate to metadata.google.internal never completed (failed)"
+        },
+        {
+          "ok": true,
+          "what": "navigate to https://example.com/ completed"
+        },
+        {
+          "ok": true,
+          "what": "egress proxy allowed only example.com (allowed: example.com)"
+        },
+        {
+          "ok": true,
+          "what": "browser container direct egress probe: {\"dns\":\"BLOCKED\",\"probedAt\":\"2026-09-27T10:32:27.723Z\",\"allBlocked\":true,\"hostMounts\":\"BLOCKED\",\"outboundTcp\":\"BLOCKED\",\"dockerSocket\":\"BLOCKED\",\"metadataEndpoint\":\"BLOCKED\"}"
+        },
+        {
+          "ok": true,
+          "what": "stale browser_click (generation 1) refused: browser_click stale_reference — generation 1 is not current (2); observe again and use the new refs"
+        }
+      ],
+      "note": "denied decisions at the proxy: 0 (refusals before the proxy are control-plane policy refusals)"
+    },
+    {
+      "id": "C1-repair-diagnostic-forged-export",
+      "requirement": "Useful work (c): repair diagnostic → CANDIDATE_PASSED_CHECKS; forged-log → CHECKS_FAILED with '312 passed' in exec output; export zip sha256 = x-airlock-zip-sha256 and repeat downloads identical",
+      "command": "bun scripts/acceptance/local.ts C1-repair-diagnostic-forged-export",
+      "environment": "real local runc (dev-unsafe, Colima); stack = git archive of c39340c6091a",
+      "timestamp": "2026-09-27T10:32:47.442Z",
+      "revision": "c39340c6091a32ff8203fba5fd205bccac8614fd",
+      "result": "PASS",
+      "evidence": "docs/evidence/local/run-c39340c/C1-repair-diagnostic-forged-export.json",
+      "checks": [
+        {
+          "ok": true,
+          "what": "diagnostic → CANDIDATE_PASSED_CHECKS"
+        },
+        {
+          "ok": true,
+          "what": "baseline reproduced and verification passed"
+        },
+        {
+          "ok": true,
+          "what": "isolation probe fully BLOCKED before agent work"
+        },
+        {
+          "ok": true,
+          "what": "forged-log → CHECKS_FAILED"
+        },
+        {
+          "ok": true,
+          "what": "forged-log exec stdout contains \"312 passed\" and the comparator still failed it"
+        },
+        {
+          "ok": true,
+          "what": "export of the CHECKS_FAILED candidate refused (409)"
+        },
+        {
+          "ok": true,
+          "what": "export grant → 201"
+        },
+        {
+          "ok": true,
+          "what": "zip sha256 e94a7998fada0ce0 = x-airlock-zip-sha256 = grant.zipDigest"
+        },
+        {
+          "ok": true,
+          "what": "repeat export + download: same grant, byte-identical zip"
+        },
+        {
+          "ok": true,
+          "what": "third download still byte-identical"
+        }
+      ]
+    },
+    {
+      "id": "T1-two-judge-isolation",
+      "requirement": "Task behaviour: two judge sessions cannot access each other's tasks/events/artifacts/approvals/control/exports (404)",
+      "command": "bun scripts/acceptance/local.ts T1-two-judge-isolation",
+      "environment": "real local runc (dev-unsafe, Colima); stack = git archive of c39340c6091a",
+      "timestamp": "2026-09-27T10:32:47.460Z",
+      "revision": "c39340c6091a32ff8203fba5fd205bccac8614fd",
+      "result": "PASS",
+      "evidence": "docs/evidence/local/run-c39340c/T1-two-judge-isolation.json",
+      "checks": [
+        {
+          "ok": true,
+          "what": "both sessions are judge"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-06dcbe3375f98a0d → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-06dcbe3375f98a0d/events?lastEventId=0 → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-06dcbe3375f98a0d/artifacts → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-06dcbe3375f98a0d/artifacts/art-af58b3d6a7e3132c9ab1 → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/artifacts/art-af58b3d6a7e3132c9ab1 → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/artifacts/art-60e221d3bd509e842cd6 → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-2c31aa58db183345/approvals → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-2c31aa58db183345/control → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B POST /api/tasks/task-2c31aa58db183345/control/take → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B POST /api/tasks/task-2c31aa58db183345/control/release → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/tasks/task-2c31aa58db183345/live → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B POST /api/tasks/task-2c31aa58db183345/approvals/prop-00000000/decide → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B POST /api/tasks/task-37cd1a4ffb01e27f/cancel → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B POST /api/tasks/task-37cd1a4ffb01e27f/export → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B GET /api/exports/grant-eb9866980e439603968abb2a → 404"
+        },
+        {
+          "ok": true,
+          "what": "judge B's task list excludes judge A's tasks (0 tasks)"
+        },
+        {
+          "ok": true,
+          "what": "judge A still reads its own task (200)"
+        },
+        {
+          "ok": true,
+          "what": "anonymous GET task → 401"
+        },
+        {
+          "ok": true,
+          "what": "operator can read any task (200) — by design"
+        }
+      ]
+    },
+    {
+      "id": "T2-sse-close-reopen-replay",
+      "requirement": "Task behaviour: closing the SSE and reopening replays events (no gaps, no duplicates), both mid-run and after completion",
+      "command": "bun scripts/acceptance/local.ts T2-sse-close-reopen-replay",
+      "environment": "real local runc (dev-unsafe, Colima); stack = git archive of c39340c6091a",
+      "timestamp": "2026-09-27T10:32:59.350Z",
+      "revision": "c39340c6091a32ff8203fba5fd205bccac8614fd",
+      "result": "PASS",
+      "evidence": "docs/evidence/local/run-c39340c/T2-sse-close-reopen-replay.json",
+      "checks": [
+        {
+          "ok": true,
+          "what": "first stream read 5 events then closed"
+        },
+        {
+          "ok": true,
+          "what": "reopened stream (Last-Event-ID: 5) ran to 'end' ({\"status\":\"done\"})"
+        },
+        {
+          "ok": true,
+          "what": "first+reopened = full replay: 89 events, seq 1..89 contiguous, no duplicates"
+        },
+        {
+          "ok": true,
+          "what": "?lastEventId=10 replays from seq 11 (79 events)"
+        }
+      ]
+    },
+    {
+      "id": "T3-cancel-mid-run-repair",
+      "requirement": "Task behaviour: cancellation mid-run (repair, command executing) → cancelled only after teardown; late results don't overwrite",
+      "command": "bun scripts/acceptance/local.ts T3-cancel-mid-run-repair",
+      "environment": "real local runc (dev-unsafe, Colima); stack = git archive of c39340c6091a",
+      "timestamp": "2026-09-27T10:33:42.530Z",
+      "revision": "c39340c6091a32ff8203fba5fd205bccac8614fd",
+      "result": "PASS",
+      "evidence": "docs/evidence/local/run-c39340c/T3-cancel-mid-run-repair.json",
+      "checks": [
+        {
+          "ok": true,
+          "what": "a sandbox command (sleep 25) was dispatched"
+        },
+        {
+          "ok": true,
+          "what": "cancel → 200 status=cancelling"
+        },
+        {
+          "ok": true,
+          "what": "status reached cancelled (cancelled) in 3131 ms"
+        },
+        {
+          "ok": true,
+          "what": "no container of the task existed when 'cancelled' was first observed ([]; before cancel: 1)"
+        },
+        {
+          "ok": true,
+          "what": "teardown event (#19 \"Attempt destroyed after cancellation\") after the request (#17)"
+        },
+        {
+          "ok": true,
+          "what": "35 s later still cancelled, no outcome/candidate (cancelled/undefined)"
+        },
+        {
+          "ok": true,
+          "what": "no late exec/phase events after cancellation (0 new events: )"
+        },
+        {
+          "ok": true,
+          "what": "supervisor lists no live attempt for the task (0)"
+        }
+      ]
+    },
+    {
+      "id": "T4-cancel-mid-run-browser",
+      "requirement": "Task behaviour: cancellation mid-run (general browser task) → cancelled only after teardown; cleanup confirmed; nothing after",
+      "command": "bun scripts/acceptance/local.ts T4-cancel-mid-run-browser",
+      "environment": "real local runc (dev-unsafe, Colima); stack = git archive of c39340c6091a",
+      "timestamp": "2026-09-27T10:33:58.554Z",
+      "revision": "c39340c6091a32ff8203fba5fd205bccac8614fd",
+      "result": "PASS",
+      "evidence": "docs/evidence/local/run-c39340c/T4-cancel-mid-run-browser.json",
+      "checks": [
+        {
+          "ok": true,
+          "what": "browser task is running with a live browser (mid-run)"
+        },
+        {
+          "ok": true,
+          "what": "cancel → 200 cancelling"
+        },
+        {
+          "ok": true,
+          "what": "status cancelled (cancelled)"
+        },
+        {
+          "ok": true,
+          "what": "no browser/egress container when 'cancelled' first observed ([])"
+        },
+        {
+          "ok": true,
+          "what": "cleanup dimension confirmed (confirmed: supervisor confirmed teardown of 1 attempt(s))"
+        },
+        {
+          "ok": true,
+          "what": "stays cancelled; no tool events afterwards (outcome none)"
+        }
+      ]
+    },
+    {
+      "id": "T5-takeover-and-stale-ref",
+      "requirement": "Task behaviour: human takeover prevents agent ops; stale browser refs rejected (human path); release resumes; no secrets in browser/egress container env",
+      "command": "bun scripts/acceptance/local.ts T5-takeover-and-stale-ref",
+      "environment": "real local runc (dev-unsafe, Colima); stack = git archive of c39340c6091a",
+      "timestamp": "2026-09-27T10:34:26.452Z",
+      "revision": "c39340c6091a32ff8203fba5fd205bccac8614fd",
+      "result": "PASS",
+      "evidence": "docs/evidence/local/run-c39340c/T5-takeover-and-stale-ref.json",
+      "checks": [
+        {
+          "ok": true,
+          "what": "task running with a live browser (mid-run)"
+        },
+        {
+          "ok": true,
+          "what": "live browser+egress containers (2) carry no secret names/values in Env"
+        },
+        {
+          "ok": true,
+          "what": "take → 200 {\"holder\":\"human\",\"humanOwner\":\"judge-25a178d200fc9c390ae3f23b\",\"since\":\"2026-09-27T10:34:05.693Z\",\"fenceGeneration\":1,\"reason\":\"taken by judge\"}"
+        },
+        {
+          "ok": true,
+          "what": "holder=human"
+        },
+        {
+          "ok": true,
+          "what": "human observe → 200"
+        },
+        {
+          "ok": true,
+          "what": "human click with previous generation refused as stale (200: {\"ok\":false,\"error\":\"stale_reference\",\"result\":{\"response\":{\"schemaVersion\":1,\"id\":\"op-ce56f7bcf162ff771c3179e5\",\"op\":\"click\",\"ok\":false,\"error\":\"stale_referenc)"
+        },
+        {
+          "ok": true,
+          "what": "human click on the outbound link (ref e6) → egress proxy denied iana.org:443 (host_not_allowed); allowed only example.com"
+        },
+        {
+          "ok": true,
+          "what": "human screenshot while holding control → 200"
+        },
+        {
+          "ok": true,
+          "what": "no agent browser op started/completed while the human held control for 16 s ()"
+        },
+        {
+          "ok": true,
+          "what": "release → 200"
+        },
+        {
+          "ok": true,
+          "what": "task finished after release (done/RESULT_VERIFIED)"
+        },
+        {
+          "ok": true,
+          "what": "agent resumed after release (24 completed agent ops)"
+        }
+      ]
+    },
+    {
+      "id": "T6-proposal-decide-semantics",
+      "requirement": "Task behaviour: proposals (API level): wrong digest 409, replay 409, expired 410, reject; destination not reachable from the local sandbox",
+      "command": "bun scripts/acceptance/local.ts T6-proposal-decide-semantics",
+      "environment": "real local runc (dev-unsafe, Colima); stack = git archive of c39340c6091a",
+      "timestamp": "2026-09-27T10:35:36.735Z",
+      "revision": "c39340c6091a32ff8203fba5fd205bccac8614fd",
+      "result": "PASS",
+      "evidence": "docs/evidence/local/run-c39340c/T6-proposal-decide-semantics.json",
+      "checks": [
+        {
+          "ok": true,
+          "what": "create → 201 {\"id\":\"task-1c661856076d3677\",\"owner\":\"judge-25a178d200fc9c390ae3f23b\",\"profileId\":\"web-research\",\"issueText\":\"proposal semantics\",\"kind\":\"general\",\"egressAllow"
+        },
+        {
+          "ok": true,
+          "what": "proposal A pending (prop-644cf4462fc3d7c82268, expires 2026-09-27T10:35:32.678Z)"
+        },
+        {
+          "ok": true,
+          "what": "decide expired proposal A → 410 {\"error\":\"the proposal expired\"}"
+        },
+        {
+          "ok": true,
+          "what": "proposal B pending (prop-53b4bacba4235bab963d)"
+        },
+        {
+          "ok": true,
+          "what": "approve B with a wrong digest → 409 {\"error\":\"payloadDigest does not match the proposal: approve exactly the payload you reviewed\"}"
+        },
+        {
+          "ok": true,
+          "what": "another judge approving B → 404"
+        },
+        {
+          "ok": true,
+          "what": "approve B with the exact digest → 200 approved"
+        },
+        {
+          "ok": true,
+          "what": "replayed approval of B → 409"
+        },
+        {
+          "ok": true,
+          "what": "reject after approve → 409"
+        },
+        {
+          "ok": true,
+          "what": "reject C → 200 rejected"
+        },
+        {
+          "ok": true,
+          "what": "approved B did not become 'confirmed' without a reachable destination (final status failed)"
+        },
+        {
+          "ok": true,
+          "what": "decide after the task ended → 409"
+        }
+      ],
+      "note": "forms.example.com is a configured-but-unreachable airlock-forms-v1 origin; the loopback fixtures destination is not reachable from the sandboxed browser (egress allows public addresses only), so an approved submission cannot be confirmed locally"
+    },
+    {
+      "id": "K1-hostile-panel",
+      "requirement": "Containment: hostile panel (judge) fork bomb, rm -rf /, curl 169.254.169.254, detached nohup sleep; card died/survived/siblings/controlPlane/workspace; host listing (no sandboxes); app responsive; no secrets in sandbox env",
+      "command": "bun scripts/acceptance/local.ts K1-hostile-panel",
+      "environment": "real local runc (dev-unsafe, Colima); stack = git archive of c39340c6091a",
+      "timestamp": "2026-09-27T10:36:26.368Z",
+      "revision": "c39340c6091a32ff8203fba5fd205bccac8614fd",
+      "result": "PASS",
+      "evidence": "docs/evidence/local/run-c39340c/K1-hostile-panel.json",
+      "checks": [
+        {
+          "ok": true,
+          "what": "fork-bomb: POST /api/hostile → 200 "
+        },
+        {
+          "ok": true,
+          "what": "fork-bomb: died: airlock-hostile-hostile-op-op-f46f74140594f4c4ad3985bd — the command exited 0; then the container and its volume were destroyed"
+        },
+        {
+          "ok": true,
+          "what": "fork-bomb: survived: supervisor, host sentinel, control plane before/after"
+        },
+        {
+          "ok": true,
+          "what": "fork-bomb: card carries siblings[] (0) and workspace (16→null)"
+        },
+        {
+          "ok": true,
+          "what": "fork-bomb: teardown host listing is \"(no sandboxes)\""
+        },
+        {
+          "ok": true,
+          "what": "fork-bomb: /api/health answered 27× during the run, max 3 ms, 0 failures"
+        },
+        {
+          "ok": true,
+          "what": "fork-bomb: exec succeeded exit 0 (pids limit contained it)"
+        },
+        {
+          "ok": true,
+          "what": "rm-rf: POST /api/hostile → 200 "
+        },
+        {
+          "ok": true,
+          "what": "rm-rf: died: airlock-hostile-hostile-op-op-1c380da7f4b9eda97bc63ebf — the command exited 0; then the container and its volume were destroyed"
+        },
+        {
+          "ok": true,
+          "what": "rm-rf: survived: supervisor, host sentinel, control plane before/after"
+        },
+        {
+          "ok": true,
+          "what": "rm-rf: card carries siblings[] (0) and workspace (16→0)"
+        },
+        {
+          "ok": true,
+          "what": "rm-rf: teardown host listing is \"(no sandboxes)\""
+        },
+        {
+          "ok": true,
+          "what": "rm-rf: /api/health answered 4× during the run, max 1 ms, 0 failures"
+        },
+        {
+          "ok": true,
+          "what": "metadata: POST /api/hostile → 200 "
+        },
+        {
+          "ok": true,
+          "what": "metadata: died: airlock-hostile-hostile-op-op-3066a4a3f40ff4ffedbb77c7 — the command exited 0; then the container and its volume were destroyed"
+        },
+        {
+          "ok": true,
+          "what": "metadata: survived: supervisor, host sentinel, control plane before/after"
+        },
+        {
+          "ok": true,
+          "what": "metadata: card carries siblings[] (0) and workspace (16→16)"
+        },
+        {
+          "ok": true,
+          "what": "metadata: teardown host listing is \"(no sandboxes)\""
+        },
+        {
+          "ok": true,
+          "what": "metadata: /api/health answered 2× during the run, max 1 ms, 0 failures"
+        },
+        {
+          "ok": true,
+          "what": "metadata: unreachable from the sandbox (curl_rc=127 urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable> /bin/bash: line 1: curl: command not found )"
+        },
+        {
+          "ok": true,
+          "what": "nohup-sleep: POST /api/hostile → 200 "
+        },
+        {
+          "ok": true,
+          "what": "nohup-sleep: died: airlock-hostile-hostile-op-op-19ebafbf330cba1343e945b4 — the command exited 0; then the container and its volume were destroyed"
+        },
+        {
+          "ok": true,
+          "what": "nohup-sleep: survived: supervisor, host sentinel, control plane before/after"
+        },
+        {
+          "ok": true,
+          "what": "nohup-sleep: card carries siblings[] (0) and workspace (16→16)"
+        },
+        {
+          "ok": true,
+          "what": "nohup-sleep: teardown host listing is \"(no sandboxes)\""
+        },
+        {
+          "ok": true,
+          "what": "nohup-sleep: /api/health answered 2× during the run, max 1 ms, 0 failures"
+        },
+        {
+          "ok": true,
+          "what": "nohup-sleep: no 'sleep 3137' process left in the Docker VM after teardown (NONE)"
+        },
+        {
+          "ok": true,
+          "what": "env-secrets: POST /api/hostile → 200 "
+        },
+        {
+          "ok": true,
+          "what": "env-secrets: died: airlock-hostile-hostile-op-op-7b593b7f3f5b5e8b445b3ee4 — the command exited 0; then the container and its volume were destroyed"
+        },
+        {
+          "ok": true,
+          "what": "env-secrets: survived: supervisor, host sentinel, control plane before/after"
+        },
+        {
+          "ok": true,
+          "what": "env-secrets: card carries siblings[] (0) and workspace (16→16)"
+        },
+        {
+          "ok": true,
+          "what": "env-secrets: teardown host listing is \"(no sandboxes)\""
+        },
+        {
+          "ok": true,
+          "what": "env-secrets: /api/health answered 2× during the run, max 1 ms, 0 failures"
+        },
+        {
+          "ok": true,
+          "what": "env-secrets: env and /proc/1/environ carry no secret names or values (none; env names: PYTHONUNBUFFERED,HOSTNAME,PYTHON_VERSION,PWD,PIP_NO_INDEX,HOME,LANG,GPG_KEY,PIP_DISABLE_PIP_VERSION_CHECK,SHLVL,PYTHONDONTWRITEBYTECODE,PATH,_,PATH,HOSTNAME,HOME,LANG,GPG_KEY,PYTHON_VERSION,PYTHONDONTWRITEBYTECODE,PYTHONUNBUFFERED,PIP_NO_INDEX,PIP_DISABLE_PIP_VERSION_CHECK,PYTHONUNBUFFERED,HOSTNAME,PYTHON_VERSION,PWD,PIP_NO_INDEX,HOME,LANG,GPG_KEY,PIP_DISABLE_PIP_VERSION_CHECK,SHLVL,PYTHONDONTWRITEBYTECODE,PATH,_)"
+        },
+        {
+          "ok": true,
+          "what": "operator cannot run the hostile panel (403)"
+        }
+      ]
+    },
+    {
+      "id": "K2-hostile-with-running-sibling",
+      "requirement": "Containment: a fork bomb in a hostile sandbox while another task's command runs — sibling keeps running (card siblings before/after), its command completes, control plane healthy",
+      "command": "bun scripts/acceptance/local.ts K2-hostile-with-running-sibling",
+      "environment": "real local runc (dev-unsafe, Colima); stack = git archive of c39340c6091a",
+      "timestamp": "2026-09-27T10:37:08.451Z",
+      "revision": "c39340c6091a32ff8203fba5fd205bccac8614fd",
+      "result": "PASS",
+      "evidence": "docs/evidence/local/run-c39340c/K2-hostile-with-running-sibling.json",
+      "checks": [
+        {
+          "ok": true,
+          "what": "sibling task's sleep 25 command dispatched"
+        },
+        {
+          "ok": true,
+          "what": "hostile fork bomb → 200"
+        },
+        {
+          "ok": true,
+          "what": "siblings: [{\"attemptId\":\"att-1bafb22a0bb9e17e48f0\",\"taskId\":\"task-3950508da14aaad1\",\"runningBefore\":true,\"runningAfter\":true}]"
+        },
+        {
+          "ok": true,
+          "what": "otherAttemptsRunning=1, control plane healthy after"
+        },
+        {
+          "ok": true,
+          "what": "sibling's command completed unaffected (succeeded exit=0)"
+        },
+        {
+          "ok": true,
+          "what": "sibling cancelled afterwards (200 → cancelled)"
+        }
+      ]
+    },
+    {
+      "id": "K3-timeout-cleanup",
+      "requirement": "Cleanup on timeout: a sandbox command past its deadline (hostile `sleep 600`) is killed (timed_out) and the sandbox is torn down: (no sandboxes)",
+      "command": "bun scripts/acceptance/local.ts K3-timeout-cleanup",
+      "environment": "real local runc (dev-unsafe, Colima); stack = git archive of c39340c6091a",
+      "timestamp": "2026-09-27T10:37:49.517Z",
+      "revision": "c39340c6091a32ff8203fba5fd205bccac8614fd",
+      "result": "PASS",
+      "evidence": "docs/evidence/local/run-c39340c/K3-timeout-cleanup.json",
+      "checks": [
+        {
+          "ok": true,
+          "what": "hostile sleep 600 → 200 after 30397 ms"
+        },
+        {
+          "ok": true,
+          "what": "exec timed_out exit=124 after 30027 ms"
+        },
+        {
+          "ok": true,
+          "what": "teardown clean; host listing (no sandboxes)"
+        },
+        {
+          "ok": true,
+          "what": "docker ps (dev namespace) empty right after"
+        }
+      ]
+    },
+    {
+      "id": "D1-unsupported-labelled-and-refused",
+      "requirement": "Deferred/unsupported capabilities labelled unavailable (not simulated); unsupported mutations (arbitrary-site submit) refused; unsafe egressAllow refused",
+      "command": "bun scripts/acceptance/local.ts D1-unsupported-labelled-and-refused",
+      "environment": "real local runc (dev-unsafe, Colima); stack = git archive of c39340c6091a",
+      "timestamp": "2026-09-27T10:37:57.579Z",
+      "revision": "c39340c6091a32ff8203fba5fd205bccac8614fd",
+      "result": "PASS",
+      "evidence": "docs/evidence/local/run-c39340c/D1-unsupported-labelled-and-refused.json",
+      "checks": [
+        {
+          "ok": true,
+          "what": "unknown repair profile → 422 (profile \"desktop-automation\" is not supported)"
+        },
+        {
+          "ok": true,
+          "what": "unknown general profile → 422 (general task profile \"desktop\" is not supported; available: analysis, web-research, web-analysis)"
+        },
+        {
+          "ok": true,
+          "what": "IP-literal destination → 422 (egressAllow refused: 169.254.169.254: IP literals are not allowed)"
+        },
+        {
+          "ok": true,
+          "what": "localhost destination → 422 (egressAllow refused: localhost: single-label names are not allowed)"
+        },
+        {
+          "ok": true,
+          "what": ".internal destination → 422 (egressAllow refused: metadata.google.internal: special-use or internal names are not allowed)"
+        },
+        {
+          "ok": true,
+          "what": "browser profile without destinations → 422 (egressAllow refused: profile \"web-research\" needs at least one allowed destination (egressAllow))"
+        },
+        {
+          "ok": true,
+          "what": "egress for a no-browser profile → 422 (egressAllow refused: profile \"analysis\" has no browser; egressAllow must be empty)"
+        },
+        {
+          "ok": true,
+          "what": "arbitrary-site submit refused: https://example.com is not a supported final-action destination (supported: http://127.0.0.1:3100, https://forms.example.com); arbitrary-site submissions are no"
+        },
+        {
+          "ok": true,
+          "what": "no proposal was recorded for the arbitrary site"
+        },
+        {
+          "ok": true,
+          "what": "a task needing an absent capability ends UNSUPPORTED (done/UNSUPPORTED)"
+        }
+      ]
+    },
+    {
+      "id": "M1-browser-mutation-guard",
+      "requirement": "Browser mutation guard: a form POST on an allowlisted public site (httpbin.org/forms/post → POST /post) is blocked by the runner, on the human path and the agent path; reads still work",
+      "command": "bun scripts/acceptance/local.ts M1-browser-mutation-guard",
+      "environment": "real local runc (dev-unsafe, Colima); stack = git archive of c39340c6091a",
+      "timestamp": "2026-09-27T10:38:24.359Z",
+      "revision": "c39340c6091a32ff8203fba5fd205bccac8614fd",
+      "result": "PASS",
+      "evidence": "docs/evidence/local/run-c39340c/M1-browser-mutation-guard.json",
+      "checks": [
+        {
+          "ok": true,
+          "what": "create (egressAllow httpbin.org) → 201"
+        },
+        {
+          "ok": true,
+          "what": "live browser"
+        },
+        {
+          "ok": true,
+          "what": "take → 200"
+        },
+        {
+          "ok": true,
+          "what": "human observe: https://httpbin.org/forms/post, submit button ref e44 at generation 2"
+        },
+        {
+          "ok": true,
+          "what": "human click Submit → runner reports mutation_blocked POST https://httpbin.org/post ([{\"at\":\"2026-09-27T10:38:07.168Z\",\"type\":\"mutation_blocked\",\"method\":\"POST\",\"url\":\"https://httpbin.org/post\",\"tabId\":\"tab-1\",\"count\":1}])"
+        },
+        {
+          "ok": true,
+          "what": "page did not reach httpbin's /post echo (url chrome-error://chromewebdata/)"
+        },
+        {
+          "ok": true,
+          "what": "GET on the same site still works (200)"
+        },
+        {
+          "ok": true,
+          "what": "agent browser_click dispatched (browser_click started/started, browser_click ref e44/completed)"
+        },
+        {
+          "ok": true,
+          "what": "agent path: blocked mutation recorded in the task's events; last observe browser_observe chrome-error://chromewebdata/"
+        }
+      ]
+    },
+    {
+      "id": "K5-supervisor-restart-during-author",
+      "requirement": "Containment/recovery: supervisor restart during an author attempt → attempt revoked/stopped; task recovers or ends INCONCLUSIVE honestly",
+      "command": "bun scripts/acceptance/local.ts K5-supervisor-restart-during-author",
+      "environment": "real local runc (dev-unsafe, Colima); stack = git archive of c39340c6091a",
+      "timestamp": "2026-09-27T10:39:54.440Z",
+      "revision": "c39340c6091a32ff8203fba5fd205bccac8614fd",
+      "result": "PASS",
+      "evidence": "docs/evidence/local/run-c39340c/K5-supervisor-restart-during-author.json",
+      "checks": [
+        {
+          "ok": true,
+          "what": "author command (sleep 25) dispatched"
+        },
+        {
+          "ok": true,
+          "what": "control plane answers while the supervisor is down (200)"
+        },
+        {
+          "ok": true,
+          "what": "supervisor restarted via dev-up.sh --detach (exit 0)"
+        },
+        {
+          "ok": true,
+          "what": "the interrupted attempt's container is not running after restart ([\"airlock-author-task-8df39d4034afa126-att-bd8644b8e63dc5eecd19 Up 3 seconds\"])"
+        },
+        {
+          "ok": true,
+          "what": "task ended done/REPRODUCED_UNRESOLVED (never a pass for the never-submitting slow script)"
+        },
+        {
+          "ok": true,
+          "what": "honest terminal outcome (REPRODUCED_UNRESOLVED)"
+        },
+        {
+          "ok": true,
+          "what": "interrupted attempt at the supervisor: destroyed"
+        },
+        {
+          "ok": true,
+          "what": "no container of the task remains at the end"
+        }
+      ]
+    },
+    {
+      "id": "K7-finished-task-cleanup-sweep",
+      "requirement": "F3: a finished task whose teardown failed (supervisor down at teardown) is swept after the supervisor returns: cleanup reaches 'confirmed' and the host is empty",
+      "command": "bun scripts/acceptance/local.ts K7-finished-task-cleanup-sweep",
+      "environment": "real local runc (dev-unsafe, Colima); stack = git archive of c39340c6091a",
+      "timestamp": "2026-09-27T10:40:23.744Z",
+      "revision": "c39340c6091a32ff8203fba5fd205bccac8614fd",
+      "result": "PASS",
+      "evidence": "docs/evidence/local/run-c39340c/K7-finished-task-cleanup-sweep.json",
+      "checks": [
+        {
+          "ok": true,
+          "what": "author command dispatched"
+        },
+        {
+          "ok": true,
+          "what": "task ended done/INCONCLUSIVE with cleanup failed while the supervisor was down"
+        },
+        {
+          "ok": true,
+          "what": "the attempt's container is still on the host (airlock-author-task-15833363876e6837-att-0ac7ce552d0e4436d8e5 Up 12 seconds)"
+        },
+        {
+          "ok": true,
+          "what": "supervisor restarted (exit 0)"
+        },
+        {
+          "ok": true,
+          "what": "cleanup reached confirmed 11 s after restart (states seen: retrying → confirmed; supervisor confirmed teardown of 1 attempt(s) on cleanup retry 1)"
+        },
+        {
+          "ok": true,
+          "what": "status/outcome unchanged by the sweep (done/INCONCLUSIVE)"
+        },
+        {
+          "ok": true,
+          "what": "host empty (dev namespace): no containers, no volumes"
+        }
+      ]
+    },
+    {
+      "id": "K6-final-host-cleanup",
+      "requirement": "Containment: after everything, docker ps -a / networks / volumes with label airlock.supervisor=true (dev namespace) are empty; supervisor host listing empty",
+      "command": "bun scripts/acceptance/local.ts K6-final-host-cleanup",
+      "environment": "real local runc (dev-unsafe, Colima); stack = git archive of c39340c6091a",
+      "timestamp": "2026-09-27T10:40:26.819Z",
+      "revision": "c39340c6091a32ff8203fba5fd205bccac8614fd",
+      "result": "PASS",
+      "evidence": "docs/evidence/local/run-c39340c/K6-final-host-cleanup.json",
+      "checks": [
+        {
+          "ok": true,
+          "what": "docker ps -a --filter label=airlock.supervisor=true: (no sandboxes)"
+        },
+        {
+          "ok": true,
+          "what": "docker network ls (label): (none)"
+        },
+        {
+          "ok": true,
+          "what": "docker volume ls (label): (none)"
+        },
+        {
+          "ok": true,
+          "what": "supervisor GET /listing empty (200)"
+        },
+        {
+          "ok": true,
+          "what": "no airlock-* named containers at all (none)"
+        }
+      ]
+    }
+  ]
+}

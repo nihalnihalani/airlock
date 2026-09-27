@@ -22,7 +22,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dir, "../..");
-const EVID = join(ROOT, "docs/evidence/local");
+/** Evidence directory, relative to the repo (AIRLOCK_EVIDENCE_SUBDIR keeps separate runs apart). */
+const EVID_REL = `docs/evidence/local${process.env.AIRLOCK_EVIDENCE_SUBDIR ? `/${process.env.AIRLOCK_EVIDENCE_SUBDIR}` : ""}`;
+const EVID = join(ROOT, EVID_REL);
 mkdirSync(EVID, { recursive: true });
 
 function readEnvFile(p: string): Record<string, string> {
@@ -109,7 +111,7 @@ if (existsSync(resultsPath)) {
 function saveRow(t: Test, error?: unknown) {
   const failed = t.checks.some((c) => !c.ok) || error !== undefined;
   const result: Result = t.blocked ? "BLOCKED" : failed ? "FAIL" : t.checks.length ? "PASS" : "FAIL";
-  const file = `docs/evidence/local/${t.id}.json`;
+  const file = `${EVID_REL}/${t.id}.json`;
   const row: Row = {
     id: t.id,
     requirement: t.requirement,
@@ -1007,6 +1009,102 @@ async function testUnsupported() {
   saveRow(t);
 }
 
+async function testMutationGuard() {
+  const t = new Test("M1-browser-mutation-guard", "Browser mutation guard: a form POST on an allowlisted public site (httpbin.org/forms/post → POST /post) is blocked by the runner, on the human path and the agent path; reads still work");
+  const cookie = await judgeA();
+  const c = await call(cookie, "POST", "/api/tasks", { kind: "general", profileId: "web-research", issueText: "read the httpbin form", egressAllow: ["httpbin.org"], scriptedDriver: "acc-form" });
+  t.check(c.status === 201, `create (egressAllow httpbin.org) → ${c.status}`);
+  const id = c.json.id;
+  t.check(await waitLiveBrowser(cookie, id), "live browser");
+  const take = await call(cookie, "POST", `/api/tasks/${id}/control/take`, {});
+  t.check(take.status === 200, `take → ${take.status}`);
+  await sleep(1500);
+  let obs = await call(cookie, "POST", `/api/tasks/${id}/control/action`, { request: { op: "observe" } });
+  let r = obs.json?.result?.response?.result;
+  if (!String(r?.url ?? "").includes("/forms/post")) {
+    await call(cookie, "POST", `/api/tasks/${id}/control/action`, { request: { op: "navigate", args: { url: "https://httpbin.org/forms/post" } } });
+    obs = await call(cookie, "POST", `/api/tasks/${id}/control/action`, { request: { op: "observe" } });
+    r = obs.json?.result?.response?.result;
+  }
+  const btn = (r?.controls ?? []).find((x: any) => x.role === "button" && /submit/i.test(x.name));
+  t.check(String(r?.url).includes("/forms/post") && btn, `human observe: ${r?.url}, submit button ref ${btn?.ref} at generation ${r?.generation}`);
+  const click = await call(cookie, "POST", `/api/tasks/${id}/control/action`, { request: { op: "click", args: { ref: btn?.ref ?? "e1", generation: Number(r?.generation) } } });
+  await sleep(2500);
+  const after = await call(cookie, "POST", `/api/tasks/${id}/control/action`, { request: { op: "observe" } });
+  const ar = after.json?.result?.response?.result;
+  const blockedEv = (ar?.events ?? []).filter((e: any) => /mutation/i.test(JSON.stringify(e)));
+  t.check(blockedEv.some((e: any) => /POST/.test(JSON.stringify(e)) && /httpbin\.org\/post/.test(JSON.stringify(e))), `human click Submit → runner reports mutation_blocked POST https://httpbin.org/post (${JSON.stringify(blockedEv).slice(0, 240)})`);
+  t.check(!/"form"\s*:|custname/.test(String(ar?.text ?? "")) && !String(ar?.url ?? "").endsWith("/post"), `page did not reach httpbin's /post echo (url ${ar?.url})`);
+  const read = await call(cookie, "POST", `/api/tasks/${id}/control/action`, { request: { op: "navigate", args: { url: "https://httpbin.org/get" } } });
+  t.check(read.json?.ok && read.json?.result?.response?.result?.status === 200, `GET on the same site still works (${read.json?.result?.response?.result?.status})`);
+  t.ev("human", { submitRef: btn?.ref, generation: r?.generation, click: click.text.slice(0, 500), afterObserve: { url: ar?.url, events: ar?.events, text: String(ar?.text ?? "").slice(0, 200) } });
+  await call(cookie, "POST", `/api/tasks/${id}/control/release`, {});
+  const v1 = await waitTerminal(cookie, id);
+  t.ev("humanTask", { id, status: v1.task.status, outcome: v1.task.outcome, cleanup: v1.task.cleanup });
+  // Agent path: the scripted driver clicks the discovered ref at generation 2 (navigate → 1, observe → 2).
+  const fixture = join(STACK, "scripts/acceptance/fixtures/general/acc-form-agent.json");
+  writeFileSync(fixture, JSON.stringify({ _comment: "ACCEPTANCE diagnostic (verifier_tester): agent clicks Submit on the allowlisted httpbin form (mutation guard, agent path).", turns: [
+    { text: "Open.", toolCalls: [{ name: "browser_navigate", args: { url: "https://httpbin.org/forms/post" } }] },
+    { text: "Observe.", toolCalls: [{ name: "browser_observe", args: {} }] },
+    { text: "Submit the form.", toolCalls: [{ name: "browser_click", args: { ref: btn?.ref ?? "e1", generation: 2 } }] },
+    { text: "Observe after.", toolCalls: [{ name: "browser_observe", args: {} }] },
+    { text: "Screenshot.", toolCalls: [{ name: "browser_screenshot", args: {} }] },
+    { text: "Done.", toolCalls: [{ name: "submit_result", args: { summary: "Acceptance diagnostic: tried to submit the httpbin form.", sources: ["https://httpbin.org/forms/post"] } }] },
+  ] }, null, 1));
+  const a = await call(cookie, "POST", "/api/tasks", { kind: "general", profileId: "web-research", issueText: "submit the httpbin form", egressAllow: ["httpbin.org"], scriptedDriver: "acc-form-agent" });
+  const v2 = await waitTerminal(cookie, a.json.id);
+  const evs = await allEvents(cookie, a.json.id);
+  const clickEv = evs.filter((e) => e.kind === "tool" && e.data?.tool === "browser_click");
+  const after2 = evs.filter((e) => e.kind === "tool" && e.data?.tool === "browser_observe" && e.data?.opState === "completed").at(-1);
+  const all = JSON.stringify(evs.filter((e) => e.seq >= (clickEv[0]?.seq ?? 0)));
+  t.check(clickEv.length > 0, `agent browser_click dispatched (${clickEv.map((e) => `${e.title}/${e.data?.opState}`).join(", ")})`);
+  t.check(/mutation/i.test(all) && !/httpbin\.org\/post"?\s*$/.test(after2?.title ?? ""), `agent path: blocked mutation recorded in the task's events; last observe ${after2?.title}`);
+  t.ev("agentTask", { id: a.json.id, status: v2.task.status, outcome: v2.task.outcome, cleanup: v2.task.cleanup, mutationMentions: (all.match(/[^"]{0,80}mutation[^"]{0,160}/gi) ?? []).slice(0, 6) });
+  t.ev("agentEvents", slim(evs));
+  saveRow(t);
+}
+
+async function testCleanupSweep() {
+  const t = new Test("K7-finished-task-cleanup-sweep", "F3: a finished task whose teardown failed (supervisor down at teardown) is swept after the supervisor returns: cleanup reaches 'confirmed' and the host is empty");
+  const cookie = await judgeA();
+  const c = await call(cookie, "POST", "/api/tasks", { profileId: "tabulate-365", issueText: REPAIR_ISSUE, scriptedDriver: "slow" });
+  const id = c.json.id;
+  const runEv = await waitEvent(cookie, id, (e) => e.kind === "model" && JSON.stringify(e.data ?? {}).includes('"run"'), 240_000);
+  t.check(runEv, "author command dispatched");
+  await sleep(1500);
+  const pid = Number(readFileSync(join(STACK, "data/run/supervisor.pid"), "utf8").trim());
+  sh(["kill", "-9", String(pid)]);
+  const killedAt = iso();
+  // Keep the supervisor down until the task is terminal with an unconfirmed teardown.
+  const v = await waitTerminal(cookie, id, 5 * 60_000);
+  t.check(v.task.cleanup?.status === "failed" || v.task.cleanup?.status === "retrying", `task ended ${v.task.status}/${v.task.outcome} with cleanup ${v.task.cleanup?.status} while the supervisor was down`);
+  const leftovers = taskContainers(id);
+  t.check(leftovers.length > 0, `the attempt's container is still on the host (${leftovers.join(", ")})`);
+  const cleanupWhileDown = v.task.cleanup;
+  await sleep(3000);
+  const up = sh(["bash", join(STACK, "scripts/dev-up.sh"), "--detach"], { AIRLOCK_WEB_DIST: "none", AIRLOCK_GENERAL_DIAGNOSTIC_SCRIPTS_DIR: join(STACK, "scripts/acceptance/fixtures/general"), AIRLOCK_PROPOSAL_TTL_MS: "60000", AIRLOCK_FORMS_ORIGINS: "http://127.0.0.1:3100,https://forms.example.com", AIRLOCK_JUDGE_PASSWORD: JUDGE_PW, AIRLOCK_OPERATOR_PASSWORD: OPER_PW }, true);
+  t.check(up.code === 0, `supervisor restarted (exit ${up.code})`);
+  const restartedAt = iso();
+  const t0 = Date.now();
+  let task: any;
+  const seen: string[] = [];
+  while (Date.now() - t0 < 6 * 60_000) {
+    task = (await getTask(cookie, id)).task;
+    const s = `${task.cleanup?.status}`;
+    if (seen.at(-1) !== s) seen.push(s);
+    if (task.cleanup?.status === "confirmed") break;
+    await sleep(1000);
+  }
+  const confirmedAfterMs = Date.now() - t0;
+  t.check(task.cleanup?.status === "confirmed", `cleanup reached confirmed ${Math.round(confirmedAfterMs / 1000)} s after restart (states seen: ${seen.join(" → ")}; ${task.cleanup?.detail})`);
+  t.check(task.status === v.task.status && task.outcome === v.task.outcome, `status/outcome unchanged by the sweep (${task.status}/${task.outcome})`);
+  t.check(taskContainers(id).length === 0 && ownedDocker().containers.length === 0 && ownedDocker().volumes.length === 0, "host empty (dev namespace): no containers, no volumes");
+  const evs = await allEvents(cookie, id);
+  t.ev("timeline", { killedAt, restartedAt, cleanupWhileDown, leftovers, cleanupStates: seen, confirmedAfterMs, final: { status: task.status, outcome: task.outcome, cleanup: task.cleanup } });
+  t.ev("events", slim(evs).slice(-14));
+  saveRow(t);
+}
+
 async function testFinalCleanup() {
   const t = new Test("K6-final-host-cleanup", "Containment: after everything, docker ps -a / networks / volumes with label airlock.supervisor=true (dev namespace) are empty; supervisor host listing empty");
   await sleep(3000);
@@ -1041,6 +1139,8 @@ const TESTS: Record<string, () => Promise<void>> = {
   K3: testTimeout,
   K5: testSupervisorRestart,
   D1: testUnsupported,
+  M1: testMutationGuard,
+  K7: testCleanupSweep,
   K6: testFinalCleanup,
 };
 

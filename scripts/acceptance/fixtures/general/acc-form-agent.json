@@ -1,0 +1,17 @@
+{
+ "_comment": "ACCEPTANCE diagnostic (verifier_tester): placeholder; the driver rewrites it with the discovered Submit ref before the agent-path run.",
+ "turns": [
+  {
+   "text": "x",
+   "toolCalls": [
+    {
+     "name": "submit_result",
+     "args": {
+      "summary": "placeholder",
+      "sources": []
+     }
+    }
+   ]
+  }
+ ]
+}

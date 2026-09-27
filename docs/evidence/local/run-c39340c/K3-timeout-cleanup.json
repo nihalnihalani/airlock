@@ -1,0 +1,58 @@
+{
+  "id": "K3-timeout-cleanup",
+  "requirement": "Cleanup on timeout: a sandbox command past its deadline (hostile `sleep 600`) is killed (timed_out) and the sandbox is torn down: (no sandboxes)",
+  "command": "bun scripts/acceptance/local.ts K3-timeout-cleanup",
+  "environment": "real local runc (dev-unsafe, Colima); stack = git archive of c39340c6091a",
+  "timestamp": "2026-09-27T10:37:49.517Z",
+  "revision": "c39340c6091a32ff8203fba5fd205bccac8614fd",
+  "result": "PASS",
+  "evidence": {
+    "card": {
+      "exec": {
+        "status": "timed_out",
+        "exitCode": 124,
+        "durationMs": 30027
+      },
+      "died": {
+        "container": "airlock-hostile-hostile-op-op-b622b9df09a9bfb1840742b2",
+        "runtime": "runc",
+        "guestUname": "Linux sandbox 6.8.0-64-generic #67-Ubuntu SMP PREEMPT_DYNAMIC Sun Jun 15 20:23:40 UTC 2025 aarch64 GNU/Linux",
+        "reason": "the command was killed at the per-command timeout; then the container and its volume were destroyed"
+      },
+      "teardown": {
+        "destroyedAt": "2026-09-27T10:37:49.451Z",
+        "containersRemaining": [],
+        "volumesRemaining": [],
+        "networksRemaining": [],
+        "clean": true,
+        "host": {
+          "listedAt": "2026-09-27T10:37:49.451Z",
+          "scope": "host",
+          "containers": [],
+          "volumes": [],
+          "networks": []
+        }
+      },
+      "wallMs": 30397
+    }
+  },
+  "checks": [
+    {
+      "ok": true,
+      "what": "hostile sleep 600 → 200 after 30397 ms"
+    },
+    {
+      "ok": true,
+      "what": "exec timed_out exit=124 after 30027 ms"
+    },
+    {
+      "ok": true,
+      "what": "teardown clean; host listing (no sandboxes)"
+    },
+    {
+      "ok": true,
+      "what": "docker ps (dev namespace) empty right after"
+    }
+  ],
+  "dirtyTree": null
+}

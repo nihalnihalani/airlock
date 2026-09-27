@@ -1,0 +1,172 @@
+{
+  "id": "K7-finished-task-cleanup-sweep",
+  "requirement": "F3: a finished task whose teardown failed (supervisor down at teardown) is swept after the supervisor returns: cleanup reaches 'confirmed' and the host is empty",
+  "command": "bun scripts/acceptance/local.ts K7-finished-task-cleanup-sweep",
+  "environment": "real local runc (dev-unsafe, Colima); stack = git archive of c39340c6091a",
+  "timestamp": "2026-09-27T10:40:23.744Z",
+  "revision": "c39340c6091a32ff8203fba5fd205bccac8614fd",
+  "result": "PASS",
+  "evidence": {
+    "timeline": {
+      "killedAt": "2026-09-27T10:39:58.477Z",
+      "restartedAt": "2026-09-27T10:40:12.556Z",
+      "cleanupWhileDown": {
+        "at": "2026-09-27T10:40:06.056Z",
+        "detail": "attempt att-0ac7ce552d0e4436d8e5: revoke failed: Supervisor call failed after retries: Unable to connect. Is the computer able to access the url?; destroy failed: Supervisor call failed after retries: Unable to connect. Is the computer able to access the url?",
+        "status": "failed"
+      },
+      "leftovers": [
+        "airlock-author-task-15833363876e6837-att-0ac7ce552d0e4436d8e5 Up 12 seconds"
+      ],
+      "cleanupStates": [
+        "retrying",
+        "confirmed"
+      ],
+      "confirmedAfterMs": 11093,
+      "final": {
+        "status": "done",
+        "outcome": "INCONCLUSIVE",
+        "cleanup": {
+          "at": "2026-09-27T10:40:23.528Z",
+          "detail": "supervisor confirmed teardown of 1 attempt(s) on cleanup retry 1",
+          "status": "confirmed"
+        }
+      }
+    },
+    "events": [
+      {
+        "seq": 17,
+        "at": "2026-09-27T10:39:59.991Z",
+        "kind": "error",
+        "title": "run failed",
+        "detail": "Supervisor call failed after retries: Unable to connect. Is the computer able to access the url?",
+        "opState": "unknown"
+      },
+      {
+        "seq": 18,
+        "at": "2026-09-27T10:39:59.995Z",
+        "kind": "model",
+        "title": "Model turn 2",
+        "detail": "Still working."
+      },
+      {
+        "seq": 19,
+        "at": "2026-09-27T10:40:01.503Z",
+        "kind": "error",
+        "title": "run failed",
+        "detail": "Supervisor call failed after retries: Unable to connect. Is the computer able to access the url?",
+        "opState": "unknown"
+      },
+      {
+        "seq": 20,
+        "at": "2026-09-27T10:40:01.505Z",
+        "kind": "model",
+        "title": "Model turn 3",
+        "detail": "Still working."
+      },
+      {
+        "seq": 21,
+        "at": "2026-09-27T10:40:03.019Z",
+        "kind": "error",
+        "title": "run failed",
+        "detail": "Supervisor call failed after retries: Unable to connect. Is the computer able to access the url?",
+        "opState": "unknown"
+      },
+      {
+        "seq": 22,
+        "at": "2026-09-27T10:40:03.023Z",
+        "kind": "model",
+        "title": "Model turn 4",
+        "detail": "(no text)"
+      },
+      {
+        "seq": 23,
+        "at": "2026-09-27T10:40:03.026Z",
+        "kind": "model",
+        "title": "Model turn 5",
+        "detail": "(no text)"
+      },
+      {
+        "seq": 24,
+        "at": "2026-09-27T10:40:03.028Z",
+        "kind": "model",
+        "title": "Model turn 6",
+        "detail": "(no text)"
+      },
+      {
+        "seq": 25,
+        "at": "2026-09-27T10:40:03.029Z",
+        "kind": "model",
+        "title": "Model turn 7",
+        "detail": "(no text)"
+      },
+      {
+        "seq": 26,
+        "at": "2026-09-27T10:40:06.054Z",
+        "kind": "lifecycle",
+        "title": "Teardown incomplete (unresolved)",
+        "detail": "revoke failed: Supervisor call failed after retries: Unable to connect. Is the computer able to access the url?; destroy failed: Supervisor call failed after retries: Unable to connect. Is the computer able to access the url?",
+        "opState": "failed"
+      },
+      {
+        "seq": 27,
+        "at": "2026-09-27T10:40:06.058Z",
+        "kind": "error",
+        "title": "Teardown incomplete",
+        "detail": "teardown of attempt att-0ac7ce552d0e4436d8e5 could not be confirmed (unresolved): revoke failed: Supervisor call failed after retries: Unable to connect. Is the computer able to access the url?; destroy failed: Supervisor call failed after retries: Unable to connect. Is the computer able to access t"
+      },
+      {
+        "seq": 28,
+        "at": "2026-09-27T10:40:06.059Z",
+        "kind": "phase",
+        "title": "Outcome INCONCLUSIVE",
+        "detail": "teardown of attempt att-0ac7ce552d0e4436d8e5 could not be confirmed (unresolved): revoke failed: Supervisor call failed after retries: Unable to connect. Is the computer able to access the url?; destroy failed: Supervisor call failed after retries: Unable to connect. Is the computer able to access t"
+      },
+      {
+        "seq": 29,
+        "at": "2026-09-27T10:40:08.476Z",
+        "kind": "lifecycle",
+        "title": "Cleanup retry scheduled",
+        "detail": "teardown unconfirmed for 1 attempt(s); retry 1 of 6 at 2026-09-27T10:40:23.473Z (attempt att-0ac7ce552d0e4436d8e5: revoke failed: Supervisor call failed after retries: Unable to connect. Is the computer able to access the url?; destroy failed: Supervisor call failed after retries: Unable to connect."
+      },
+      {
+        "seq": 30,
+        "at": "2026-09-27T10:40:23.528Z",
+        "kind": "lifecycle",
+        "title": "Cleanup confirmed on retry",
+        "detail": "supervisor confirmed teardown of 1 attempt(s) on cleanup retry 1"
+      }
+    ]
+  },
+  "checks": [
+    {
+      "ok": true,
+      "what": "author command dispatched"
+    },
+    {
+      "ok": true,
+      "what": "task ended done/INCONCLUSIVE with cleanup failed while the supervisor was down"
+    },
+    {
+      "ok": true,
+      "what": "the attempt's container is still on the host (airlock-author-task-15833363876e6837-att-0ac7ce552d0e4436d8e5 Up 12 seconds)"
+    },
+    {
+      "ok": true,
+      "what": "supervisor restarted (exit 0)"
+    },
+    {
+      "ok": true,
+      "what": "cleanup reached confirmed 11 s after restart (states seen: retrying → confirmed; supervisor confirmed teardown of 1 attempt(s) on cleanup retry 1)"
+    },
+    {
+      "ok": true,
+      "what": "status/outcome unchanged by the sweep (done/INCONCLUSIVE)"
+    },
+    {
+      "ok": true,
+      "what": "host empty (dev namespace): no containers, no volumes"
+    }
+  ],
+  "dirtyTree": null
+}
