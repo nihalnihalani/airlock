@@ -98,6 +98,7 @@ async function main() {
     zipFiles,
     exportGrantTtlMs: config.exportGrantTtlMs,
     hostileMinIntervalMs: config.hostileMinIntervalMs,
+    previewMinIntervalMs: config.previewMinIntervalMs,
     scriptedDrivers,
     webDist: config.webDist,
     trustProxy: config.trustProxy,

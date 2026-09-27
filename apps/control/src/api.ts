@@ -70,6 +70,8 @@ export interface ApiDeps {
   zipFiles: ZipFilesFn;
   exportGrantTtlMs: number;
   hostileMinIntervalMs: number;
+  /** Per-session minimum interval between preview invocations (each one is a sandbox run on VM B). */
+  previewMinIntervalMs?: number;
   /** Names a task may select with `scriptedDriver`; null (default) when the live driver is configured. */
   scriptedDrivers?: string[] | null;
   /** Built web UI directory served for every non-/api GET (SPA fallback to index.html). */
@@ -97,6 +99,8 @@ export function createApp(deps: ApiDeps) {
   const iso = () => new Date(now()).toISOString();
   const app = new Hono<Env>();
   const hostileLast = new Map<string, number>();
+  const previewLast = new Map<string, number>();
+  const previewMinIntervalMs = deps.previewMinIntervalMs ?? 2000;
 
   app.onError((error, c) => {
     if (error instanceof AppError) return c.json({ error: error.message }, error.status);
@@ -344,10 +348,17 @@ export function createApp(deps: ApiDeps) {
     return c.json(next);
   });
 
+  // Preview is deliberately open to judge sessions on any task (the demo flow: the operator runs
+  // the repair, the judge tries the sealed candidate). It writes nothing and is bound to the sealed
+  // digest; what bounds it is the per-session interval, since every call is a sandbox run on VM B.
   app.post("/api/tasks/:id/preview", async (c) => {
-    requireRole(c, "operator", "judge");
+    const session = requireRole(c, "operator", "judge");
     const { owner, task } = await loadTask(taskId(c));
     const body = await readJson(c, PreviewRequest);
+    const lastPreview = previewLast.get(session.id) ?? 0;
+    if (now() - lastPreview < previewMinIntervalMs) throw new AppError(`previews are limited to one per ${Math.ceil(previewMinIntervalMs / 1000)} s per session`, 429);
+    previewLast.set(session.id, now());
+    if (previewLast.size > 1000) previewLast.clear();
     if (!task.candidateDigest || !task.verificationRecordId) throw new AppError("task has no verified candidate", 409);
     if (body.candidateDigest !== task.candidateDigest) throw new AppError("candidateDigest does not match the task's sealed candidate", 409);
     const verification = await deps.store.get<VerificationRecord>(owner, STORE_KIND_VERIFICATIONS, task.verificationRecordId);

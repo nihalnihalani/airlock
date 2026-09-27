@@ -351,6 +351,29 @@ describe("preview and export", () => {
     }
   });
 
+  test("preview is open to judge sessions on any passed task but rate limited per session", async () => {
+    let t = 5_000_000;
+    const ctx = await makeCtx({ withWorker: true, now: () => t });
+    try {
+      const op = await login(ctx.app, OPERATOR);
+      const judge = await login(ctx.app, JUDGE);
+      const task = await completedTask(ctx, op);
+      const body = { candidateDigest: task.candidateDigest, input: { x: 5 } };
+      // A judge may preview an operator's passed task: that is the demo flow.
+      expect((await ctx.app.request(`/api/tasks/${task.id}/preview`, json(body, judge))).status).toBe(200);
+      // But not in a tight loop: one preview per interval per session, like /api/hostile.
+      const second = await ctx.app.request(`/api/tasks/${task.id}/preview`, json(body, judge));
+      expect(second.status).toBe(429);
+      // The operator's own session has its own budget.
+      expect((await ctx.app.request(`/api/tasks/${task.id}/preview`, json(body, op))).status).toBe(200);
+      t += 2_001;
+      expect((await ctx.app.request(`/api/tasks/${task.id}/preview`, json(body, judge))).status).toBe(200);
+      expect(ctx.supervisor.invocations.filter((i) => i.role === "preview")).toHaveLength(3);
+    } finally {
+      await ctx.close();
+    }
+  });
+
   test("preview refuses when the stored bundle bytes no longer match the sealed digest", async () => {
     const ctx = await makeCtx({ withWorker: true });
     try {

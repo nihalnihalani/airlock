@@ -29,6 +29,7 @@ export interface Config {
   sessionTtlMs: number;
   exportGrantTtlMs: number;
   hostileMinIntervalMs: number;
+  previewMinIntervalMs: number;
 }
 
 export class ConfigError extends Error {
@@ -119,6 +120,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     sessionTtlMs: intEnv(env, "AIRLOCK_SESSION_TTL_MS", 12 * 60 * 60 * 1000, 60_000, 30 * 24 * 60 * 60 * 1000),
     exportGrantTtlMs: intEnv(env, "AIRLOCK_EXPORT_GRANT_TTL_MS", 24 * 60 * 60 * 1000, 60_000, 30 * 24 * 60 * 60 * 1000),
     hostileMinIntervalMs: intEnv(env, "AIRLOCK_HOSTILE_MIN_INTERVAL_MS", 10_000, 0, 3_600_000),
+    previewMinIntervalMs: intEnv(env, "AIRLOCK_PREVIEW_MIN_INTERVAL_MS", 2_000, 0, 3_600_000),
   };
 }
 

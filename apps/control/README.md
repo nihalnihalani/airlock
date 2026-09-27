@@ -29,7 +29,7 @@ bunx tsc --noEmit -p tsconfig.json  # from apps/control
 | `AIRLOCK_WEB_DIST` | no | `<repo>/apps/web/dist` | Built web UI served at `/` (SPA fallback to `index.html`); `/api/*` always takes precedence. Unset and missing → only `/api` is served (logged). `none` disables. |
 | `AIRLOCK_INSECURE_COOKIES` | no | unset | `1` drops the cookie `Secure` flag for plain-http local development only. |
 | `AIRLOCK_TRUST_PROXY` | no | unset | `1` only when a reverse proxy in front of this process sets `X-Forwarded-For`: the login rate limit then keys on the proxy's (rightmost) hop. Unset, those headers are ignored as attacker-supplied and the limit keys on the socket peer address. |
-| `AIRLOCK_SESSION_TTL_MS`, `AIRLOCK_EXPORT_GRANT_TTL_MS`, `AIRLOCK_HOSTILE_MIN_INTERVAL_MS` | no | 12 h, 24 h, 10 s | Lifetimes and the per-session hostile-run rate limit. |
+| `AIRLOCK_SESSION_TTL_MS`, `AIRLOCK_EXPORT_GRANT_TTL_MS`, `AIRLOCK_HOSTILE_MIN_INTERVAL_MS`, `AIRLOCK_PREVIEW_MIN_INTERVAL_MS` | no | 12 h, 24 h, 10 s, 2 s | Lifetimes and the per-session hostile-run and preview rate limits. |
 
 Start-up refuses on a missing token, a missing key for the vultr driver, an unreadable profiles
 directory, or zero usable profiles. An unreachable supervisor is logged; tasks fail until it is up.
@@ -60,7 +60,7 @@ Cookie `airlock_session` (HttpOnly, SameSite=Strict, sha256 of the token stored)
 | `GET /api/tasks`, `GET /api/tasks/:id` | any | List / `TaskView` (task, baseline and candidate records, sealed manifest, host). |
 | `GET /api/tasks/:id/events` | any | SSE of `RunEvent` (`id` = seq, `event` = kind), replayed after `Last-Event-ID` (or `?after=`), plus `task` snapshots and a final `end`. |
 | `POST /api/tasks/:id/cancel` → `Task` | owner or operator | queued → cancelled; running → cancelling (worker runs the teardown path); terminal → 409. |
-| `POST /api/tasks/:id/preview` `PreviewRequest` → `PreviewResult` | operator, judge | Refused (409) unless `candidateDigest` equals the task's sealed digest, the verification record passed, and the stored bundle still carries that digest. Runs a fresh `preview` invocation on the sealed bundle. |
+| `POST /api/tasks/:id/preview` `PreviewRequest` → `PreviewResult` | operator, judge (any task; intended: the judge tries the operator's passed candidate) | Refused (409) unless `candidateDigest` equals the task's sealed digest, the verification record passed, and the stored bundle still carries that digest. Runs a fresh `preview` invocation on the sealed bundle; writes nothing. One per 2 s per session (429). |
 | `POST /api/tasks/:id/export` → `{grantId,url,expiresAt}` | owner or operator | Immutable `ExportGrant` bound to (task, candidateDigest, verificationRecordId); repeated calls return the same unexpired grant. |
 | `GET /api/exports/:grantId` | the granting owner | Streams the zip (`patch.diff`, `manifest.json`, `verification.json`, `baseline.json`, `reproduction/`, `README.txt`). Repeatable; 410 when expired. |
 | `POST /api/hostile {command, profileId?}` → `BlastRadiusCard` | judge, operator | One per 10 s per session. |
