@@ -21,6 +21,9 @@ DATA="$ROOT/data"
 DEV_ENV="$DATA/dev.env"
 RUN="$DATA/run"
 mkdir -p "$DATA" "$RUN"
+# Per-process log files (appended). ./run.sh points these at the same defaults and merges them.
+SUPERVISOR_LOG="${AIRLOCK_SUPERVISOR_LOG:-$RUN/supervisor.log}"
+CONTROL_LOG="${AIRLOCK_CONTROL_LOG:-$RUN/control.log}"
 
 DETACH=0
 for arg in "$@"; do
@@ -117,11 +120,11 @@ else
   rm -f "$RUN/supervisor.pid"
   ( cd "$ROOT/apps/supervisor" && \
     PORT="$SUPERVISOR_PORT" SUPERVISOR_BIND=127.0.0.1 AIRLOCK_DATA_DIR="$AIRLOCK_DATA_DIR_SUPERVISOR" \
-    exec bun src/index.ts >>"$RUN/supervisor.log" 2>&1 ) &
+    exec bun src/index.ts >>"$SUPERVISOR_LOG" 2>&1 ) &
   echo $! > "$RUN/supervisor.pid"
   STARTED+=(supervisor)
   if ! wait_http "$SUPERVISOR_URL/health" 30; then
-    echo "supervisor did not become healthy; last log lines:" >&2; tail -20 "$RUN/supervisor.log" >&2; exit 1
+    echo "supervisor did not become healthy; last log lines:" >&2; tail -20 "$SUPERVISOR_LOG" >&2; exit 1
   fi
 fi
 
@@ -132,11 +135,11 @@ else
   rm -f "$RUN/control.pid"
   ( cd "$ROOT/apps/control" && \
     PORT="$CONTROL_PORT" CONTROL_BIND=127.0.0.1 AIRLOCK_DATA_DIR="$AIRLOCK_DATA_DIR_CONTROL" \
-    exec bun src/index.ts >>"$RUN/control.log" 2>&1 ) &
+    exec bun src/index.ts >>"$CONTROL_LOG" 2>&1 ) &
   echo $! > "$RUN/control.pid"
   STARTED+=(control)
   if ! wait_http "$CONTROL_URL/api/session" 60; then
-    echo "control did not become ready; last log lines:" >&2; tail -20 "$RUN/control.log" >&2; exit 1
+    echo "control did not become ready; last log lines:" >&2; tail -20 "$CONTROL_LOG" >&2; exit 1
   fi
 fi
 
@@ -151,7 +154,7 @@ else
   echo "  web UI      $CONTROL_URL/   (operator password in $DEV_ENV)"
 fi
 echo "  model       $AIRLOCK_MODEL_DRIVER"
-echo "  logs        $RUN/supervisor.log  $RUN/control.log"
+echo "  logs        $SUPERVISOR_LOG  $CONTROL_LOG  (AIRLOCK_LOG_LEVEL=${AIRLOCK_LOG_LEVEL:-info}; ./run.sh merges them)"
 echo "  smoke       bun scripts/smoke.ts"
 echo
 
@@ -167,5 +170,5 @@ if [[ ${#STARTED[@]} -eq 0 ]]; then
   echo "nothing new started; press Ctrl-C to stop the running stack"
 fi
 while alive "$RUN/supervisor.pid" && alive "$RUN/control.pid"; do sleep 1; done
-echo "a process exited; see $RUN/*.log" >&2
+echo "a process exited; see $SUPERVISOR_LOG and $CONTROL_LOG" >&2
 exit 1

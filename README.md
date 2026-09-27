@@ -43,20 +43,61 @@ The tier is **inspected, never assumed**: the supervisor creates every container
 
 ## Quick start (local, dev-unsafe)
 
-Prerequisites: Bun 1.3, Docker (on macOS via Colima: `colima start`, then `export DOCKER_HOST=unix://$HOME/.colima/default/docker.sock`), `python3`, `git`, `unzip` and `patch` (for the smoke), `uv` (for the Python tests).
+Prerequisites: Bun 1.3, Docker (on macOS via Colima: `colima start`; `./run.sh` defaults `DOCKER_HOST` to the Colima socket), `python3`, `git`, `perl` (present on macOS and Linux), `unzip` and `patch` (for the smoke), `uv` (for the Python tests).
 
 ```sh
-bun install
-runtime/python/build.sh tabulate-365     # pins profiles/tabulate-365/base and builds airlock-runtime-python:tabulate-365
-scripts/dev-up.sh --detach               # supervisor + control plane, scripted model driver, prints URLs
-bun scripts/smoke.ts                     # end to end through the HTTP API (about two minutes)
-open http://127.0.0.1:3000/              # web UI; operator password is in data/dev.env
-scripts/dev-down.sh
+./run.sh                  # bun install if needed, build the runtime image and the web UI if missing,
+                          # start supervisor + control plane, stream the merged debug log; Ctrl-C stops everything
+./run.sh up -d            # the same, detached
+./run.sh status           # pids, health JSON, owned containers, model driver/model, log path
+./run.sh logs             # tail -F the merged log
+./run.sh smoke            # end to end through the HTTP API (about a minute; scripted driver)
+./run.sh gate --n 3       # live-repair gate (needs AIRLOCK_MODEL_DRIVER=vultr, a key and AIRLOCK_MODEL in .env)
+./run.sh test             # the four suites: control, supervisor (real Docker), web, runtime pytest
+./run.sh down             # stop; footer with the docker owned-container listing
+open http://127.0.0.1:3000/   # web UI; operator password is in data/dev.env
 ```
 
-`dev-up.sh` generates a random `SUPERVISOR_TOKEN` and the two role passwords into the gitignored `data/dev.env` on first run, starts both processes on `127.0.0.1`, waits for `/health` and `/api/session`, and is idempotent. Without `--detach` it stays in the foreground and stops both on Ctrl-C. Logs are in `data/run/`.
+`./run.sh` is a thin wrapper over `scripts/dev-up.sh` / `scripts/dev-down.sh`, which hold the start/stop
+logic: they generate a random `SUPERVISOR_TOKEN` and the two role passwords into the gitignored
+`data/dev.env` on first run, load `.env`, build the runtime image (`runtime/python/build.sh tabulate-365`)
+when it is missing, rebuild `apps/web/dist`, start both processes on `127.0.0.1`, wait for `/health` and
+`/api/session`, and are idempotent. They can still be called directly (`scripts/dev-up.sh --detach`,
+`bun scripts/smoke.ts`); the wrapper adds the merged debugging log below.
 
-In the UI, sign in with the operator password, choose the `tabulate-365` profile, paste the issue text (for the hero case: an empty table with `headers` and `maxheadercolwidths` raises `IndexError`) and start. The default dev driver is scripted (see "Model driver"), so the run replays the labelled diagnostic candidate; pick `forged-log` or `slow` through the API's `scriptedDriver` field to see `CHECKS_FAILED` or a cancellable run.
+### The debugging log
+
+Every `./run.sh up` writes `data/run/airlock-<YYYYmmdd-HHMMSS>.log` and points the symlink
+`data/run/airlock-latest.log` at it. It contains, in order:
+
+1. **A preflight header**: git revision and dirty flag, `bun`/`docker`/`uv` versions, `DOCKER_HOST`,
+   the runtimes Docker lists, the runtime image id and digest, the profile ids, a redacted summary of the
+   effective environment (values for ordinary settings, `[set, N chars]` for anything named like a
+   token, password or key), the chosen model driver and model, and the ports.
+2. **Both processes' output, merged in order**: each line is `<ISO ts> [control|supervisor] <line>`;
+   `dev-up`'s own progress (image build, URLs) appears as `[run]`. Each app's line is one JSON object
+   `{ts, level, app, msg, ...fields}` (see "Log levels" below).
+3. **A footer on exit** with the exit reason and the `docker ps` listing of owned containers, which must
+   read `(no sandboxes)`.
+
+**Log levels.** Both apps read `AIRLOCK_LOG_LEVEL` (`error` | `warn` | `info` | `debug`; default `info`
+when started by hand). `./run.sh` defaults it to `debug`; pass `--quiet` for `info`. At `debug` the control
+plane records every HTTP request/response (method, path, status, duration, role, body sizes; never a body),
+worker lease claims/releases, every phase transition, every model call (model, host, `finish_reason`,
+prompt/completion/reasoning tokens, tool names, duration), every supervisor-client call (operation id,
+endpoint, status, duration, fence errors), SSE subscribe/replay/close and export grants; the supervisor
+records every HTTP request, every Docker verb with container/volume names and duration (create, inspect,
+start, stop, remove, list, archive upload, exec start/end with exit code and captured byte counts), probe
+results, provisioning, reconcile/janitor passes and what they removed, deadline timers armed and fired, and
+journal operations (new / replay / conflict / in-progress, completion status). At `info` only the startup
+lines, attempt lifecycle summaries and anomalies remain.
+
+**What is never in the log.** The supervisor token, the inference key, the role passwords, session tokens
+and cookies. The apps redact any field whose name looks like a credential and any bearer/cookie header
+value; the wrapper prints secret names only. The smoke run used for this README was grepped for every
+token, password and key value in `data/dev.env` and `.env`: zero hits.
+
+In the UI, sign in with the operator password, choose the `tabulate-365` profile, paste the issue text (for the hero case: an empty table with `headers` and `maxheadercolwidths` raises `IndexError`) and start. The default dev driver is scripted (see "Model driver"), so the run replays the labelled diagnostic candidate; pick `forged-log` or `slow` through the API's `scriptedDriver` field to see `CHECKS_FAILED` or a cancellable run. With `AIRLOCK_MODEL_DRIVER=vultr`, `VULTR_INFERENCE_API_KEY` and `AIRLOCK_MODEL` in `.env`, the same start runs live repairs.
 
 ## Configuration
 
@@ -160,8 +201,10 @@ cd apps/control && bunx tsc --noEmit -p tsconfig.json && bun test
 cd apps/web && bunx tsc --noEmit -p tsconfig.json && bunx vite build && bun test
 # runtime: adapter, materializer, collector, probe, tree digest, and a docker integration test on dev-unsafe runc
 uv run --with pytest pytest runtime/python/tests
-# end to end against scripts/dev-up.sh
-bun scripts/smoke.ts
+# end to end against a running stack (./run.sh up -d)
+./run.sh smoke            # or: bun scripts/smoke.ts
+# all four suites in one go
+./run.sh test
 ```
 
 The smoke proves, through the public HTTP API only: diagnostic repair → `CANDIDATE_PASSED_CHECKS` with all five checkpoints; preview of the reported input renders the header-only table; the export zip's `patch.diff` applies with `patch -p1 --dry-run` to `profiles/tabulate-365/base`; `rm -rf / --no-preserve-root` dies in its sandbox while the supervisor, host sentinel and control plane survive and teardown is `(no sandboxes)`; the forged-log script ends `CHECKS_FAILED`; a task cancelled during `sleep 25` ends `cancelled` with no live attempt at the supervisor and no owned container in `docker ps`.
