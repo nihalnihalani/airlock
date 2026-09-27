@@ -4,10 +4,13 @@ Durable state for the Airlock completion work (prompt in research/41 and the pas
 
 ## Current state
 
-- Branch: `fix/milestone-1-guarantees` (pushed). Base: `main` @ `a1ae88d`.
-- Milestone 1 (B1–B8): done and pushed; verified with local unit/integration tests against fakes.
-- Milestone 2: done and pushed (review findings fixed). Milestone 3: browser runner, egress proxy and supervisor browser role done and pushed (local runc evidence; gVisor/Kata blocked). Milestone 4: in progress.
-- **External blocker:** this machine has no Vultr access (`VULTR_API_KEY` absent, no `data/deploy/` state). Every gate that needs the deployed VMs (Kata measurements, live gate, deployment evidence, SSH/HTTPS checks) stays *blocked* until access is provided. Local verification uses Colima (runc, labelled dev-unsafe).
+- Branch: `fix/milestone-1-guarantees` (pushed). Base: `main` @ `a1ae88d`. HEAD tracked in git.
+- Milestones 1–5 implemented and pushed; milestone 6 (independent verification, deployment) in progress.
+- Team (Claude Code subagents, Opus 5.5): control_developer, execution_developer, product_developer, verifier_tester, devils_advocate; the lead owns contracts, lockfile, integration and deploy scripts. The experimental "agent teams" feature was not used; each role ran as a separate subagent with file ownership.
+- **External blocker:** no Vultr access here (`VULTR_API_KEY` absent, no `data/deploy/` state, no inference key). Blocked: deployment, Kata/gVisor gates (D1, C4, G4, P1–P3), live repair gate and receipts (G2), vision round trip (C20), live-model evidence, demo recording. Local evidence is Colima runc, labelled dev-unsafe.
+- Open release work: devil's-advocate R1 (runner blocks non-GET mutations off adapter origins) and S1–S3 fixes in progress; verifier acceptance run in progress.
+
+Decisions: tmpfs workspace kept pending Kata measurement (D1); one live attempt per task per role family (browser, code); scripted drivers are labelled diagnostics everywhere and cannot produce live-gate receipts; RESULT_VERIFIED means the profile's structural checks passed, not that the answer is correct.
 
 Status vocabulary: `open`, `in progress`, `implemented-unverified`, `verified (local)` (unit/fake or local Docker), `verified (Vultr)`, `conditional`, `optional`, `blocked (reason)`.
 
@@ -49,7 +52,7 @@ Status vocabulary: `open`, `in progress`, `implemented-unverified`, `verified (l
 | D11 | 2 | control | verified (local) | exact base URL, redirect:error — 9168d5d |
 | D12 | 2 | runtime | verified (local, real Docker runc) | root/ro/size-aware mount classification — b2de0d6; Kata mount roots unmeasured |
 | D13 | 2 | contracts | verified (local) | compareCodePoints — c7580dc, cf86da6 |
-| D14 | 6 | lead | open | CLAUDE.md layout names |
+| D14 | 6 | lead | done | CLAUDE.md layout and scope updated — c42b7aa |
 | D15 | 2 | supervisor | verified (local) | public health {ok:true} on both planes — 2c662a8, 9168d5d |
 | G1 | 2 | control | verified (local) | provenance-checked live gate + receipts bound to image/adapter/store; running it needs Vultr — a5f9bce |
 | G2 | 6 | lead | blocked (deployment) | committed sanitized evidence needs a deployment run |
@@ -79,40 +82,40 @@ Status vocabulary: `open`, `in progress`, `implemented-unverified`, `verified (l
 | C8 | 3 | execution/control/web | implemented-unverified | DOCKER-USER egress guard (dry-run tested); needs VX1 host |
 | C9 | 3 | execution/control/web | verified (local, real Docker runc) | browser image/runner/egress + supervisor browser role — fcc8170, b2de0d6; gVisor/Kata + host iptables unverified |
 | C10 | 3 | execution/control/web | verified (local, real Docker runc) | browser image/runner/egress + supervisor browser role — fcc8170, b2de0d6; gVisor/Kata + host iptables unverified |
-| C11 | 4 | execution/control/web | open | doc 40 browser/general execution scope |
-| C12 | 4 | execution/control/web | open | doc 40 browser/general execution scope |
-| C13 | 4 | execution/control/web | open | doc 40 browser/general execution scope |
-| C14 | 4 | execution/control/web | open | doc 40 browser/general execution scope |
-| C15 | 4 | execution/control/web | open | doc 40 browser/general execution scope |
-| C16 | 4 | execution/control/web | open | doc 40 browser/general execution scope |
-| C17 | 4 | execution/control/web | open | doc 40 browser/general execution scope |
-| C18 | 4 | execution/control/web | open | doc 40 browser/general execution scope |
-| C19 | 4 | execution/control/web | open | doc 40 browser/general execution scope |
-| C20 | 4 | execution/control/web | open | doc 40 browser/general execution scope |
-| C21 | 4 | execution/control/web | open | doc 40 browser/general execution scope |
-| C22 | 5 | execution/control/web | open | doc 40 browser/general execution scope |
-| C23 | 5 | execution/control/web | open | doc 40 browser/general execution scope |
-| C24 | 5 | execution/control/web | open | doc 40 browser/general execution scope |
-| C25 | 5 | execution/control/web | open | doc 40 browser/general execution scope |
-| C26 | 5 | execution/control/web | open | doc 40 browser/general execution scope |
-| C27 | 5 | execution/control/web | open | doc 40 browser/general execution scope |
-| C28 | 4 | execution/control/web | open | doc 40 browser/general execution scope |
-| C29 | 4 | execution/control/web | open | doc 40 browser/general execution scope |
-| C30 | 4 | execution/control/web | open | doc 40 browser/general execution scope |
-| C31 | 4 | execution/control/web | open | doc 40 browser/general execution scope |
-| C32 | 4 | execution/control/web | open | doc 40 browser/general execution scope |
-| C33 | 4 | execution/control/web | open | doc 40 browser/general execution scope |
-| C34 | 4 | execution/control/web | open | doc 40 browser/general execution scope |
-| C35 | 4 | execution/control/web | open | doc 40 browser/general execution scope |
-| C36 | 4 | execution/control/web | open | doc 40 browser/general execution scope |
-| C37 | 4 | execution/control/web | open | doc 40 browser/general execution scope |
-| C38 | 6 | execution/control/web | open | doc 40 browser/general execution scope |
-| C39 | 6 | execution/control/web | open | doc 40 browser/general execution scope |
-| C40 | 6 | execution/control/web | open | doc 40 browser/general execution scope |
-| C41 | 6 | execution/control/web | open | doc 40 browser/general execution scope |
+| C11 | 4 | execution/control/web | verified (local, real Docker runc) | navigate/observe with ARIA controls — fcc8170, b2de0d6, fde81e1 |
+| C12 | 4 | execution/control/web | verified (local, real Docker runc) | click/type/key/scroll bound to generation — fcc8170 |
+| C13 | 4 | execution/control/web | verified (local, real Docker runc) | stale refs refused; real-Docker stale click — b2de0d6 |
+| C14 | 4 | execution/control/web | verified (runner unit) | tabs list/switch/close, popups tracked ≤5 — fcc8170 |
+| C15 | 4 | execution/control/web | verified (runner unit) | dialogs dismissed + pending_review; file chooser cancelled — fcc8170 |
+| C16 | 4 | execution/control/web | verified (local, real Docker runc) | bounded downloads (in-progress size, count, total); public CSV + 20 MB cancel — d8450d3 |
+| C17 | 4 | execution/control/web | verified (local, real Docker runc) | uploads of sha256-checked owner artifacts; public test form — d8450d3, 7c1ab8e |
+| C18 | 4 | execution/control/web | verified (fakes) | task-profiles registry + controller-owned completion — fde81e1 |
+| C19 | 4 | execution/control/web | verified (fakes) | screenshot artifacts with url/time/dims/sha256 — fde81e1 |
+| C20 | 4 | execution/control/web | blocked (inference key) | image parts implemented and gated (AIRLOCK_MODEL_VISION); live round trip needs a Vultr key — fde81e1 |
+| C21 | 4 | execution/control/web | verified (fakes) | model call-site inventory in apps/control/README.md; pinned URL — fde81e1 |
+| C22 | 5 | execution/control/web | verified (fakes) | authenticated rate-limited screenshot live view — 7c1ab8e, 22dcce5 |
+| C23 | 5 | execution/control/web | verified (fakes) | exclusive take/release with settle and generation fence — 7c1ab8e |
+| C24 | 5 | execution/control/web | verified (fakes) | human actions keep egress/deadline/budget; never approvals — 7c1ab8e |
+| C25 | 5 | execution/control/web | verified (fakes) | proposals + one-use CAS decide — 9d4b94b, 7c1ab8e |
+| C26 | 5 | execution/control/web | verified (fakes + real Chromium on fixtures) | controller-driven submit, destination enforces HMAC-bound payload — 0ff1e56, 7c1ab8e |
+| C27 | 5 | execution/control/web | verified (fakes) | click/Enter/type-submit gated on adapter forms; generic sites: runner blocks mutations (in progress) |
+| C28 | 4 | execution/control/web | verified (fakes) | uploads, artifacts, owner scope, quotas, nosniff — fde81e1 |
+| C29 | 4 | execution/control/web | verified (local, real Docker runc) | collector for CSV/JSON/PNG/code outputs — dffdc55, d8450d3 |
+| C30 | 4 | execution/control/web | verified (local, real Docker runc) | offline Node image + role — dffdc55, d8450d3 |
+| C31 | 4 | execution/control/web | verified (fakes) | general handler + profile registry at the worker seam — fde81e1 |
+| C32 | 4 | execution/control/web | verified (fakes) | completion checks per profile — fde81e1 |
+| C33 | 4 | execution/control/web | verified (fakes) | UNSUPPORTED outcome, no simulated capability — fde81e1, 7c1ab8e |
+| C34 | 4 | execution/control/web | in progress | hero: fixture page + download + analysis; real local run pending verifier; live model blocked |
+| C35 | 4 | execution/control/web | verified (fakes) | workflow/result/cleanup separated in contracts/API/UI — fde81e1, a2bc7d3 |
+| C36 | 4 | execution/control/web | verified (fakes) | opState allowed/started/completed/failed/unknown — fde81e1, 7c1ab8e |
+| C37 | 4 | execution/control/web | verified (fakes) | general sealed evidence bundle — fde81e1 |
+| C38 | 6 | execution/control/web | in progress | hostile-page and injection tests: verifier running |
+| C39 | 6 | execution/control/web | verified (local, real Docker runc) | teardown of containers/networks/profiles confirmed; janitor — b2de0d6, d8450d3 |
+| C40 | 6 | execution/control/web | verified (fakes) | two-owner authorization tests across task/event/artifact/control/approval APIs — 1fbeae2, fde81e1, 7c1ab8e |
+| C41 | 6 | execution/control/web | in progress | kill controller/supervisor/runner during actions: partially covered (runner loss → interrupted, restart reconcile); verifier running |
 
 ## Housekeeping
 
 - scripted fixture path (`fileURLToPath`): done — 011fb84
 - root `bun test` picks up reference repos: `bun run test` lists owned paths (Bun 1.3.2 has no ignore option) — fcc8170
-- README test counts / CLAUDE.md layout / research status line / duplicate 38- file: open
+- CLAUDE.md layout: done (c42b7aa). README test counts, research status line, duplicate 38- file: open (final docs pass)
