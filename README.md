@@ -1,10 +1,88 @@
+<div align="center">
+
 # Airlock
+
+**Give the agent a stranger's bug report. Get back a patch you can try, with checks the agent could not fake, while every line of untrusted code runs in a disposable sandbox.**
+
+[![The Agent Arena Hackathon](https://img.shields.io/badge/The%20Agent%20Arena%20Hackathon-2026-007BFC?style=for-the-badge)](#hackathon-fit)
+[![Challenge 1](https://img.shields.io/badge/Challenge%201-Blast%20Radius%20Zero-dc2626?style=for-the-badge)](#hackathon-fit)
+[![Live repair gate](https://img.shields.io/badge/live%20repair%20gate-3%2F3%20passed-16a34a?style=for-the-badge)](#status)
+
+[![Vultr Serverless Inference](https://img.shields.io/badge/Vultr-Serverless%20Inference%20%C2%B7%20glm--5.3-007BFC?style=flat-square&logo=vultr&logoColor=white)](https://www.vultr.com/products/serverless-inference/)
+[![Vultr VX1](https://img.shields.io/badge/Vultr-VX1%20sandbox%20host-007BFC?style=flat-square&logo=vultr&logoColor=white)](https://docs.vultr.com/how-to-set-up-agent-sandboxing-on-vultr-cloud-compute)
+[![Kata Containers](https://img.shields.io/badge/Kata-microVM%20target-f59e0b?style=flat-square)](https://katacontainers.io/)
+[![gVisor](https://img.shields.io/badge/gVisor-runsc%20floor-4285F4?style=flat-square)](https://gvisor.dev/)
+[![CopilotKit](https://img.shields.io/badge/CopilotKit-OpenMuse%20%C2%B7%20OpenBot%20modules-6366f1?style=flat-square)](THIRD_PARTY_NOTICES.md)
+
+![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6?style=flat-square&logo=typescript&logoColor=white)
+![Bun](https://img.shields.io/badge/Bun-1.3-000000?style=flat-square&logo=bun)
+![Hono](https://img.shields.io/badge/Hono-API-E36002?style=flat-square&logo=hono&logoColor=white)
+![React](https://img.shields.io/badge/React-Vite-61DAFB?style=flat-square&logo=react&logoColor=black)
+![Python](https://img.shields.io/badge/Python-3.12%20runtime-3776AB?style=flat-square&logo=python&logoColor=white)
+![Tests](https://img.shields.io/badge/tests-186%20control%20%C2%B7%2064%20supervisor%20%C2%B7%2025%20web%20%C2%B7%2071%20runtime-16a34a?style=flat-square)
+
+</div>
 
 Airlock takes an untrusted bug report for a supported library, reproduces the failure in a disposable sandbox on Vultr, attempts a minimal repair, and returns a patch with **externally measured** before/after behavior. The agent can edit the candidate; it can never edit the acceptance contract, grant itself privileges, publish its work, or decide that it passed. The result of a run is one of six terminal outcomes; "Passed these checks" means exactly that the frozen contract cases passed on a sealed candidate, measured by a comparator that never imports the candidate.
 
-**Status.** Everything in this README has been run on one macOS laptop with Docker under Colima, on plain `runc` with `AIRLOCK_DEV_UNSAFE=1`. That is a development configuration, not a deployment: it shares the host kernel, and every record it produces is labelled `dev-unsafe`. The two-VM Vultr deployment, the Kata tier on VX1 and the gVisor tier are designed and documented below but have **not** been exercised yet. No live Vultr Serverless Inference repair has been run from this checkout; all runs so far used the scripted diagnostic drivers described under "Testing".
+## Hackathon fit
+
+Built at **The Agent Arena Hackathon** (Vultr, NetBird, Cerebral Valley; San Francisco, 26–27 Sep 2026) for **Challenge 1, Blast Radius Zero**: a web agent that does real work while every action stays inside a sandbox on Vultr.
+
+| The judge asks | What Airlock shows |
+|---|---|
+| **"Show me the instance."** | A Vultr VM backend: the control plane on VM A and the supervisor that owns Docker on a VX1 sandbox host (VM B). Every run record carries the host check from the machine that ran it. |
+| **"Is the model yours, or a borrowed key?"** | Every agent call goes to Vultr Serverless Inference (`api.vultrinference.com`); the run page shows the model id, host, `finish_reason` and token counts for each turn. No other provider is in the runtime path. |
+| **"Is Vultr planning and dispatching?"** | The control plane plans the task, drives the model and dispatches every tool call to the supervisor; nothing the report or the model produces runs in the app process. |
+| **"If I paste `rm -rf /`, what dies?"** | The Hostile input panel runs it in a fresh sandbox and answers with a blast-radius card: what died (that sandbox, its runtime and guest kernel) and what survived (control plane, supervisor, other tasks, a host sentinel), then the teardown listing. |
+| **Secret hygiene, limits, lifecycle** | No key, token, Docker socket, host mount or network route in any sandbox; CPU, memory, PID, time, output and disk caps on every run; every sandbox destroyed, with `(no sandboxes)` recorded. |
+
+## Status
+
+- **Live repair:** the hero case ([python-tabulate #365](https://github.com/astanin/python-tabulate/issues/365)) was repaired by `glm-5.3` on Vultr Serverless Inference in **3 of 3 fresh runs**, each judged by the external comparator (13–17 model calls, 36–69 s per run). All three patches fix the root cause (use the header count when the table is empty). The gate is `bun scripts/live-gate.ts --n 3`.
+- **Where it ran:** those runs, the smoke and the test suites ran on one macOS laptop with Docker under Colima, on plain `runc` with `AIRLOCK_DEV_UNSAFE=1`. That is a development configuration: it shares the host kernel, and every record it produces is labelled `dev-unsafe`.
+- **Not yet exercised:** the two-VM Vultr deployment, the Kata tier on VX1 and the gVisor tier. They are designed and documented below; none of their properties is claimed until measured there.
 
 ## Architecture
+
+```mermaid
+flowchart TB
+  U["Maintainer or judge<br/>(browser)"] -->|"REST + replayable SSE"| API
+
+  subgraph A["Vultr VM A · control plane (trusted)"]
+    API["Hono API<br/>sessions · roles · export grants"]
+    W["TaskWorker + RepairHandler<br/>phases · budgets · one model loop"]
+    DB[("PGlite<br/>tasks · leases · events")]
+    V["External comparator<br/>frozen contract, owns the verdict"]
+    F[("Immutable artifacts<br/>sealed candidate · patch · records")]
+    API --> W
+    W <--> DB
+    W --> V
+    V --> F
+    API --> F
+  end
+
+  W <-->|"tool calls"| L["Vultr Serverless Inference<br/>glm-5.3"]
+
+  subgraph B["Vultr VM B · VX1 sandbox host"]
+    S["Supervisor<br/>fixed vocabulary · fencing · deadlines · janitor"]
+    J[("Operation journal")]
+    S <--> J
+    S --> AU["Author sandbox<br/>reproduce + repair"]
+    S --> CO["Collector<br/>stopped workspace, read-only"]
+    S --> BA["Baseline sandbox<br/>pristine tree"]
+    S --> CA["Candidate sandbox<br/>sealed bytes"]
+    S --> PV["Preview invocation"]
+    S --> HO["Hostile-input sandbox"]
+  end
+
+  W -->|"private VPC link · bearer token"| S
+  V <-->|"typed inputs · bounded observations"| S
+  S -->|"validated source bytes"| F
+  W -.->|"optional add-on: NetBird peer link"| S
+```
+
+Every sandbox runs with `--network none`, non-root, a read-only root filesystem, dropped capabilities and per-run CPU, memory, PID, time, output and disk caps, under Kata (target) or gVisor (floor). The model is an author inside the workflow, never its authority.
 
 Two roles, meant for two VMs joined by a private (VPC) link:
 
@@ -17,7 +95,7 @@ Two roles, meant for two VMs joined by a private (VPC) link:
 | **Profile** `profiles/<id>` | repository | the supported repo/commit, what the agent may read and change, the frozen contract | a special case in code |
 | **Contracts** `packages/contracts` | shared | every boundary's schemas and digests | runtime configuration or secrets |
 
-The control plane runs one task through `prepare → reproduce → baseline → repair → freeze → verify → ready` around a single model loop with four tools (`read_file`, `write_file`, `run`, `submit_candidate`). `submit_candidate` only advances to freeze: the supervisor revokes dispatch, stops the author sandbox, confirms the stop and collects the allowed files in a fresh container; the control plane seals them into a `SourceManifest` whose digest identifies the candidate from then on. Verification, preview and export all run fresh one-shot sandboxes from that sealed bundle. The comparator decides the verdict from observations; a `passed` field, a pytest exit code or an "all tests passed" log from inside the sandbox carries no authority.
+The control plane runs one task through `prepare → reproduce → baseline → repair → freeze → verify → ready` around a single model loop with five tools (`read_file` with optional line ranges, `edit_file` for exact-match replacements, `write_file` for small files, `run`, `submit_candidate`). `submit_candidate` only advances to freeze: the supervisor revokes dispatch, stops the author sandbox, confirms the stop and collects the allowed files in a fresh container; the control plane seals them into a `SourceManifest` whose digest identifies the candidate from then on. Verification, preview and export all run fresh one-shot sandboxes from that sealed bundle. The comparator decides the verdict from observations; a `passed` field, a pytest exit code or an "all tests passed" log from inside the sandbox carries no authority.
 
 **Terminal outcomes:** `NOT_REPRODUCED`, `REPRODUCED_UNRESOLVED`, `CANDIDATE_PASSED_CHECKS`, `CHECKS_FAILED`, `INCONCLUSIVE`, `STOPPED_LIMIT`. A cancelled task has status `cancelled` and no outcome.
 
@@ -184,7 +262,7 @@ It does not mean the patch is safe, certified, correct in general, or free of ot
 
 - `runc` shares the host kernel. It is accepted only with `AIRLOCK_DEV_UNSAFE=1`, warns at start, and labels every host check, inspection, record and UI page. The hostile panel's "survived" card on `runc` shows that the container's read-only rootfs, dropped capabilities and `--network none` held for that command; it is not a kernel-isolation claim.
 - Kata and gVisor tiers, the VX1 host, the VPC link and NetBird are untested from this checkout.
-- Live Vultr repairs have not been run here; the live-repair gate (2 of 3 fresh hero attempts passing the comparator) is still open.
+- Live Vultr repairs: 3 of 3 fresh hero runs passed the comparator with `glm-5.3` (the gate needs 2 of 3). That is one known historical bug run three times, not a general repair-success rate.
 - One profile. Adding profiles is real adapter work, per above.
 - The control plane uses an embedded PGlite database and runs the API and worker in one process; splitting them means moving to Postgres.
 
