@@ -201,7 +201,15 @@ export const ProfileManifest = z.object({
   issueUrl: z.string().url(),
   repository: z.string().url(),
   baselineCommit: gitSha,
-  /** sha256 over the sorted `path sha256` lines of every tracked file at baselineCommit. */
+  /**
+   * sha256 of the concatenated `"<path> <sha256>\n"` lines of every tracked file at
+   * `baselineCommit`, ordered by `(path.casefold(), path)` (case-insensitive first, exact path as
+   * tie-break), `.git` skipped. A symlink to a regular file is listed under its own path with the
+   * bytes of its target (in `tabulate-365`, `README -> README.md` is hashed as `README.md`'s
+   * bytes). The reference implementation is `runtime/python/tree_digest.py`; `apps/control`
+   * re-verifies `profiles/<id>/base` with the same rule. Ordering by raw code points gives a
+   * different digest for the same tree, so this rule is normative.
+   */
   baselineTreeDigest: sha256Hex,
   /** Never supplied to any sandbox. Exists so maintainers can validate the exercise. */
   referenceCommitMaintainerOnly: gitSha.optional(),
