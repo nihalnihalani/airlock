@@ -24,7 +24,9 @@
 <br />
 <br />
 
-<img src="docs/assets/ui-task.png" alt="Airlock task page: the case list, the run as a conversation with model turns and expandable tool calls, and the details pane with checkpoints and the Report Export preview" width="900" />
+<img src="docs/assets/ui-task.png" alt="Airlock task page on the Vultr deployment: a live glm-5.3 repair under Kata as a conversation with model turns, tool calls, checkpoints and the Passed these checks result, with the five checkpoints in the details pane" width="900" />
+
+<sub>A live-gate run on the deployment (glm-5.3 via Vultr Serverless Inference, sandboxes under Kata on the VX1 host), read as a viewer.</sub>
 
 </div>
 

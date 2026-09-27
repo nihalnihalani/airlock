@@ -9,7 +9,11 @@ channel page, message scroller, detail panel, sign page, neutral oklch palette, 
 icons. The content is Airlock's. Copied and adapted files keep their MIT header and are listed in
 `THIRD_PARTY_NOTICES.md`.
 
-![Task page](../../docs/assets/ui-task.png)
+![Task page on the deployment](../../docs/assets/ui-task.png)
+
+Above: a live glm-5.3 repair on the Vultr deployment (Kata), read as a viewer. The same page on a
+local development stack (plain runc, scripted model driver) labels both everywhere:
+[ui-task-local-dev.png](../../docs/assets/ui-task-local-dev.png).
 
 ## Run
 
