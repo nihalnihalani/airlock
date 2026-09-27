@@ -221,6 +221,11 @@ describe("SSE", () => {
       expect(body).toContain("event: task");
       expect(body).toContain("event: end");
       expect(body).not.toContain('"title":"event 3"');
+      // apps/web reopens a CLOSED stream with ?lastEventId=<seq>; it must replay like the header.
+      const viaQuery = await (await ctx.app.request("/api/tasks/task-sse/events?lastEventId=4")).text();
+      expect([...viaQuery.matchAll(/^id: (\d+)$/gm)].map((m) => Number(m[1]))).toEqual([5]);
+      const bothHeaderWins = await (await ctx.app.request("/api/tasks/task-sse/events?lastEventId=1", { headers: { "last-event-id": "4" } })).text();
+      expect([...bothHeaderWins.matchAll(/^id: (\d+)$/gm)].map((m) => Number(m[1]))).toEqual([5]);
     } finally {
       await ctx.close();
     }

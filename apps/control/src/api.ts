@@ -228,7 +228,9 @@ export function createApp(deps: ApiDeps) {
   app.get("/api/tasks/:id/events", async (c) => {
     const id = taskId(c);
     const { owner } = await loadTask(id);
-    const header = c.req.header("last-event-id") ?? c.req.query("after") ?? "0";
+    // Replay cursor: the browser's automatic reconnect sends Last-Event-ID; apps/web's own
+    // reopen (after a CLOSED stream) passes ?lastEventId=<seq>; ?after= is kept for curl users.
+    const header = c.req.header("last-event-id") ?? c.req.query("lastEventId") ?? c.req.query("after") ?? "0";
     const afterSeq = /^\d{1,12}$/.test(header) ? Number(header) : 0;
     const pollMs = deps.ssePollMs ?? 2000;
     return streamSSE(c, async (stream) => {
