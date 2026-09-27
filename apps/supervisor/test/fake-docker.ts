@@ -85,7 +85,7 @@ export function fakeRunner(overrides: Partial<Record<string, (req: RunnerRequest
     if (custom) return custom(req, generation);
     switch (req.op) {
       case "status":
-        return ok(req, { ready: true, browserVersion: "fake-chromium", generation, activeTabId: "tab-1", tabCount: 1, uid: 1001, proxy: String(req.args?.proxy ?? PROXY_HINT.value), sandbox: { chromiumProcesses: 5, anyNoSandboxFlag: false, zygotePresent: true, renderersInNestedPidNamespace: true, renderers: 1 } });
+        return ok(req, { ready: true, browserVersion: "fake-chromium", generation, activeTabId: "tab-1", tabCount: 1, uid: 1001, proxy: String(req.args?.proxy ?? PROXY_HINT.value), sandbox: { chromiumProcesses: 5, anyNoSandboxFlag: false, zygotePresent: true, renderersInNestedPidNamespace: true, renderers: 1 }, mutationGuard: { installed: true, origins: JSON.parse(MUTATION_HINT.value), websockets: "blocked", blocked: 0 } });
       case "navigate":
         generation += 1;
         return ok(req, { generation, tabId: "tab-1", url: String(req.args?.url), status: 200 });
@@ -106,6 +106,8 @@ export function fakeRunner(overrides: Partial<Record<string, (req: RunnerRequest
 }
 /** The proxy URL the scripted status reports (set by FakeDocker from the browser container's env). */
 export const PROXY_HINT = { value: "" };
+/** The AIRLOCK_BROWSER_MUTATION_ORIGINS the last browser container was created with (fake runner reports it). */
+export const MUTATION_HINT = { value: "[]" };
 
 export function defaultHandler(
   overrides: Partial<Record<"uname" | "hostname" | "probe" | "materialize" | "collector" | "outputs" | "adapter" | "author" | "head" | "ready" | "count" | "browserProbe", ScriptedExec>> & { runner?: (req: RunnerRequest) => ScriptedExec } = {},
@@ -218,6 +220,8 @@ export class FakeDocker implements DockerApi {
     }
     const proxy = c.spec.env.find((e) => e.startsWith("AIRLOCK_PROXY="));
     if (proxy) PROXY_HINT.value = proxy.slice("AIRLOCK_PROXY=".length);
+    const mutation = c.spec.env.find((e) => e.startsWith("AIRLOCK_BROWSER_MUTATION_ORIGINS="));
+    if (mutation) MUTATION_HINT.value = mutation.slice("AIRLOCK_BROWSER_MUTATION_ORIGINS=".length);
   }
   async createNetwork(spec: NetworkCreateSpec) {
     this.record(`createNetwork ${spec.name} internal=${spec.internal}`);

@@ -158,6 +158,8 @@ export function expectedPair(
       airlockEnv: {
         AIRLOCK_PROXY: `http://${names.egress}:${EGRESS_PORT}`,
         AIRLOCK_RUNNER_SOCKET: `${RUNNER_SOCKET_DIR}/runner.sock`,
+        // Always set (also "[]"), so the env inspection pins the exact mutation policy the runner got.
+        AIRLOCK_BROWSER_MUTATION_ORIGINS: JSON.stringify(plane.mutationOrigins),
       },
       networkMode: names.internalNetwork,
       networks: [names.internalNetwork],
@@ -490,9 +492,25 @@ function issue(result: { success: boolean; error?: { issues: { path: (string | n
   return first ? `${first.path.join(".")}: ${first.message}` : "does not match schema";
 }
 
-/** The sandbox evidence a browser attempt must show before it is handed out. */
-export function sandboxEvidenceFailures(status: BrowserStatusResult, expectedProxy: string): string[] {
+/**
+ * The runner's own report of its mutation guard (status.mutationGuard; not in the contract schema, so
+ * read from the raw result): installed, WebSockets blocked, and exactly the configured origins. An
+ * image without the guard is refused.
+ */
+export function mutationGuardFailures(rawStatus: unknown, expectedOrigins: string[]): string[] {
+  const guard = record(record(rawStatus).mutationGuard);
+  const origins = Array.isArray(guard.origins) ? guard.origins.map(String) : null;
   const failures: string[] = [];
+  if (guard.installed !== true) failures.push("mutationGuardMissing");
+  if (guard.websockets !== "blocked") failures.push("websocketsNotBlocked");
+  if (!origins || JSON.stringify([...origins].sort()) !== JSON.stringify([...expectedOrigins].sort())) failures.push("mutationOriginsMismatch");
+  return failures;
+}
+
+/** The sandbox evidence a browser attempt must show before it is handed out. */
+export function sandboxEvidenceFailures(status: BrowserStatusResult, expectedProxy: string, expectedMutationOrigins?: string[]): string[] {
+  const failures: string[] = [];
+  if (expectedMutationOrigins) failures.push(...mutationGuardFailures(status, expectedMutationOrigins));
   if (status.sandbox.anyNoSandboxFlag) failures.push("anyNoSandboxFlag");
   if (!status.sandbox.zygotePresent) failures.push("zygoteMissing");
   if (!status.sandbox.renderersInNestedPidNamespace) failures.push("renderersNotInNestedPidNamespace");

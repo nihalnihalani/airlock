@@ -23,6 +23,26 @@ const INTERACTIVE_ROLES = new Set([
 ]);
 const CHECKABLE_ROLES = new Set(["checkbox", "menuitemcheckbox", "menuitemradio", "radio", "switch"]);
 
+/**
+ * Approval inputs (the controlled form destination's `airlock_approval` field, labelled "Approval
+ * code"): their value is a human's decision and is never returned in an observation.
+ */
+export const APPROVAL_INPUT_NAME = "airlock_approval";
+export const APPROVAL_NAME = /approval[\s_-]*code/i;
+export const isApprovalName = (name) => typeof name === "string" && APPROVAL_NAME.test(name);
+export const isApprovalInputName = (name) => typeof name === "string" && name.trim().toLowerCase() === APPROVAL_INPUT_NAME;
+
+/** Drop `value` and mark `redacted` on controls whose accessible name marks them as approval inputs. */
+export function redactByName(controls) {
+  for (const control of controls) {
+    if (control.value !== undefined && isApprovalName(control.name)) {
+      delete control.value;
+      control.redacted = true;
+    }
+  }
+  return controls;
+}
+
 /** The first `limit` UTF-16 code units, one fewer when the cut would split a surrogate pair. */
 export function cutAtCodeUnits(text, limit) {
   const sliced = text.slice(0, limit);
@@ -160,5 +180,6 @@ export function parseAriaSnapshot(snapshot, limit = CONTROL_LIMIT) {
     } else if (CHECKABLE_ROLES.has(descriptor.role)) control.checked = false;
     controls.push(control);
   }
+  redactByName(controls);
   return { controls, truncated, refs: new Set(controls.map((c) => c.ref)) };
 }

@@ -44,7 +44,7 @@ const PLANE: BrowserPlaneConfig = {
   egressMemoryBytes: 128 * 1024 ** 2,
   egressPidsLimit: 64,
   egressCpus: 0.5,
-  attemptTimeoutMs: 30 * 60_000,
+  attemptTimeoutMs: 30 * 60_000, mutationOrigins: [] as string[],
 };
 
 function make(docker: FakeDocker, options: { journal?: Journal; dir?: string; capacity?: Partial<ReturnType<typeof testConfig>["capacity"]>; browser?: BrowserPlaneConfig | undefined } = {}) {
@@ -120,7 +120,7 @@ describe("browser attempt creation", () => {
     expect(browser.hostConfig.shmSize).toBe(PLANE.shmBytes);
     expect(browser.hostConfig.tmpfs["/tmp"]).toContain(`size=${PLANE.tmpBytes}`);
     expect(browser.hostConfig.tmpfs["/run/airlock"]).toContain("mode=0700,uid=1001");
-    expect(browser.env).toEqual([`AIRLOCK_PROXY=http://${EGRESS}:3128`]);
+    expect(browser.env).toEqual([`AIRLOCK_PROXY=http://${EGRESS}:3128`, "AIRLOCK_BROWSER_MUTATION_ORIGINS=[]"]);
     expect([...docker.containers.get(BROWSER)!.networks]).toEqual([BNET]);
     const egress = docker.containers.get(EGRESS)!.spec;
     expect(egress.hostConfig.securityOpt).toEqual(["no-new-privileges"]);
@@ -200,6 +200,22 @@ describe("browser attempt creation", () => {
       (d) =>
         (d.handler = defaultHandler({
           runner: fakeRunner({ status: (req) => ({ stdout: `${JSON.stringify({ schemaVersion: 1, id: req.id, op: "status", ok: true, result: { ready: true, browserVersion: "x", generation: 0, activeTabId: "tab-1", tabCount: 1, uid: 1001, proxy: `http://${EGRESS}:3128`, sandbox: { chromiumProcesses: 3, anyNoSandboxFlag: true, zygotePresent: false, renderersInNestedPidNamespace: false, renderers: 1 } } })}\n` }) }),
+        })),
+      "probe_failed",
+    ],
+    [
+      "runner has no mutation guard (old image)",
+      (d) =>
+        (d.handler = defaultHandler({
+          runner: fakeRunner({ status: (req) => ({ stdout: `${JSON.stringify({ schemaVersion: 1, id: req.id, op: "status", ok: true, result: { ready: true, browserVersion: "x", generation: 0, activeTabId: "tab-1", tabCount: 1, uid: 1001, proxy: `http://${EGRESS}:3128`, sandbox: { chromiumProcesses: 5, anyNoSandboxFlag: false, zygotePresent: true, renderersInNestedPidNamespace: true, renderers: 1 } } })}\n` }) }),
+        })),
+      "probe_failed",
+    ],
+    [
+      "runner reports different mutation origins than configured",
+      (d) =>
+        (d.handler = defaultHandler({
+          runner: fakeRunner({ status: (req) => ({ stdout: `${JSON.stringify({ schemaVersion: 1, id: req.id, op: "status", ok: true, result: { ready: true, browserVersion: "x", generation: 0, activeTabId: "tab-1", tabCount: 1, uid: 1001, proxy: `http://${EGRESS}:3128`, sandbox: { chromiumProcesses: 5, anyNoSandboxFlag: false, zygotePresent: true, renderersInNestedPidNamespace: true, renderers: 1 }, mutationGuard: { installed: true, origins: ["https://evil.test"], websockets: "blocked", blocked: 0 } } })}\n` }) }),
         })),
       "probe_failed",
     ],

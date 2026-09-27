@@ -23,9 +23,12 @@ export class SessionState {
   #refTab = null;
   #nextTab = 1;
 
-  constructor({ maxTabs = MAX_TABS, maxEvents = 50 } = {}) {
+  constructor({ maxTabs = MAX_TABS, maxEvents = 50, maxMutationEvents = 10 } = {}) {
     this.maxTabs = maxTabs;
     this.maxEvents = maxEvents;
+    this.maxMutationEvents = maxMutationEvents;
+    /** Refused mutations over the container's lifetime (reported by status). */
+    this.mutationsBlocked = 0;
     this.generation = 0;
     this.tabs = new Map(); // tabId -> opaque handle (a Playwright Page in the runner)
     this.activeTabId = null;
@@ -107,12 +110,36 @@ export class SessionState {
   }
 
   pushEvent(event) {
+    // A dropped decision still gates mutating ops until the next observe.
+    if (event.status === "pending_review") this.pendingReview = true;
     if (this.events.length >= this.maxEvents) {
       this.droppedEvents += 1;
       return;
     }
     this.events.push({ at: new Date().toISOString(), ...event });
-    if (event.status === "pending_review") this.pendingReview = true;
+  }
+
+  /**
+   * Record a refused mutation ({ method, url }). Repeats of the same method+url coalesce into one
+   * event's `count`; at most `maxMutationEvents` distinct refusals are queued per observe so a page
+   * that spams requests cannot crowd dialogs and downloads out of the bounded queue (overflow is
+   * counted in droppedEvents). Returns true when a new event was queued.
+   */
+  pushMutationBlocked({ method, url, tabId = null }) {
+    this.mutationsBlocked += 1;
+    const existing = this.events.find((e) => e.type === "mutation_blocked" && e.method === method && e.url === url);
+    if (existing) {
+      existing.count += 1;
+      return false;
+    }
+    const queued = this.events.filter((e) => e.type === "mutation_blocked").length;
+    if (queued >= this.maxMutationEvents) {
+      this.droppedEvents += 1;
+      return false;
+    }
+    const before = this.events.length;
+    this.pushEvent({ type: "mutation_blocked", method, url, tabId, count: 1 });
+    return this.events.length > before;
   }
 
   /** Deliver queued events (observe does this) and clear the review gate. */

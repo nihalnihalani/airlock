@@ -78,6 +78,7 @@ export type BrowserErrorCode =
 export type Control = {
   ref: Ref; role: string; name: string;  // name/value cut to 200 UTF-16 units
   value?: string; disabled?: true; checked?: boolean;
+  redacted?: true;   // value withheld: an approval input (name /approval code/i or DOM name airlock_approval)
 };
 export type Tab = { tabId: TabId; url: string; title: string; active: boolean };
 
@@ -92,6 +93,8 @@ export type BrowserEvent = { at: string } & (
   | { type: "tab_closed"; tabId: TabId; wasActive: boolean; activeTabId: TabId | null }
   | { type: "popup_blocked"; reason: "tab_limit"; url: string }
   | { type: "page_crashed"; tabId: TabId | null }
+  | { type: "mutation_blocked"; method: string /* e.g. POST, PUT, WEBSOCKET */; url: string /* origin+path, ≤ 512 */;
+      tabId: TabId | null; count: number }                                                   // repeats coalesce; ≤ 10 distinct per observe
 );
 
 export type StatusResult = {
@@ -99,6 +102,7 @@ export type StatusResult = {
   tabCount: number; uid: number; proxy: string;
   sandbox: { chromiumProcesses: number; anyNoSandboxFlag: boolean; zygotePresent: boolean;
              renderersInNestedPidNamespace: boolean; renderers: number };
+  mutationGuard: { installed: true; origins: string[]; websockets: "blocked"; blocked: number }; // checked by the supervisor
 };
 export type NavigateResult = {
   generation: Generation; tabId: TabId; url: string; status: number | null;
@@ -153,8 +157,10 @@ export type UploadResult = {
 - **File chooser** is cancelled and reported, unless an `upload` op is in progress for that page: then that one chooser is answered with the placed file (`action: "uploaded"`). **Service workers** are blocked. No `evaluate`, CDP, script injection, cookie or storage operation exists (the runner's own fixed code checks whether a ref is an `<input type=file>`).
 - **Downloads** (C16). Chromium writes partial files into a private tmpfs directory (`/tmp/airlock-downloads-raw-*`). The runner admits at most **10** downloads per attempt (later ones are cancelled at once: `count_limit`), polls the partial files every 100 ms and cancels every in-progress download when one exceeds **10 MiB** (`size_limit`) or completed + in-progress bytes exceed **30 MiB** (`total_limit`), and re-checks size and total on completion. A completed file is stored by id (never by its suggested name) with its sha256 and a media type sniffed from the bytes (never from a header). Navigating to a URL that downloads returns `navigation_failed` ("Download is starting"); `download.list` shows the result. `download.read` returns ≤ 2 MiB per reply (waits ≤ 10 s for an in-progress download); the supervisor reads every chunk, reassembles, re-verifies size and sha256, re-sniffs the media type, and treats any inconsistency as a lost runner (interrupted).
 - **Uploads** (C17). Only a regular file the supervisor placed at `/tmp/uploads/<uploadId>/<filename>` (not a symlink, realpath inside `/tmp/uploads`, ≤ 10 MiB, sha256 re-checked) can be uploaded. `upload` needs `ref`+`generation` from the latest observe (it is a mutating op, refused while a dialog awaits review): an `<input type=file>` gets the file directly; any other control is clicked and the next file chooser on that page (≤ 10 s) gets the file, once. The supervisor verifies the control plane's bytes against their `artifactSha256` before anything is placed, places them through the bounded exec stdin path (≤ 256 KiB per exec), re-checks size and sha256 inside the container, and never forwards a host path.
+- **Mutations** (Stage 5: generic arbitrary-site irreversible submissions are unsupported). The egress proxy only sees `CONNECT host:port`, so the runner enforces this: before any page loads it registers `context.route("**/*")` (fixed trusted code; a page cannot bypass Playwright's interception) and aborts (`blockedbyclient`) every request whose method is not `GET`/`HEAD`/`OPTIONS` unless its origin is one of the exact https origins in `AIRLOCK_BROWSER_MUTATION_ORIGINS` (JSON list set by the supervisor; unset/empty = none; a malformed value stops the runner). This covers form submissions (Enter, `type submit:true`, clicks, any target tab), fetch/XHR, fetch `keepalive`, `navigator.sendBeacon`, dedicated-worker requests, and `<a ping>` (each verified against a local server inside the image: none arrived). Every WebSocket is refused (`context.routeWebSocket`; closed 1008 without connecting). Each refusal is queued as a `mutation_blocked` event (origin+path only; repeats coalesce into `count`; at most 10 distinct per observe, the rest counted in `droppedEvents`) and delivered by the next `observe`; the action itself still returns `ok`; a refused form navigation leaves the tab on Chromium's error page (`chrome-error://chromewebdata/`), a refused fetch/XHR fails in the page. **Uploads:** `upload` only sets files on an input; the request that submits them is a mutation like any other and is refused unless it goes to a configured origin (intended). GET requests are not restricted beyond the egress allowlist, so data can still leave in a GET query string to an allowlisted host.
+- **Approval values.** A control whose accessible name matches `/approval code/i`, or whose DOM `name` is `airlock_approval` (read by the runner; unreadable → withheld), never carries `value` in `observe` (it carries `redacted: true`), and `screenshot` masks such inputs (black box). Page text is `innerText`, which never includes input values.
 - **Errors** are bounded (≤ 512 chars, control characters stripped).
 
 ## Browser launch (fixed in the runner, not caller-selectable)
 
-`chromium.launchPersistentContext(<mkdtemp /tmp/airlock-profile-*>, { headless: true, chromiumSandbox: true, viewport: 1280x800, acceptDownloads: true, downloadsPath: <mkdtemp /tmp/airlock-downloads-raw-*>, serviceWorkers: "block" })` with `--proxy-server=$AIRLOCK_PROXY --proxy-bypass-list=<-loopback> --disable-quic --force-webrtc-ip-handling-policy=disable_non_proxied_udp --disable-extensions --disable-background-networking --disable-sync --disable-features=DnsOverHttps,AsyncDns`. The runner refuses to start without `AIRLOCK_PROXY` and exits (container stops) if the browser context closes. On SIGTERM it closes the browser and deletes the profile, download and upload directories; tmpfs removal on container destroy is the backstop.
+`chromium.launchPersistentContext(<mkdtemp /tmp/airlock-profile-*>, { headless: true, chromiumSandbox: true, viewport: 1280x800, acceptDownloads: true, downloadsPath: <mkdtemp /tmp/airlock-downloads-raw-*>, serviceWorkers: "block" })` with `--proxy-server=$AIRLOCK_PROXY --proxy-bypass-list=<-loopback> --disable-quic --force-webrtc-ip-handling-policy=disable_non_proxied_udp --disable-extensions --disable-background-networking --disable-sync --disable-features=DnsOverHttps,AsyncDns`, and the mutation guard (above) installed before the first page loads. The runner refuses to start without `AIRLOCK_PROXY` and exits (container stops) if the browser context closes. On SIGTERM it closes the browser and deletes the profile, download and upload directories; tmpfs removal on container destroy is the backstop.

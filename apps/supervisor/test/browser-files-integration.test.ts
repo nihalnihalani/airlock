@@ -76,6 +76,8 @@ describe("real docker browser downloads and uploads (runc, dev-unsafe)", () => {
           egressPidsLimit: 64,
           egressCpus: 0.5,
           attemptTimeoutMs: 10 * 60_000,
+          // The upload form's submit is a POST: refused by the runner's mutation guard unless its origin is configured.
+          mutationOrigins: ["https://the-internet.herokuapp.com"],
         },
       };
       const host = await checkHost(api, config);

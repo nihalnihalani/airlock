@@ -104,6 +104,12 @@ export interface BrowserPlaneConfig {
   egressCpus: number;
   /** Upper bound on a browser attempt's absolute deadline. */
   attemptTimeoutMs: number;
+  /**
+   * Exact https origins that may receive non-GET/HEAD/OPTIONS requests from the browser
+   * (AIRLOCK_BROWSER_MUTATION_ORIGINS, JSON list; default empty = none): the controlled form
+   * destination. Passed to the runner, which refuses every other mutation (research/40 Stage 5).
+   */
+  mutationOrigins: string[];
 }
 
 export interface CapacityBudget {
@@ -386,10 +392,46 @@ function loadBrowserPlane(
     attemptTimeoutMs: n("AIRLOCK_BROWSER_ATTEMPT_TIMEOUT_MS", 30 * 60_000, 60_000),
   };
   for (const value of Object.values(values)) if (typeof value === "string") return { ok: false, reason: value };
+  const mutationOrigins = parseMutationOrigins(env.AIRLOCK_BROWSER_MUTATION_ORIGINS);
+  if (typeof mutationOrigins === "string") return { ok: false, reason: mutationOrigins };
   return {
     ok: true,
-    value: { image, imageId, egressImage, egressImageId, seccompPath, seccompJson, ...(values as { [K in keyof typeof values]: number }) },
+    value: { image, imageId, egressImage, egressImageId, seccompPath, seccompJson, ...(values as { [K in keyof typeof values]: number }), mutationOrigins },
   };
+}
+
+/** At most this many mutation origins (the runner enforces the same bound). */
+export const MAX_MUTATION_ORIGINS = 16;
+
+/**
+ * AIRLOCK_BROWSER_MUTATION_ORIGINS: a JSON list of exact https origins (`https://host[:port]`, no
+ * path, no trailing slash, no userinfo, lower-case, no default port). Unset/empty = []. Returns the
+ * list or the reason it is refused. Keep in step with runtime/browser/src/mutation.mjs.
+ */
+export function parseMutationOrigins(raw: string | undefined): string[] | string {
+  const name = "AIRLOCK_BROWSER_MUTATION_ORIGINS";
+  if (raw === undefined || raw.trim() === "") return [];
+  let list: unknown;
+  try {
+    list = JSON.parse(raw);
+  } catch {
+    return `${name} must be a JSON array of https origins.`;
+  }
+  if (!Array.isArray(list)) return `${name} must be a JSON array of https origins.`;
+  if (list.length > MAX_MUTATION_ORIGINS) return `${name} allows at most ${MAX_MUTATION_ORIGINS} origins.`;
+  for (const entry of list) {
+    if (typeof entry !== "string" || entry.length === 0 || entry.length > 300) return `${name} entries must be strings of 1..300 characters.`;
+    let url: URL;
+    try {
+      url = new URL(entry);
+    } catch {
+      return `${name} entry ${JSON.stringify(entry)} is not a URL.`;
+    }
+    if (url.protocol !== "https:") return `${name} entry ${JSON.stringify(entry)} is not https.`;
+    if (url.origin !== entry) return `${name} entry ${JSON.stringify(entry)} is not an exact origin (expected ${JSON.stringify(url.origin)}).`;
+  }
+  if (new Set(list).size !== list.length) return `${name} contains duplicates.`;
+  return list as string[];
 }
 
 export type BindClass = "loopback" | "private" | "public" | "invalid";

@@ -4,7 +4,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { totalmem } from "node:os";
-import { classifyBind, loadConfig } from "../src/config";
+import { classifyBind, loadConfig, parseMutationOrigins } from "../src/config";
 
 const TOKEN = { SUPERVISOR_TOKEN: "test-token-0123456789abcdef" };
 const IMAGE_ID = `sha256:${"b".repeat(64)}`;
@@ -85,5 +85,27 @@ describe("host budget (M2)", () => {
     expect(reason({ ...KATA, AIRLOCK_MAX_SANDBOXES: "0" })).toMatch(/AIRLOCK_MAX_SANDBOXES/);
     expect(reason({ ...KATA, AIRLOCK_HOST_PIDS: "-1" })).toMatch(/AIRLOCK_HOST_PIDS/);
     expect(reason({ ...KATA, AIRLOCK_HOST_HEADROOM_BYTES: String(totalmem() + 1) })).toMatch(/AIRLOCK_HOST_MEMORY_BYTES/);
+  });
+});
+
+describe("AIRLOCK_BROWSER_MUTATION_ORIGINS (40 Stage 5: only the controlled form destination may receive mutations)", () => {
+  test("default is empty; exact https origins are accepted; anything else is refused", () => {
+    expect(parseMutationOrigins(undefined)).toEqual([]);
+    expect(parseMutationOrigins("  ")).toEqual([]);
+    expect(parseMutationOrigins("[]")).toEqual([]);
+    expect(parseMutationOrigins('["https://forms.airlock.example","https://a.test:8443"]')).toEqual(["https://forms.airlock.example", "https://a.test:8443"]);
+    for (const bad of ["nope", "{}", '"https://a.test"', '["http://a.test"]', '["https://a.test/"]', '["https://a.test/x"]', '["https://a.test:443"]', '["https://u@a.test"]', '["*"]', "[1]", '["https://a.test","https://a.test"]', '["HTTPS://A.TEST"]']) {
+      expect(typeof parseMutationOrigins(bad)).toBe("string");
+    }
+    expect(typeof parseMutationOrigins(JSON.stringify(Array.from({ length: 17 }, (_, i) => `https://h${i}.test`)))).toBe("string");
+  });
+
+  test("loadConfig carries the origins into the browser plane and refuses a malformed value", () => {
+    const env = { ...DEV, AIRLOCK_BROWSER_IMAGE: "airlock-browser:dev", AIRLOCK_BROWSER_SECCOMP: `${import.meta.dir}/../../../runtime/browser/seccomp/chromium.json` };
+    const plain = loadConfig(env, "/tmp");
+    expect(plain.ok && plain.config.browser?.mutationOrigins).toEqual([]);
+    const forms = loadConfig({ ...env, AIRLOCK_BROWSER_MUTATION_ORIGINS: '["https://forms.airlock.example"]' }, "/tmp");
+    expect(forms.ok && forms.config.browser?.mutationOrigins).toEqual(["https://forms.airlock.example"]);
+    expect(reason({ ...env, AIRLOCK_BROWSER_MUTATION_ORIGINS: '["http://forms.airlock.example"]' })).toMatch(/AIRLOCK_BROWSER_MUTATION_ORIGINS/);
   });
 });

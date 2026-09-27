@@ -348,7 +348,7 @@ async function main(): Promise<void> {
         process.exit(1);
       }
     }
-    log.info("browser plane enabled", { image: config.browser.image, egressImage: config.browser.egressImage, seccomp: config.browser.seccompPath, memoryBytes: config.browser.memoryBytes, pidsLimit: config.browser.pidsLimit, shmBytes: config.browser.shmBytes, tmpBytes: config.browser.tmpBytes });
+    log.info("browser plane enabled", { image: config.browser.image, egressImage: config.browser.egressImage, seccomp: config.browser.seccompPath, memoryBytes: config.browser.memoryBytes, pidsLimit: config.browser.pidsLimit, shmBytes: config.browser.shmBytes, tmpBytes: config.browser.tmpBytes, mutationOrigins: config.browser.mutationOrigins });
   }
   for (const plane of [config.code.analysis, config.code.node]) {
     if (!plane) continue;

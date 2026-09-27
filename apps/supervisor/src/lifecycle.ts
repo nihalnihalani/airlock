@@ -1585,7 +1585,7 @@ export class Supervisor {
         throw new BrowserRefused("probe_failed", `Browser runner status failed (${reason}); sandbox destroyed and run refused.`, browserInspection);
       }
       const status = reply.response.result as BrowserStatusResult;
-      const sandboxFailures = sandboxEvidenceFailures(status, expected.browser.airlockEnv.AIRLOCK_PROXY!);
+      const sandboxFailures = sandboxEvidenceFailures(status, expected.browser.airlockEnv.AIRLOCK_PROXY!, plane.mutationOrigins);
       if (sandboxFailures.length > 0) {
         throw new BrowserRefused("probe_failed", `Chromium sandbox evidence missing (${sandboxFailures.join(", ")}); sandbox destroyed and run refused.`, browserInspection);
       }

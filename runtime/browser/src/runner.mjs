@@ -7,6 +7,9 @@
 // may not use non-proxied UDP. Service workers are blocked, extensions disabled. Downloads are accepted
 // into a bounded tmpfs directory (count, per-file in-progress and total limits; downloads.mjs) and read
 // back in chunks; uploads are set only from files the supervisor placed under /tmp/uploads.
+// Every request passes the mutation guard (mutation.mjs): only GET/HEAD/OPTIONS leave, except to the
+// exact https origins in AIRLOCK_BROWSER_MUTATION_ORIGINS; WebSockets are refused. Approval-input
+// values are withheld from observations and masked in screenshots.
 //
 // The only interface is a unix socket (default /run/airlock/runner.sock, dir 0700, socket 0600)
 // that accepts ONE bounded JSON request line per connection and answers ONE bounded JSON line.
@@ -33,8 +36,9 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { chromium } from "playwright-core";
-import { parseAriaSnapshot, cutAtCodeUnits } from "./aria.mjs";
+import { APPROVAL_INPUT_NAME, APPROVAL_NAME, isApprovalInputName, isApprovalName, parseAriaSnapshot, cutAtCodeUnits } from "./aria.mjs";
 import { DownloadLedger } from "./downloads.mjs";
+import { installMutationGuard, parseMutationOrigins } from "./mutation.mjs";
 import {
   DOWNLOAD_CHUNK_BYTES,
   MAX_DOWNLOAD_BYTES,
@@ -57,6 +61,8 @@ import { SessionState, StaleReference } from "./state.mjs";
 
 const SOCKET_PATH = process.env.AIRLOCK_RUNNER_SOCKET ?? "/run/airlock/runner.sock";
 const PROXY = process.env.AIRLOCK_PROXY ?? "";
+/** Exact https origins that may receive non-GET/HEAD/OPTIONS requests (mutation.mjs); empty = none. */
+let MUTATION_ORIGINS;
 const ACTION_TIMEOUT_MS = 10_000;
 const NAVIGATION_TIMEOUT_MS = 30_000;
 
@@ -70,6 +76,11 @@ function fatal(message) {
 
 if (!/^http:\/\/[A-Za-z0-9.-]{1,253}:[0-9]{1,5}$/.test(PROXY)) {
   fatal("AIRLOCK_PROXY must be set to http://<host>:<port>; the runner will not start without an egress proxy");
+}
+try {
+  MUTATION_ORIGINS = parseMutationOrigins(process.env.AIRLOCK_BROWSER_MUTATION_ORIGINS);
+} catch (error) {
+  fatal(error?.message ?? "invalid AIRLOCK_BROWSER_MUTATION_ORIGINS");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -120,6 +131,15 @@ try {
   });
 } catch (error) {
   fatal(`chromium launch failed: ${error?.message ?? error}`);
+}
+// Before any page loads: every request is routed through the mutation guard, every WebSocket refused.
+try {
+  await installMutationGuard(context, MUTATION_ORIGINS, ({ method, url, page }) => {
+    const tabId = page ? state.tabIdOf(page) : null;
+    if (state.pushMutationBlocked({ method, url, tabId })) log("page_event", { type: "mutation_blocked", method, tabId });
+  });
+} catch (error) {
+  fatal(`mutation guard could not be installed: ${error?.message ?? error}`);
 }
 const browserVersion = context.browser()?.version() ?? "unknown";
 let stopping = false;
@@ -340,6 +360,35 @@ function sandboxEvidence() {
   };
 }
 
+/** Controls that hold an approval code: by accessible name, or by DOM name attribute (redaction). */
+function approvalLocators(page) {
+  return [page.locator(`[name="${APPROVAL_INPUT_NAME}" i]`), page.getByLabel(APPROVAL_NAME)];
+}
+
+/**
+ * Drop `value` (and set `redacted: true`) on every control that is, or may be, an approval input:
+ * its accessible name matches /approval code/i, or its DOM `name` is airlock_approval. The DOM name is
+ * read by the runner's fixed code; if it cannot be read the value is dropped (fail closed).
+ */
+async function redactApprovalValues(page, controls) {
+  await Promise.all(controls.map(async (control) => {
+    if (control.value === undefined) return;
+    let redact = isApprovalName(control.name);
+    if (!redact) {
+      try {
+        const name = await locate(page, control.ref).getAttribute("name", { timeout: 2_000 });
+        redact = isApprovalInputName(name);
+      } catch {
+        redact = true;
+      }
+    }
+    if (redact) {
+      delete control.value;
+      control.redacted = true;
+    }
+  }));
+}
+
 const handlers = {
   async status() {
     return {
@@ -351,6 +400,7 @@ const handlers = {
       uid: process.getuid(),
       proxy: PROXY,
       sandbox: sandboxEvidence(),
+      mutationGuard: { installed: true, origins: [...MUTATION_ORIGINS], websockets: "blocked", blocked: state.mutationsBlocked },
     };
   },
 
@@ -385,6 +435,7 @@ const handlers = {
       if (state.generation === before) break;
     }
     const parsed = parseAriaSnapshot(snapshot);
+    await redactApprovalValues(page, parsed.controls);
     let raw = "";
     try { raw = await page.locator("body").innerText({ timeout: 5_000 }); } catch {}
     const collapsed = raw.replace(/[ \t\f\v ]+/g, " ").replace(/\n\s*\n+/g, "\n\n").trim();
@@ -446,7 +497,8 @@ const handlers = {
 
   async screenshot({ fullPage }) {
     const page = activePage();
-    const png = await page.screenshot({ type: "png", fullPage, timeout: 15_000, animations: "disabled" });
+    // The approval field's value is never shown to the model, in pixels either.
+    const png = await page.screenshot({ type: "png", fullPage, timeout: 15_000, animations: "disabled", mask: approvalLocators(page), maskColor: "#000000" });
     if (png.length > MAX_SCREENSHOT_BYTES) {
       throw new OpError("screenshot_too_large", `screenshot is ${png.length} bytes; limit ${MAX_SCREENSHOT_BYTES}`);
     }
