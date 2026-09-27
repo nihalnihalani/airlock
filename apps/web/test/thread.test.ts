@@ -180,3 +180,10 @@ describe("toolNameOf", () => {
     expect(toolNameOf(ev(3, "exec", "anything", "", { tool: "candidate" }))).toBe("candidate");
   });
 });
+
+describe("dev-unsafe isolation checkpoints", () => {
+  test("a fully BLOCKED probe on a dev-unsafe runtime is a warning, not green", () => {
+    const items = buildThread(null, [ev(1, "check", "Isolation checkpoints", "runtime runc (dev-unsafe)", { devUnsafe: true, probe: { allBlocked: true } })]);
+    expect(items[0]?.type === "mark" && items[0].tone).toBe("warn");
+  });
+});

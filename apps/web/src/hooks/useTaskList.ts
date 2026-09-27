@@ -21,7 +21,9 @@ export function useTaskList(): TaskList {
   const [error, setError] = useState<string | null>(null);
   const inflight = useRef<AbortController | null>(null);
 
-  const refresh = useCallback(() => {
+  /** Fetch now; `poll` skips the tick while a previous fetch is still out, so a slow API still answers. */
+  const load = useCallback((poll: boolean) => {
+    if (poll && inflight.current && !inflight.current.signal.aborted) return;
     inflight.current?.abort();
     const controller = new AbortController();
     inflight.current = controller;
@@ -34,14 +36,19 @@ export function useTaskList(): TaskList {
       .catch((err: unknown) => {
         if (err instanceof DOMException && err.name === "AbortError") return;
         setError(describeError(err));
+      })
+      .finally(() => {
+        if (inflight.current === controller) inflight.current = null;
       });
   }, []);
+  const refresh = useCallback(() => load(false), [load]);
+  const poll = useCallback(() => load(true), [load]);
 
   useEffect(() => {
     refresh();
     let timer: ReturnType<typeof setInterval> | null = null;
     const start = () => {
-      if (timer === null) timer = setInterval(refresh, POLL_MS);
+      if (timer === null) timer = setInterval(poll, POLL_MS);
     };
     const stop = () => {
       if (timer !== null) clearInterval(timer);
@@ -60,7 +67,7 @@ export function useTaskList(): TaskList {
       document.removeEventListener("visibilitychange", onVisibility);
       inflight.current?.abort();
     };
-  }, [refresh]);
+  }, [refresh, poll]);
 
   return { tasks, error, refresh };
 }

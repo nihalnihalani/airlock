@@ -16,7 +16,7 @@
  */
 import { IconArrowDown } from "@tabler/icons-react";
 import type * as React from "react";
-import { type ReactNode, type RefObject, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { cn } from "../../lib/utils";
 import { Button } from "./button";
 
@@ -30,53 +30,54 @@ const STICK_THRESHOLD_PX = 48;
  * grows without a new version (a card expanding) is caught by the ResizeObserver on the content.
  */
 export function useStickToBottom(version: unknown): {
-  viewportRef: RefObject<HTMLDivElement | null>;
-  contentRef: RefObject<HTMLDivElement | null>;
+  viewportRef: (el: HTMLDivElement | null) => void;
+  contentRef: (el: HTMLDivElement | null) => void;
   atEnd: boolean;
   scrollToEnd: (behavior?: ScrollBehavior) => void;
 } {
-  const viewportRef = useRef<HTMLDivElement | null>(null);
-  const contentRef = useRef<HTMLDivElement | null>(null);
+  // Elements in state, not ref objects: the viewport often mounts after the page (once data has
+  // loaded), and the listeners below must attach whenever it does.
+  const [viewport, setViewport] = useState<HTMLDivElement | null>(null);
+  const [content, setContent] = useState<HTMLDivElement | null>(null);
   const stuck = useRef(true);
   const [atEnd, setAtEnd] = useState(true);
 
-  const scrollToEnd = useCallback((behavior: ScrollBehavior = "auto") => {
-    const el = viewportRef.current;
-    if (!el) return;
-    stuck.current = true;
-    setAtEnd(true);
-    el.scrollTo({ top: el.scrollHeight, behavior });
-  }, []);
+  const scrollToEnd = useCallback(
+    (behavior: ScrollBehavior = "auto") => {
+      if (!viewport) return;
+      stuck.current = true;
+      setAtEnd(true);
+      viewport.scrollTo({ top: viewport.scrollHeight, behavior });
+    },
+    [viewport],
+  );
 
   useEffect(() => {
-    const el = viewportRef.current;
-    if (!el) return;
+    if (!viewport) return;
     const onScroll = () => {
-      const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+      const distance = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
       const next = distance <= STICK_THRESHOLD_PX;
       stuck.current = next;
       setAtEnd(next);
     };
-    el.addEventListener("scroll", onScroll, { passive: true });
-    return () => el.removeEventListener("scroll", onScroll);
-  }, []);
+    viewport.addEventListener("scroll", onScroll, { passive: true });
+    return () => viewport.removeEventListener("scroll", onScroll);
+  }, [viewport]);
 
   useLayoutEffect(() => {
-    if (stuck.current) viewportRef.current?.scrollTo({ top: viewportRef.current.scrollHeight });
-  }, [version]);
+    if (viewport && stuck.current) viewport.scrollTo({ top: viewport.scrollHeight });
+  }, [version, viewport]);
 
   useEffect(() => {
-    const content = contentRef.current;
-    const el = viewportRef.current;
-    if (!content || !el || typeof ResizeObserver === "undefined") return;
+    if (!content || !viewport || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => {
-      if (stuck.current) el.scrollTo({ top: el.scrollHeight });
+      if (stuck.current) viewport.scrollTo({ top: viewport.scrollHeight });
     });
     observer.observe(content);
     return () => observer.disconnect();
-  }, []);
+  }, [content, viewport]);
 
-  return { viewportRef, contentRef, atEnd, scrollToEnd };
+  return { viewportRef: setViewport, contentRef: setContent, atEnd, scrollToEnd };
 }
 
 function MessageScroller({ className, ...props }: React.ComponentProps<"div">) {

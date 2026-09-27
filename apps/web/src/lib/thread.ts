@@ -124,7 +124,7 @@ function markTone(ev: RunEvent): Tone {
     case "error":
       return "bad";
     case "check": {
-      if (/dev-unsafe/i.test(ev.title)) return "warn";
+      if (/dev-unsafe/i.test(ev.title) || data?.["devUnsafe"] === true) return "warn";
       if (typeof data?.["passed"] === "boolean") return data["passed"] ? "ok" : "bad";
       const probe = record(data?.["probe"]);
       if (probe && typeof probe["allBlocked"] === "boolean") return probe["allBlocked"] ? "ok" : "bad";

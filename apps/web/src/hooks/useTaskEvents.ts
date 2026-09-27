@@ -107,15 +107,18 @@ export function useTaskEvents(taskId: string | null, active: boolean, autoReconn
       setStatus("open");
       setNote(null);
     };
-    const onRunEvent = (msg: MessageEvent<unknown>) => {
+    const onRunEvent = (msg: Event) => {
       if (disposed) return;
+      // A RunEvent named `error` shares its name with EventSource's connection-error event, which
+      // is a plain Event without data: only MessageEvents carry a payload.
+      if (!(msg instanceof MessageEvent)) return;
       const data = typeof msg.data === "string" ? msg.data : "";
       const parsed = parseEventPayload(data);
       if (parsed.ok) enqueue(parsed.event);
       else dispatch({ type: "malformed" });
     };
     // Named events (`event: <kind>`) never reach `onmessage`; listen for each kind by name.
-    for (const name of RUN_EVENT_NAMES) source.addEventListener(name, onRunEvent as EventListener);
+    for (const name of RUN_EVENT_NAMES) source.addEventListener(name, onRunEvent);
     // Optional named terminal event. If the server never sends it, nothing changes.
     source.addEventListener("end", () => {
       if (disposed) return;
@@ -124,8 +127,11 @@ export function useTaskEvents(taskId: string | null, active: boolean, autoReconn
       setStatus("ended");
       setNote("The server closed the stream: the task reached a terminal state.");
     });
-    source.onerror = () => {
+    source.onerror = (event: Event) => {
       if (disposed) return;
+      // A server-sent `event: error` RunEvent is dispatched to this handler too; it is data, not a
+      // connection problem (onRunEvent records it).
+      if (event instanceof MessageEvent) return;
       if (source.readyState === EventSource.CLOSED) {
         source.close();
         setStatus("closed");

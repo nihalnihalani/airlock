@@ -28,6 +28,7 @@ export function RuntimeChip({ tier }: { tier: RuntimeTier }) {
     <span className="inline-flex items-center gap-1">
       <Badge tone={tone} title={`Runtime tier as ${tier.source}`}>
         {label}
+        {tier.source === "inspected" ? null : <span className="font-normal opacity-70">({tier.source})</span>}
       </Badge>
       {tier.devUnsafe || tier.runtime === "runc" ? (
         <Badge tone="bad" title="Plain runc without a guest kernel: local development only, never a deployment.">

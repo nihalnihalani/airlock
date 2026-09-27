@@ -47,10 +47,14 @@ function ProfileCard({ profile }: { profile: ProfileManifest }) {
       <dl className="mt-3 grid grid-cols-[minmax(0,7.5rem)_minmax(0,1fr)] gap-x-3 gap-y-2 text-xs">
         <dt className="text-muted-foreground">issue</dt>
         <dd className="min-w-0">
-          <a className="inline-flex max-w-full items-center gap-1 underline-offset-4 hover:underline" href={profile.issueUrl} target="_blank" rel="noreferrer noopener">
-            <span className="truncate">{profile.issueUrl}</span>
-            <IconExternalLink className="size-3 shrink-0" />
-          </a>
+          {/^https?:\/\//i.test(profile.issueUrl) ? (
+            <a className="inline-flex max-w-full items-center gap-1 underline-offset-4 hover:underline" href={profile.issueUrl} target="_blank" rel="noreferrer noopener">
+              <span className="truncate">{profile.issueUrl}</span>
+              <IconExternalLink className="size-3 shrink-0" />
+            </a>
+          ) : (
+            <span className="break-all">{profile.issueUrl}</span>
+          )}
         </dd>
         <dt className="text-muted-foreground">baseline commit</dt>
         <dd className="flex items-center gap-1">
