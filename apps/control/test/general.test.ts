@@ -5,7 +5,7 @@ import { MAX_IDENTICAL_FAILURES, STORE_KIND_TASK_ATTEMPTS, STORE_KIND_GENERAL_US
 import { STORE_KIND_OPERATIONS, type OperationRecord } from "../src/journal.ts";
 import { inspectPng } from "../src/png.ts";
 import { openScriptedCatalog } from "../src/scripted.ts";
-import { createScriptedDriver } from "../src/vultr-client.ts";
+import { createScriptedDriver, type ModelDriver } from "../src/vultr-client.ts";
 import { fixtureObserve, makeFixture, type Fixture } from "./helpers/doubles.ts";
 import { FakeSupervisor, okExec } from "./helpers/fake-supervisor.ts";
 import { makeGeneralHarness, OWNER, recordingDriver, type GeneralHarness, type Turn } from "./helpers/general.ts";
@@ -75,6 +75,17 @@ describe("general tasks: hero combined flow", () => {
       expect(events.filter((e) => e.kind === "model").every((e) => e.data?.model === "scripted:test-general" && e.data?.imageAttached === false)).toBe(true);
       expect(done.budget.modelCallsUsed).toBe(6);
       expect(done.budget.repairAttemptsUsed).toBe(0);
+      // Browser ops, code runs and sessions are mirrored from the usage record onto Task.budget.
+      const usage = (await h.store.get<GeneralUsage>(OWNER, STORE_KIND_GENERAL_USAGE, done.id))!;
+      expect(usage.browserOps).toBeGreaterThan(0);
+      expect(usage.codeRuns).toBe(1);
+      expect(done.budget.browserOps).toBe(usage.browserOps);
+      expect(done.budget.codeRuns).toBe(1);
+      expect(done.budget.sessions).toBe(usage.browserSessions + usage.codeSandboxes);
+      expect(done.budget.sessions).toBe(2);
+      // A driver that reports usage is charged it, not an estimate.
+      expect(events.filter((e) => e.kind === "model").every((e) => e.data?.tokensEstimated === false && e.data?.tokensCharged === 120)).toBe(true);
+      expect(done.budget.tokensUsed).toBe(6 * 120);
     } finally {
       await h.close();
     }
@@ -94,6 +105,9 @@ describe("general tasks: hero combined flow", () => {
       expect(write.content).toContain("NOT model-written");
       const models = (await h.events(done.id)).filter((e) => e.kind === "model");
       expect(models.every((e) => e.data?.model === "scripted:general-hero")).toBe(true);
+      // A scripted run spends no tokens: its reported usage (0) is charged, not an estimate.
+      expect(models.every((e) => e.data?.tokensCharged === 0 && e.data?.tokensEstimated === false)).toBe(true);
+      expect(done.budget.tokensUsed).toBe(0);
     } finally {
       await h.close();
     }
@@ -349,6 +363,29 @@ describe("general tasks: outcomes", () => {
       expect(driver.inputs).toHaveLength(3);
       expect(done.cleanup?.status).toBe("confirmed");
       expect(supervisor.attempts.size).toBe(0);
+    } finally {
+      await h.close();
+    }
+  });
+
+  test("budgets: a live driver that omits usage is charged the conservative estimate and exhausts the token budget", async () => {
+    const supervisor = supervisorFor();
+    const inner = recordingDriver(Array.from({ length: 10 }, () => ({ toolCalls: [{ name: "browser_observe", args: {} }] })));
+    // A fake live driver (no `scripted` flag) whose provider reports no usage.
+    const driver: ModelDriver = { describe: () => ({ model: "fake-live", host: "fake" }), chat: async (input) => ({ ...(await inner.chat(input)), usage: { input: 0, output: 0 } }) };
+    const h = await makeGeneralHarness(fixture, supervisor, driver, { general: () => ({ maxTokens: 4096 }), profiles: { "web-research": { budgets: { tokens: 12_000, modelCalls: 50 } } } });
+    try {
+      const done = await run(h, { profileId: "web-research", egressAllow: [HERO_HOST] });
+      expect(done.outcome).toBe("STOPPED_LIMIT");
+      const events = await h.events(done.id);
+      expect(events.find((e) => e.title === "Outcome STOPPED_LIMIT")?.detail).toContain("token budget exhausted");
+      const models = events.filter((e) => e.kind === "model").map((e) => e.data as { tokensCharged: number; tokensEstimated: boolean; maxTokens: number });
+      expect(models.length).toBeGreaterThan(0);
+      for (const m of models) {
+        expect(m.tokensEstimated).toBe(true);
+        expect(m.tokensCharged).toBeGreaterThan(m.maxTokens);
+      }
+      expect(done.budget.tokensUsed).toBe(models.reduce((n, m) => n + m.tokensCharged, 0));
     } finally {
       await h.close();
     }

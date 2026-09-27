@@ -64,6 +64,11 @@ export interface ModelDriver {
   chat(input: ChatInput): Promise<ChatOutput>;
   /** Identity recorded on every model event: the model name and the host it is served from. */
   describe?(): { model: string; host: string };
+  /**
+   * True for a replayed script (diagnostics/tests): its reported usage (zero) is charged as-is,
+   * since no tokens were spent. Absent on the live driver, whose missing usage is estimated.
+   */
+  scripted?: boolean;
 }
 
 export type VultrErrorKind = "auth" | "http" | "network" | "aborted" | "protocol" | "config";
@@ -430,6 +435,7 @@ export function createScriptedDriver(script: ScriptedTurn[], options: { name?: s
   return {
     // Labelled so no UI or export can mistake a replayed script for a live Vultr repair.
     describe: () => ({ model: `scripted:${options.name ?? "script"}`, host: "scripted" }),
+    scripted: true,
     async chat(input: ChatInput): Promise<ChatOutput> {
       if (input.signal?.aborted) throw new VultrError("aborted", "request aborted");
       const turn = turns[cursor];

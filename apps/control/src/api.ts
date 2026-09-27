@@ -421,7 +421,8 @@ export function createApp(deps: ApiDeps) {
   });
   app.get("/api/diagnostics", (c) => {
     requireRole(c, "operator", "judge");
-    const scripts = deps.diagnostics ?? (deps.scriptedDrivers ?? []).map((name) => ({ name, title: name, description: "" }));
+    // Without catalog metadata a name is only a scripted-driver script, which drives repair cases.
+    const scripts: DiagnosticScript[] = deps.diagnostics ?? (deps.scriptedDrivers ?? []).map((name) => ({ name, title: name, description: "", kind: "repair" }));
     return c.json({ scripts: scripts.filter((s) => (deps.scriptedDrivers ?? []).includes(s.name)) });
   });
 

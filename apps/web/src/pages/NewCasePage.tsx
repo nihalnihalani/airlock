@@ -23,7 +23,7 @@ import { Skeleton } from "../components/ui/skeleton";
 import { canOperate, useSession } from "../hooks/session";
 import { useDeployment } from "../hooks/useDeployment";
 import { useSharedTaskList } from "../hooks/useTaskList";
-import { ApiError, createTask, describeError, getDiagnostics, getProfiles, type DiagnosticScript } from "../lib/api";
+import { ApiError, createTask, describeError, diagnosticKind, getDiagnostics, getProfiles, type DiagnosticScript } from "../lib/api";
 import { diagnosticIssueText, instanceIds, repairNotice } from "../lib/evidence";
 import { formatBytes, formatDurationMs, httpUrl, shortSha } from "../lib/format";
 import { hrefFor, navigate } from "../lib/router";
@@ -161,8 +161,8 @@ function DiagnosticsSection({ profile, disabled, onLaunched }: { profile: Profil
   useEffect(() => {
     const controller = new AbortController();
     getDiagnostics(controller.signal)
-      // General-task scripts ("general-*") drive general tasks only; they are offered under "Run a task".
-      .then((list) => setScripts(list.filter((d) => !d.name.startsWith("general-"))))
+      // General-task scripts drive general tasks only; they are offered under "Run a task".
+      .then((list) => setScripts(list.filter((d) => diagnosticKind(d) === "repair")))
       .catch((err: unknown) => {
         if (err instanceof DOMException && err.name === "AbortError") return;
         setError(

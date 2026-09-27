@@ -24,6 +24,7 @@ import {
   HERO_EXAMPLE,
 } from "../src/lib/general";
 import { generalCleanupBadge, taskRowView } from "../src/lib/taskList";
+import { DiagnosticScript, diagnosticKind } from "../src/lib/api";
 
 function task(patch: Partial<Task> = {}): Task {
   return {
@@ -227,6 +228,21 @@ describe("result dimension and checks", () => {
     expect(rows.find((r) => r.key === "browser ops")?.value).toBe("5 / 60");
     expect(rows.find((r) => r.key === "code runs")?.value).toBe("2 / 20");
     expect(rows.find((r) => r.key === "sessions")?.value).toBe("1 / 5");
+  });
+  test("checkpointed zero counters are real counts, not 'not reported'", () => {
+    const limits = { modelCalls: 30, tokens: 1000, wallClockMs: 1, browserOps: 60, codeRuns: 20, browserSessions: 3, codeSandboxes: 2, recoveries: 2, attemptMs: 1 };
+    const rows = generalBudgetRows({ modelCallsUsed: 2, repairAttemptsUsed: 0, tokensUsed: 0, browserOps: 0, codeRuns: 0, sessions: 1 }, limits);
+    expect(rows.find((r) => r.key === "browser ops")?.value).toBe("0 / 60");
+    expect(rows.find((r) => r.key === "code runs")?.value).toBe("0 / 20");
+    expect(rows.find((r) => r.key === "sessions")?.value).toBe("1 / 5");
+    expect(rows.find((r) => r.key === "tokens")?.value).toBe("0 / 1,000");
+  });
+  test("diagnostic scripts are sorted by the catalog's kind; the name prefix is only a fallback", () => {
+    expect(diagnosticKind({ name: "general-hero", title: "t", description: "", kind: "repair" })).toBe("repair");
+    expect(diagnosticKind({ name: "web-walkthrough", title: "t", description: "", kind: "general" })).toBe("general");
+    expect(diagnosticKind({ name: "general-hero", title: "t", description: "" })).toBe("general");
+    expect(diagnosticKind({ name: "forged-log", title: "t", description: "" })).toBe("repair");
+    expect(DiagnosticScript.parse({ name: "x", title: "x", description: "", kind: "general" }).kind).toBe("general");
   });
   test("budget counters the control plane does not report are not shown as 0", () => {
     const limits = { modelCalls: 30, tokens: 1000, wallClockMs: 1, browserOps: 60, codeRuns: 20, browserSessions: 3, codeSandboxes: 2, recoveries: 2, attemptMs: 1 };

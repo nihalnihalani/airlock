@@ -12,6 +12,7 @@ import {
   ApiError,
   createGeneralTask,
   describeError,
+  diagnosticKind,
   getDiagnostics,
   getTaskProfiles,
   listUploads,
@@ -233,8 +234,8 @@ export function GeneralTaskComposer({ modeSwitch }: { modeSwitch: ReactNode }) {
     void refreshUploads();
     const controller = new AbortController();
     getDiagnostics(controller.signal)
-      // The catalog carries no task kind; general scripts are named "general-*" (fixtures/scripted-general).
-      .then((list) => setScripts(list.filter((d) => d.name.startsWith("general-"))))
+      // Only scripts that drive general tasks (the catalog's `kind`; see diagnosticKind).
+      .then((list) => setScripts(list.filter((d) => diagnosticKind(d) === "general")))
       .catch(() => setScripts([]));
     return () => controller.abort();
   }, [allowed, refreshUploads]);

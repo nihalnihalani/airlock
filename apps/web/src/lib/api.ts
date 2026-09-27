@@ -54,8 +54,18 @@ export const DiagnosticScript = z.object({
   name: z.string().min(1).max(64),
   title: z.string().max(200),
   description: z.string().max(2000),
+  /** The catalog the script came from: repair cases or general tasks. Absent from older control planes. */
+  kind: z.enum(["repair", "general"]).optional(),
 });
 export type DiagnosticScript = z.infer<typeof DiagnosticScript>;
+
+/**
+ * Which task kind a diagnostic script drives: the control plane's `kind`, or, only when an older
+ * control plane omits it, the "general-*" naming convention of fixtures/scripted-general.
+ */
+export function diagnosticKind(script: DiagnosticScript): "repair" | "general" {
+  return script.kind ?? (script.name.startsWith("general-") ? "general" : "repair");
+}
 const DiagnosticsResponse = z.object({ scripts: z.array(DiagnosticScript).max(100) });
 
 type Method = "GET" | "POST" | "DELETE";

@@ -58,7 +58,7 @@ import { GENERAL_TOOL_ARGS, CODE_FILE_EXTENSIONS, DOWNLOAD_NAME, generalSystemPr
 import { STORE_KIND_OPERATIONS, createJournal, teardownAttempt, type Journal, type OperationRecord, type TeardownOutcome } from "./journal.ts";
 import { log } from "./log.ts";
 import { inspectPng } from "./png.ts";
-import type { ArtifactStoreLike } from "./repair-handler.ts";
+import { tokenCount, type ArtifactStoreLike } from "./repair-handler.ts";
 import type { Store } from "./store/index.ts";
 import { SupervisorError, SupervisorFenceError, SupervisorNotFoundError, supervisorOperationStatus, type CallOptions, type SupervisorClient } from "./supervisor-client.ts";
 import { TASK_PROFILES, hostAllowed, normalizeUrl, urlHost, type GeneralToolName, type TaskProfile } from "./task-profiles.ts";
@@ -252,9 +252,21 @@ export function createGeneralHandler(deps: GeneralDeps): TaskHandler {
       detachControl = null;
       await d?.().catch((error) => log.warn("control detach failed", { taskId: task.id, error }));
     };
-    const checkpoint = async (patch: Partial<Task>) => {
-      task = await ctx.checkpoint(patch);
-      return task;
+    /** The run's usage record once loaded; its counters are mirrored onto Task.budget. */
+    let usageRef: GeneralUsage | null = null;
+    const withCounters = (budget: Task["budget"]): Task["budget"] =>
+      usageRef ? { ...budget, browserOps: usageRef.browserOps, codeRuns: usageRef.codeRuns, sessions: usageRef.browserSessions + usageRef.codeSandboxes } : budget;
+    // Checkpoints are serialized, and a budget patch always carries the current browser-op, code-run
+    // and session counters, so a counter sync and a token settlement never overwrite each other.
+    let checkpointChain: Promise<unknown> = Promise.resolve();
+    const checkpoint = (patch: Partial<Task> | ((current: Task) => Partial<Task>)): Promise<Task> => {
+      const run = checkpointChain.then(async () => {
+        const p = typeof patch === "function" ? patch(task) : patch;
+        task = await ctx.checkpoint(p.budget ? { ...p, budget: withCounters(p.budget) } : p);
+        return task;
+      });
+      checkpointChain = run.catch(() => undefined);
+      return run;
     };
     const stopRenewal = () => {
       if (renewTimer) clearInterval(renewTimer);
@@ -297,7 +309,17 @@ export function createGeneralHandler(deps: GeneralDeps): TaskHandler {
       const existingUsage = await deps.store.get<GeneralUsage>(owner, STORE_KIND_GENERAL_USAGE, task.id);
       const recovering = initial.attempts > 1 || initial.attemptId !== undefined || existingUsage !== null || priorRows.length > 0;
       const usage: GeneralUsage = existingUsage ?? { id: task.id, taskId: task.id, startedAtMs: now(), browserOps: 0, codeRuns: 0, browserSessions: 0, browserInterruptions: 0, codeSandboxes: 0, unavailableToolCalls: 0 };
-      const saveUsage = () => deps.store.put(owner, STORE_KIND_GENERAL_USAGE, usage);
+      usageRef = usage;
+      /** Mirrors the counters onto Task.budget when they changed (one bounded write per charged tool call or session). */
+      const syncBudgetCounters = async () => {
+        const b0 = task.budget;
+        if (b0.browserOps === usage.browserOps && b0.codeRuns === usage.codeRuns && b0.sessions === usage.browserSessions + usage.codeSandboxes) return;
+        await checkpoint((current) => ({ budget: current.budget })).catch((error) => log.warn("budget counter checkpoint failed; the usage record still holds them", { taskId: task.id, error }));
+      };
+      const saveUsage = async () => {
+        await deps.store.put(owner, STORE_KIND_GENERAL_USAGE, usage);
+        await syncBudgetCounters();
+      };
       await saveUsage();
       const wallDeadline = usage.startedAtMs + b.wallClockMs;
       if (!recovering) await checkpoint({ phase: "prepare" });
@@ -1416,6 +1438,8 @@ export function createGeneralHandler(deps: GeneralDeps): TaskHandler {
       await ctx.event("phase", "execute", `model loop for goal under profile ${profile.id}`);
       const driver: ModelDriver = typeof deps.driver === "function" ? await deps.driver(task) : deps.driver;
       const identity = driver.describe?.() ?? { model: "unknown", host: "unknown" };
+      /** A labelled diagnostic: a task that names a script, or the control plane's scripted driver. Live budgets keep the estimate. */
+      const isScripted = task.scriptedDriver !== undefined || driver.scripted === true;
       const tools = toolSpecsFor(profile);
       const system = generalSystemPrompt(profile, { egressAllow, inputs: inputs.map((i) => ({ name: i.name, mediaType: i.artifact.mediaType, byteLength: i.artifact.byteLength })), vision: deps.vision === true });
       const messages: ChatMessage[] = [{ role: "user", content: generalTaskMessage(task.issueText, recovering ? RECOVERY_NOTE : undefined) }];
@@ -1472,8 +1496,9 @@ export function createGeneralHandler(deps: GeneralDeps): TaskHandler {
           continue;
         }
         const u = turn.usage;
-        const usageReported = !!u && Number.isFinite(u.input) && u.input > 0;
-        const charged = usageReported ? Math.max(0, Math.floor(u.input)) + Math.max(0, Math.floor(u.output || 0)) + Math.max(0, Math.floor(u.reasoning ?? 0)) : reserve;
+        // A scripted driver (a labelled diagnostic) spends no tokens: its reported usage is charged as-is.
+        const usageReported = isScripted || (!!u && Number.isFinite(u.input) && u.input > 0);
+        const charged = usageReported ? tokenCount(u?.input) + tokenCount(u?.output) + tokenCount(u?.reasoning) : reserve;
         await checkpoint({ budget: { ...task.budget, tokensUsed: Math.max(0, (task.budget.tokensUsed ?? 0) - reserve + charged) } });
         const toolCalls = Array.isArray(turn.toolCalls) ? turn.toolCalls.slice(0, 16) : [];
         const text = typeof turn.text === "string" ? turn.text : "";
@@ -1487,6 +1512,7 @@ export function createGeneralHandler(deps: GeneralDeps): TaskHandler {
           toolCalls: toolCalls.map((c) => ({ name: String(c.name).slice(0, 64) })),
           usage: turn.usage,
           usageEstimated: !usageReported,
+          tokensEstimated: !usageReported,
           tokensCharged: charged,
           tokensUsed: task.budget.tokensUsed ?? 0,
           finishReason,

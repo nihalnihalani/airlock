@@ -77,9 +77,12 @@ async function main() {
     diagnosticCatalog?.names.includes(name) ? diagnosticCatalog : generalCatalog?.names.includes(name) ? generalCatalog : driverCatalog?.names.includes(name) ? driverCatalog : null;
   const scriptedDrivers = [...new Set([...(diagnosticCatalog?.names ?? []), ...(generalCatalog?.names ?? []), ...(driverCatalog?.names ?? [])])].sort();
   const diagnostics: DiagnosticScript[] = [
-    ...(diagnosticCatalog ? await describeDiagnostics(diagnosticCatalog.path, diagnosticCatalog.names) : []),
-    ...(generalCatalog ? await describeDiagnostics(generalCatalog.path, generalCatalog.names.filter((n) => !diagnosticCatalog?.names.includes(n))) : []),
-    ...(driverCatalog ? await describeDiagnostics(driverCatalog.path, driverCatalog.names.filter((n) => !diagnosticCatalog?.names.includes(n))) : []),
+    // kind follows the catalog: AIRLOCK_DIAGNOSTIC_SCRIPTS_DIR and the scripted driver's own
+    // catalog drive repair cases; AIRLOCK_GENERAL_DIAGNOSTIC_SCRIPTS_DIR drives general tasks.
+    // A name resolves as catalogFor does (diagnostic, then general, then driver), listed once.
+    ...(diagnosticCatalog ? await describeDiagnostics(diagnosticCatalog.path, diagnosticCatalog.names, "repair") : []),
+    ...(generalCatalog ? await describeDiagnostics(generalCatalog.path, generalCatalog.names.filter((n) => !diagnosticCatalog?.names.includes(n)), "general") : []),
+    ...(driverCatalog ? await describeDiagnostics(driverCatalog.path, driverCatalog.names.filter((n) => !diagnosticCatalog?.names.includes(n) && !generalCatalog?.names.includes(n)), "repair") : []),
   ].sort((a, b) => a.name.localeCompare(b.name));
   const defaultScriptedDriver = driverCatalog ? (driverCatalog.names.length === 1 ? driverCatalog.names[0]! : driverCatalog.names.includes("default") ? "default" : null) : null;
   const driver: DriverSource = async (task: Task) => {

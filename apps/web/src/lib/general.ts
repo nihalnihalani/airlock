@@ -848,7 +848,8 @@ export interface ProfileBudgets {
 }
 
 export function generalBudgetRows(budget: Task["budget"], limits: ProfileBudgets | null): { key: string; value: string }[] {
-  // A counter the control plane did not report is "not reported", never a made-up 0.
+  // The control plane checkpoints browser ops, code runs and sessions into Task.budget as they
+  // change; a counter absent from the record (an older task) is "not reported", never a made-up 0.
   const of = (used: number | undefined, limit: number | undefined) =>
     used === undefined ? `not reported${limit !== undefined ? ` (limit ${limit.toLocaleString("en-US")})` : ""}` : `${used}${limit !== undefined ? ` / ${limit.toLocaleString("en-US")}` : ""}`;
   return [

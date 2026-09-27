@@ -270,11 +270,13 @@ describe("diagnostic catalog metadata", () => {
       await writeFile(join(d, "a.json"), JSON.stringify({ title: "Forged log", description: "writes a fake log", turns: [] }));
       await writeFile(join(d, "b.json"), JSON.stringify({ _comment: "runaway command", turns: [] }));
       await writeFile(join(d, "c.json"), JSON.stringify([]));
-      expect(await describeDiagnostics(d, ["a", "b", "c"])).toEqual([
-        { name: "a", title: "Forged log", description: "writes a fake log" },
-        { name: "b", title: "b", description: "runaway command" },
-        { name: "c", title: "c", description: "" },
+      expect(await describeDiagnostics(d, ["a", "b", "c"], "repair")).toEqual([
+        { name: "a", title: "Forged log", description: "writes a fake log", kind: "repair" },
+        { name: "b", title: "b", description: "runaway command", kind: "repair" },
+        { name: "c", title: "c", description: "", kind: "repair" },
       ]);
+      // kind is the catalog's, never guessed from the name.
+      expect((await describeDiagnostics(d, ["a"], "general"))[0]?.kind).toBe("general");
     } finally {
       await rm(d, { recursive: true, force: true });
     }

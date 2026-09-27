@@ -91,6 +91,8 @@ export interface ModelDriver {
   }>;
   /** Identity recorded on every model event (model name, serving host). */
   describe?(): { model: string; host: string };
+  /** A replayed script: its reported usage is charged as-is (see vultr-client.ts ModelDriver). */
+  scripted?: boolean;
 }
 export type CompareFn = (input: {
   id: string;
@@ -898,6 +900,8 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
       ): Promise<{ end: "submitted" | "budget" | "deadline" | "output-limit" | "unresolved" | "driver-failed"; reason: string; worked: boolean }> {
         const driver: ModelDriver = typeof deps.driver === "function" ? await deps.driver(task) : deps.driver;
         const identity = driver.describe?.() ?? { model: "unknown", host: "unknown" };
+        /** A labelled diagnostic: a task that names a script, or the control plane's scripted driver. Live budgets keep the estimate. */
+        const isScripted = task.scriptedDriver !== undefined || driver.scripted === true;
         const reported = contract.cases.find((c) => c.kind === "reported");
         const system = systemPrompt(manifest);
         const first = taskMessage(task.issueText, reported);
@@ -941,9 +945,10 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
             continue;
           }
           // Charge actual usage; when the provider reports none, the conservative estimate (never zero).
+          // A scripted driver (a labelled diagnostic) spends no tokens: its reported usage is charged as-is.
           const usage = turn.usage;
-          const usageReported = !!usage && Number.isFinite(usage.input) && usage.input > 0;
-          const charged = usageReported ? Math.max(0, Math.floor(usage.input)) + Math.max(0, Math.floor(usage.output || 0)) + Math.max(0, Math.floor(usage.reasoning ?? 0)) : reserve;
+          const usageReported = isScripted || (!!usage && Number.isFinite(usage.input) && usage.input > 0);
+          const charged = usageReported ? tokenCount(usage?.input) + tokenCount(usage?.output) + tokenCount(usage?.reasoning) : reserve;
           await checkpoint({ budget: { ...task.budget, tokensUsed: Math.max(0, (task.budget.tokensUsed ?? 0) - reserve + charged), attemptTokens: Math.max(0, (task.budget.attemptTokens ?? 0) - reserve + charged) } });
           const toolCalls = Array.isArray(turn.toolCalls) ? turn.toolCalls.slice(0, 16) : [];
           const text = typeof turn.text === "string" ? turn.text : "";
@@ -973,6 +978,7 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
             toolCalls: toolCalls.map((c) => ({ name: String(c.name).slice(0, 64) })),
             usage: turn.usage,
             usageEstimated: !usageReported,
+            tokensEstimated: !usageReported,
             tokensCharged: charged,
             tokensUsed: task.budget.tokensUsed ?? 0,
             attemptTokens: task.budget.attemptTokens ?? 0,
@@ -1263,6 +1269,11 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
 }
 
 /** The comparator's verdict on a failed candidate as bounded feedback for the next attempt (M4). */
+/** One reported usage figure as a whole, non-negative token count (0 when absent or not a number). */
+export function tokenCount(v: number | undefined): number {
+  return typeof v === "number" && Number.isFinite(v) ? Math.max(0, Math.floor(v)) : 0;
+}
+
 export function comparatorFeedback(record: VerificationRecord): string {
   const failed = record.cases.filter((c) => !c.passed);
   const lines = [

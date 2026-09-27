@@ -779,9 +779,28 @@ describe("M3 budgets", () => {
       expect(model).toHaveLength(4);
       for (const m of model) {
         expect(m.usageEstimated).toBe(true);
+        expect((m as { tokensEstimated?: boolean }).tokensEstimated).toBe(true);
         expect(m.tokensCharged).toBeGreaterThan(m.maxTokens);
       }
       expect(s.task.budget.tokensUsed).toBe(model.reduce((n, m) => n + m.tokensCharged, 0));
+    } finally {
+      await s.close();
+    }
+  });
+
+  test("a scripted (diagnostic) driver is charged its reported usage (0), not the live estimate", async () => {
+    const s = await runWith(createScriptedDriver([...repairScript(FX_FIXED_SOURCE)], { name: "fixed" }));
+    try {
+      expect(s.task.outcome).toBe("CANDIDATE_PASSED_CHECKS");
+      const model = s.events.filter((e) => e.kind === "model").map((e) => e.data as { tokensCharged: number; tokensEstimated: boolean; model: string });
+      expect(model).toHaveLength(4);
+      for (const m of model) {
+        expect(m.model).toBe("scripted:fixed");
+        expect(m.tokensEstimated).toBe(false);
+        expect(m.tokensCharged).toBe(0);
+      }
+      expect(s.task.budget.tokensUsed).toBe(0);
+      expect(s.task.budget.modelCallsUsed).toBe(4);
     } finally {
       await s.close();
     }

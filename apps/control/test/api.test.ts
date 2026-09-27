@@ -936,7 +936,7 @@ describe("repair availability (U5/G1) and diagnostics (G6)", () => {
   test("signed-out readers see availability; a live task created without evidence is marked repair-disabled; a passing receipt enables repair", async () => {
     const evidenceDir = await mkdtemp(join(tmpdir(), "airlock-gate-"));
     const supervisor = new FakeSupervisor({ profile: fixture.profile, observe: fixtureObserve, host: liveHost() });
-    const ctx = await makeCtx({ supervisor, extra: { scriptedDrivers: ["slow"], diagnostics: [{ name: "slow", title: "Runaway command", description: "sleeps" }] } });
+    const ctx = await makeCtx({ supervisor, extra: { scriptedDrivers: ["slow"], diagnostics: [{ name: "slow", title: "Runaway command", description: "sleeps", kind: "repair" }] } });
     const availability = new RepairAvailabilityService({ driver: "vultr", model: "glm-5.3", evidenceDir, repoRoot: tmpdir(), controlInstanceId: "vm-a-456", adapterDigestOf: (p) => computeAdapterDigest(fixture.runtimeDir, p), tasks: ctx.store });
     ctx.deps.availability = availability;
     const app = createApp(ctx.deps);
@@ -985,13 +985,13 @@ describe("repair availability (U5/G1) and diagnostics (G6)", () => {
   });
 
   test("the diagnostics catalog is operator/judge only and lists only launchable scripts", async () => {
-    const ctx = await makeCtx({ extra: { scriptedDrivers: ["forged-log", "slow"], diagnostics: [{ name: "forged-log", title: "Forged success log", description: "d" }, { name: "slow", title: "slow", description: "" }, { name: "gone", title: "gone", description: "" }] } });
+    const ctx = await makeCtx({ extra: { scriptedDrivers: ["forged-log", "slow"], diagnostics: [{ name: "forged-log", title: "Forged success log", description: "d", kind: "repair" }, { name: "slow", title: "slow", description: "", kind: "general" }, { name: "gone", title: "gone", description: "", kind: "repair" }] } });
     try {
       expect((await ctx.app.request("/api/diagnostics")).status).toBe(401);
       const judge = await login(ctx.app, JUDGE);
       const res = await ctx.app.request("/api/diagnostics", { headers: { cookie: judge } });
       expect(res.status).toBe(200);
-      expect(await res.json()).toEqual({ scripts: [{ name: "forged-log", title: "Forged success log", description: "d" }, { name: "slow", title: "slow", description: "" }] });
+      expect(await res.json()).toEqual({ scripts: [{ name: "forged-log", title: "Forged success log", description: "d", kind: "repair" }, { name: "slow", title: "slow", description: "", kind: "general" }] });
       expect((await ctx.app.request("/api/tasks", json({ profileId: "fx-1", issueText: "x", scriptedDriver: "gone" }, judge))).status).toBe(422);
       // Without a catalog the list is empty and every scriptedDriver is refused.
       const bare = await makeCtx();

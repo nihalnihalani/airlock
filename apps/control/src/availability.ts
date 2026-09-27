@@ -250,17 +250,22 @@ export class RepairAvailabilityService implements AvailabilityService {
 
 // ---- diagnostic script catalog metadata ----------------------------------------------------------
 
+/** Which task kind a diagnostic script drives: a repair case or a general task. */
+export type DiagnosticKind = "repair" | "general";
+
 export interface DiagnosticScript {
   name: string;
   title: string;
   description: string;
+  kind: DiagnosticKind;
 }
 
 /**
  * Titles and descriptions for the named scripts under `dir`: a script file's own `title` /
- * `description` strings when present, else the name and its `_comment`. Never the turns.
+ * `description` strings when present, else the name and its `_comment`. Never the turns. `kind`
+ * is the catalog the script came from (never guessed from its name).
  */
-export async function describeDiagnostics(dir: string, names: string[]): Promise<DiagnosticScript[]> {
+export async function describeDiagnostics(dir: string, names: string[], kind: DiagnosticKind): Promise<DiagnosticScript[]> {
   const out: DiagnosticScript[] = [];
   for (const name of names) {
     let title = name;
@@ -275,7 +280,7 @@ export async function describeDiagnostics(dir: string, names: string[]): Promise
     } catch {
       // A single-file catalog or an unreadable file keeps the name only.
     }
-    out.push({ name, title, description });
+    out.push({ name, title, description, kind });
   }
   return out;
 }
