@@ -27,6 +27,13 @@
         "typescript": "^5.9.3",
       },
     },
+    "apps/egress": {
+      "name": "@airlock/egress",
+      "version": "0.1.0",
+      "devDependencies": {
+        "typescript": "^5.9.3",
+      },
+    },
     "apps/supervisor": {
       "name": "@airlock/supervisor",
       "version": "0.1.0",
@@ -82,6 +89,8 @@
     "@airlock/contracts": ["@airlock/contracts@workspace:packages/contracts"],
 
     "@airlock/control": ["@airlock/control@workspace:apps/control"],
+
+    "@airlock/egress": ["@airlock/egress@workspace:apps/egress"],
 
     "@airlock/supervisor": ["@airlock/supervisor@workspace:apps/supervisor"],
 

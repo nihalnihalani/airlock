@@ -1,0 +1,12 @@
+{
+  "name": "airlock-browser-runner",
+  "private": true,
+  "type": "module",
+  "description": "Fixed in-container Playwright runner for Airlock browser attempts. Installed only inside the runtime/browser image.",
+  "dependencies": {
+    "playwright-core": "1.63.0"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  }
+}
