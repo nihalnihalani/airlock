@@ -79,8 +79,11 @@ lease, and runs the `RepairHandler`:
 3. **baseline** — invoke all contract cases on the pristine tree; `compare()` must show the
    reported failure. Otherwise **NOT_REPRODUCED** (measured, different behaviour) or
    **INCONCLUSIVE** (incomplete measurement) and stop.
-4. **repair** — one model loop with `read_file`, `write_file`, `run`, `submit_candidate`, each bound
-   to the attempt through the supervisor. Tool errors return to the model as tool results. Ends on
+4. **repair** — one model loop with `read_file` (whole file or a `start_line`/`end_line` range, with
+   the total line count; a large file is cut on a line boundary with a paging note), `edit_file`
+   (replace exactly one occurrence of `old_text`; the current bytes are read back through the
+   supervisor, 0 or >1 matches are refused), `write_file`, `run`, `submit_candidate`, each bound to
+   the attempt through the supervisor. Tool errors return to the model as tool results. Ends on
    `submit_candidate`, `caps.maxModelCalls` / `attemptTimeoutMs` (**STOPPED_LIMIT**), or the model
    giving up (**REPRODUCED_UNRESOLVED**). The driver's `finish_reason` steers the loop: a turn cut
    by `max_tokens` (`length`) with no tool call is answered with "take the next action now" and is

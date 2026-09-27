@@ -113,6 +113,8 @@ export const ARTIFACT_KIND_BUNDLE = "bundle";
 
 const DETAIL_CAP = 16 * 1024;
 const TOOL_RESULT_CAP = 24 * 1024;
+/** read_file content per result, cut on a line boundary so the JSON tool result stays under TOOL_RESULT_CAP. */
+const READ_FILE_CHARS = 16 * 1024;
 const MAX_TEXT_ONLY_TURNS = 2;
 const MAX_CONSECUTIVE_DRIVER_ERRORS = 3;
 /** Turns cut by max_tokens with no action are not "giving up"; but a run of them is a limit. */
@@ -559,18 +561,84 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
         try {
           switch (call.name) {
             case "read_file": {
-              if (!manifest.readablePaths.includes(call.args.path)) {
-                await ctx.event("tool", "read_file refused", `${call.args.path} is not a readable path`);
-                return { payload: { error: `"${call.args.path}" is not readable. Allowed: ${manifest.readablePaths.join(", ")}` } };
+              const { path, start_line: startLine, end_line: endLine } = call.args;
+              if (!manifest.readablePaths.includes(path)) {
+                await ctx.event("tool", "read_file refused", `${path} is not a readable path`);
+                return { payload: { error: `"${path}" is not readable. Allowed: ${manifest.readablePaths.join(", ")}` } };
               }
-              const result = await deps.supervisor.authorTool({ ref: attemptRef, args: { kind: "read", path: call.args.path } }, { signal: ctx.signal });
-              await ctx.event("tool", `read_file ${call.args.path}`, result.kind === "read" ? `${result.content.length} chars${result.truncated ? " (truncated)" : ""}` : describeToolResult(result), {
+              if (startLine !== undefined && endLine !== undefined && endLine < startLine) return { payload: { error: "end_line must be >= start_line" } };
+              const result = await deps.supervisor.authorTool({ ref: attemptRef, args: { kind: "read", path } }, { signal: ctx.signal });
+              if (result.kind !== "read") {
+                await ctx.event("tool", `read_file ${path}`, describeToolResult(result), { tool: "read_file", path, refused: describeToolResult(result) });
+                return { payload: { error: describeToolResult(result) } };
+              }
+              const slice = sliceLines(result.content, startLine, endLine, READ_FILE_CHARS);
+              const truncated = result.truncated || slice.truncated;
+              await ctx.event("tool", `read_file ${path}${startLine !== undefined || endLine !== undefined ? ` [${slice.startLine}-${slice.endLine}]` : ""}`, `${slice.content.length} chars, lines ${slice.startLine}-${slice.endLine} of ${slice.totalLines}${truncated ? " (truncated)" : ""}`, {
                 tool: "read_file",
-                path: call.args.path,
-                ...(result.kind === "read" ? { chars: result.content.length, truncated: result.truncated } : { refused: describeToolResult(result) }),
+                path,
+                chars: slice.content.length,
+                startLine: slice.startLine,
+                endLine: slice.endLine,
+                totalLines: slice.totalLines,
+                truncated,
               });
-              if (result.kind === "read") return { payload: { path: call.args.path, content: result.content, truncated: result.truncated } };
-              return { payload: { error: describeToolResult(result) } };
+              return {
+                payload: {
+                  path,
+                  content: slice.content,
+                  start_line: slice.startLine,
+                  end_line: slice.endLine,
+                  total_lines: slice.totalLines,
+                  truncated,
+                  ...(truncated ? { note: `Only lines ${slice.startLine}-${slice.endLine} of ${slice.totalLines} are shown; read the rest with start_line/end_line.` } : {}),
+                },
+              };
+            }
+            case "edit_file": {
+              const { path, old_text: oldText, new_text: newText } = call.args;
+              if (!manifest.allowedReplacementPaths.includes(path)) {
+                await ctx.event("tool", "edit_file refused", `${path} is not an allowed replacement path`);
+                return { payload: { error: `"${path}" may not be changed. Allowed: ${manifest.allowedReplacementPaths.join(", ")}` } };
+              }
+              // The current bytes come from the sandbox through the supervisor (bounded by caps.maxFileBytes),
+              // never from a controller-side copy: the author may already have changed the file.
+              const current = await deps.supervisor.authorTool({ ref: attemptRef, args: { kind: "read", path } }, { signal: ctx.signal });
+              if (current.kind !== "read") {
+                await ctx.event("tool", `edit_file ${path}`, describeToolResult(current), { tool: "edit_file", path, refused: describeToolResult(current) });
+                return { payload: { error: describeToolResult(current) } };
+              }
+              if (current.truncated) {
+                await ctx.event("tool", "edit_file refused", `${path} exceeds the read cap; it cannot be edited safely`);
+                return { payload: { error: `"${path}" exceeds ${manifest.caps.maxFileBytes} bytes and cannot be edited safely` } };
+              }
+              const occurrences = countOccurrences(current.content, oldText);
+              if (occurrences === 0) {
+                await ctx.event("tool", `edit_file ${path} rejected`, "old_text not found", { tool: "edit_file", path, occurrences });
+                return { payload: { error: "old_text not found. Read the current file text and copy it exactly, including indentation." } };
+              }
+              if (occurrences > 1) {
+                await ctx.event("tool", `edit_file ${path} rejected`, `old_text is not unique (${occurrences} occurrences)`, { tool: "edit_file", path, occurrences });
+                return { payload: { error: `old_text is not unique; include more context (it occurs ${occurrences} times)` } };
+              }
+              const at = current.content.indexOf(oldText);
+              const next = current.content.slice(0, at) + newText + current.content.slice(at + oldText.length);
+              const byteLength = Buffer.byteLength(next, "utf8");
+              if (byteLength > manifest.caps.maxFileBytes) {
+                await ctx.event("tool", "edit_file refused", `${path}: ${byteLength} bytes exceeds ${manifest.caps.maxFileBytes}`);
+                return { payload: { error: `file would exceed ${manifest.caps.maxFileBytes} bytes` } };
+              }
+              const written = await deps.supervisor.authorTool({ ref: attemptRef, args: { kind: "write", path, content: next } }, { signal: ctx.signal });
+              await ctx.event("tool", `edit_file ${path}`, written.kind === "write" ? `${written.byteLength} bytes; replaced ${oldText.length} chars with ${newText.length} chars at offset ${at}\n--- old\n${bounded(oldText, 4000)}\n--- new\n${bounded(newText, 4000)}` : describeToolResult(written), {
+                tool: "edit_file",
+                path,
+                offset: at,
+                oldText: oldText.slice(0, 8192),
+                newText: newText.slice(0, 8192),
+                ...(written.kind === "write" ? { byteLength: written.byteLength } : { refused: describeToolResult(written) }),
+              });
+              if (written.kind === "write") return { payload: { path, replaced: true, byteLength: written.byteLength } };
+              return { payload: { error: describeToolResult(written) } };
             }
             case "write_file": {
               if (!manifest.allowedReplacementPaths.includes(call.args.path)) {
@@ -645,6 +713,51 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
       throw error;
     }
   };
+}
+
+/** Non-overlapping occurrences of `needle` in `haystack` (needle is non-empty by schema). */
+export function countOccurrences(haystack: string, needle: string): number {
+  let count = 0;
+  let from = 0;
+  for (;;) {
+    const at = haystack.indexOf(needle, from);
+    if (at < 0) return count;
+    count += 1;
+    from = at + needle.length;
+  }
+}
+
+/**
+ * Lines `startLine..endLine` (1-based, inclusive; defaults: 1..last) of `text`, cut at a line
+ * boundary once `maxChars` is reached. `endLine` in the result is the last line actually returned.
+ */
+export function sliceLines(text: string, startLine: number | undefined, endLine: number | undefined, maxChars: number): { content: string; startLine: number; endLine: number; totalLines: number; truncated: boolean } {
+  const lines = text.split("\n");
+  // A trailing newline does not make an extra empty line.
+  if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+  const totalLines = lines.length;
+  const first = Math.max(1, Math.min(startLine ?? 1, Math.max(totalLines, 1)));
+  const last = Math.max(first, Math.min(endLine ?? totalLines, totalLines));
+  const out: string[] = [];
+  let chars = 0;
+  let truncated = false;
+  let returnedLast = first - 1;
+  for (let n = first; n <= last; n++) {
+    const line = lines[n - 1] ?? "";
+    if (out.length > 0 && chars + line.length + 1 > maxChars) {
+      truncated = true;
+      break;
+    }
+    out.push(line);
+    chars += line.length + 1;
+    returnedLast = n;
+  }
+  if (out.length === 1 && (out[0]?.length ?? 0) > maxChars) {
+    out[0] = out[0]!.slice(0, maxChars);
+    truncated = true;
+  }
+  const content = out.length === 0 ? "" : `${out.join("\n")}\n`;
+  return { content, startLine: first, endLine: returnedLast, totalLines, truncated };
 }
 
 /** An ExecResult with stdout/stderr cut to what an event should carry (the tool result keeps more). */

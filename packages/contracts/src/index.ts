@@ -587,10 +587,18 @@ export type RunEvent = z.infer<typeof RunEvent>;
 // Model tools (what the repair agent may call). Bound to the current attempt by the controller.
 // ---------------------------------------------------------------------------------------------
 
-export const ModelToolName = z.enum(["read_file", "write_file", "run", "submit_candidate"]);
+export const ModelToolName = z.enum(["read_file", "edit_file", "write_file", "run", "submit_candidate"]);
+
+const lineNumber = z.number().int().positive().max(10_000_000);
 
 export const ModelToolCall = z.discriminatedUnion("name", [
-  z.object({ name: z.literal("read_file"), args: z.object({ path: relPath }) }),
+  // start_line/end_line (1-based, inclusive) page through a file too large for one result.
+  z.object({ name: z.literal("read_file"), args: z.object({ path: relPath, start_line: lineNumber.optional(), end_line: lineNumber.optional() }) }),
+  // Replace exactly one occurrence of old_text; the controller reads and writes the file through the supervisor.
+  z.object({
+    name: z.literal("edit_file"),
+    args: z.object({ path: relPath, old_text: z.string().min(1).max(1_048_576), new_text: z.string().max(1_048_576) }),
+  }),
   z.object({
     name: z.literal("write_file"),
     args: z.object({ path: relPath, content: z.string().max(1_048_576) }),

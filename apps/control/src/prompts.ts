@@ -15,17 +15,37 @@ export interface ToolSpec {
 export const MODEL_TOOLS: ToolSpec[] = [
   {
     name: "read_file",
-    description: "Read one file from the source tree. Only the listed readable paths are allowed. Output is truncated at the cap.",
+    description:
+      "Read one file from the source tree, or a line range of it. Only the listed readable paths are allowed. The result carries total_lines and the range returned; a large file is cut at the result cap, so page through it with start_line/end_line (1-based, inclusive).",
     parameters: {
       type: "object",
-      properties: { path: { type: "string", description: "Relative POSIX path, e.g. tabulate/__init__.py" } },
+      properties: {
+        path: { type: "string", description: "Relative POSIX path, e.g. tabulate/__init__.py" },
+        start_line: { type: "integer", minimum: 1, description: "First line to return (1-based). Omit with end_line to read from the top." },
+        end_line: { type: "integer", minimum: 1, description: "Last line to return (inclusive)." },
+      },
       required: ["path"],
       additionalProperties: false,
     },
   },
   {
+    name: "edit_file",
+    description:
+      "Replace exactly one occurrence of old_text with new_text in one file. The preferred way to change code: old_text must match the current file text exactly (including indentation) and occur exactly once; include enough surrounding lines to make it unique. Only the listed replaceable paths are allowed.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Relative POSIX path from the allowed list" },
+        old_text: { type: "string", description: "Exact text currently in the file, occurring once" },
+        new_text: { type: "string", description: "Replacement text" },
+      },
+      required: ["path", "old_text", "new_text"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "write_file",
-    description: "Replace the full contents of one file in the source tree. Only the listed replaceable paths are allowed. Always write the whole file.",
+    description: "Replace the full contents of one file in the source tree. Only the listed replaceable paths are allowed; only for small files (prefer edit_file). Always write the whole file.",
     parameters: {
       type: "object",
       properties: {

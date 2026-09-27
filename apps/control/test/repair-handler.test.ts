@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { AttemptRef, RunEvent, Task } from "@airlock/contracts";
 import { SupervisorUnavailableError } from "../src/supervisor-client.ts";
-import { STORE_KIND_VERIFICATIONS } from "../src/repair-handler.ts";
+import { STORE_KIND_VERIFICATIONS, countOccurrences, sliceLines } from "../src/repair-handler.ts";
 import { FX_FIXED_SOURCE, FX_BROKEN_SOURCE, fixtureObserve, makeFixture, scriptedDriverDouble, type Fixture, type ScriptedTurn } from "./helpers/doubles.ts";
 import { FakeSupervisor, okExec } from "./helpers/fake-supervisor.ts";
 import { makeHarness, OWNER, type Harness } from "./helpers/harness.ts";
@@ -253,6 +253,81 @@ describe("repair handler", () => {
       expect(second.reasoning).toBe("short");
       expect(second.reasoningTruncated).toBe(false);
       expect(second.reasoningTokens).toBeUndefined();
+    } finally {
+      await h.close();
+    }
+  });
+
+  test("edit_file replaces a unique old_text through the supervisor; not-found, ambiguous and disallowed edits are refused", async () => {
+    const seen: string[] = [];
+    const driver = scriptedDriverDouble(
+      [
+        { toolCalls: [{ name: "edit_file", args: { path: "README.md", old_text: "fixture", new_text: "x" } }] },
+        { toolCalls: [{ name: "edit_file", args: { path: "lib/mod.py", old_text: "raise RuntimeError('nope')", new_text: "return 0" } }] },
+        { toolCalls: [{ name: "edit_file", args: { path: "lib/mod.py", old_text: "    ", new_text: "  " } }] },
+        { toolCalls: [{ name: "edit_file", args: { path: "lib/mod.py", old_text: "        raise ValueError('zero not supported')", new_text: "        return 0  # FIXED" } }] },
+        { toolCalls: [{ name: "submit_candidate", args: { summary: "edited" } }] },
+      ],
+      { onChat: (messages) => { const last = messages[messages.length - 1]; if (last?.role === "tool") seen.push(last.content); } },
+    );
+    const supervisor = new FakeSupervisor({ profile: fixture.profile, observe: fixtureObserve });
+    const h = await makeHarness(fixture, supervisor, driver);
+    h.worker.start();
+    try {
+      const task = await h.newTask();
+      const result = await h.waitFor(task.id);
+      expect(result.outcome).toBe("CANDIDATE_PASSED_CHECKS");
+      expect(seen[0]).toContain("may not be changed");
+      expect(seen[1]).toContain("old_text not found");
+      expect(seen[2]).toContain("old_text is not unique");
+      expect(JSON.parse(seen[3]!)).toEqual({ path: "lib/mod.py", replaced: true, byteLength: Buffer.byteLength(FX_FIXED_SOURCE) });
+      // The disallowed path never reached the supervisor; the refused edits wrote nothing.
+      expect(supervisor.toolCalls.filter((c) => c.args.kind === "write").map((c) => c.args)).toEqual([{ kind: "write", path: "lib/mod.py", content: FX_FIXED_SOURCE }]);
+      expect(supervisor.toolCalls.some((c) => c.args.kind !== "exec" && c.args.path === "README.md")).toBe(false);
+      const events = await h.store.listEvents(task.id);
+      expect(events.filter((e) => e.kind === "tool" && e.title === "edit_file lib/mod.py rejected")).toHaveLength(2);
+      expect(events.some((e) => e.kind === "tool" && e.title === "edit_file lib/mod.py" && e.detail.includes("--- old"))).toBe(true);
+    } finally {
+      await h.close();
+    }
+  });
+
+  test("read_file returns a line range with the total line count; an oversized read is cut on a line boundary with a paging note", async () => {
+    const seen: string[] = [];
+    const big = Array.from({ length: 3000 }, (_, i) => `line ${i + 1} ${"x".repeat(20)}`).join("\n") + "\n";
+    const driver = scriptedDriverDouble(
+      [
+        { toolCalls: [{ name: "read_file", args: { path: "lib/mod.py", start_line: 2, end_line: 3 } }] },
+        { toolCalls: [{ name: "read_file", args: { path: "lib/mod.py" } }] },
+        { toolCalls: [{ name: "read_file", args: { path: "lib/mod.py", start_line: 4, end_line: 2 } }] },
+        { toolCalls: [{ name: "write_file", args: { path: "lib/mod.py", content: big } }] },
+        { toolCalls: [{ name: "read_file", args: { path: "lib/mod.py" } }] },
+        { toolCalls: [{ name: "read_file", args: { path: "lib/mod.py", start_line: 2990 } }] },
+        { toolCalls: [{ name: "write_file", args: { path: "lib/mod.py", content: FX_FIXED_SOURCE } }] },
+        { toolCalls: [{ name: "submit_candidate", args: { summary: "done" } }] },
+      ],
+      { onChat: (messages) => { const last = messages[messages.length - 1]; if (last?.role === "tool") seen.push(last.content); } },
+    );
+    const supervisor = new FakeSupervisor({ profile: fixture.profile, observe: fixtureObserve });
+    const h = await makeHarness(fixture, supervisor, driver);
+    h.worker.start();
+    try {
+      const task = await h.newTask();
+      const result = await h.waitFor(task.id);
+      expect(result.outcome).toBe("CANDIDATE_PASSED_CHECKS");
+      expect(JSON.parse(seen[0]!)).toEqual({ path: "lib/mod.py", content: "    if x == 0:\n        raise ValueError('zero not supported')\n", start_line: 2, end_line: 3, total_lines: 4, truncated: false });
+      expect(JSON.parse(seen[1]!)).toMatchObject({ content: FX_BROKEN_SOURCE, start_line: 1, end_line: 4, total_lines: 4, truncated: false });
+      expect(seen[2]).toContain("end_line must be >= start_line");
+      const cut = JSON.parse(seen[4]!) as { content: string; start_line: number; end_line: number; total_lines: number; truncated: boolean; note: string };
+      expect(cut.truncated).toBe(true);
+      expect(cut.start_line).toBe(1);
+      expect(cut.total_lines).toBe(3000);
+      expect(cut.end_line).toBeLessThan(3000);
+      expect(cut.content.length).toBeLessThanOrEqual(16 * 1024);
+      expect(cut.content.endsWith(`line ${cut.end_line} ${"x".repeat(20)}\n`)).toBe(true);
+      expect(cut.note).toContain("start_line/end_line");
+      expect(seen[4]!.length).toBeLessThanOrEqual(24 * 1024);
+      expect(JSON.parse(seen[5]!)).toMatchObject({ start_line: 2990, end_line: 3000, total_lines: 3000, truncated: false });
     } finally {
       await h.close();
     }
@@ -515,5 +590,21 @@ describe("repair handler", () => {
     } finally {
       await s.close();
     }
+  });
+});
+
+describe("edit/read helpers", () => {
+  test("countOccurrences counts non-overlapping matches", () => {
+    expect(countOccurrences("aaa", "a")).toBe(3);
+    expect(countOccurrences("aaaa", "aa")).toBe(2);
+    expect(countOccurrences("abc", "d")).toBe(0);
+  });
+  test("sliceLines clamps ranges, ignores a trailing newline and cuts on a line boundary", () => {
+    expect(sliceLines("a\nb\nc\n", undefined, undefined, 100)).toEqual({ content: "a\nb\nc\n", startLine: 1, endLine: 3, totalLines: 3, truncated: false });
+    expect(sliceLines("a\nb\nc", 2, 99, 100)).toEqual({ content: "b\nc\n", startLine: 2, endLine: 3, totalLines: 3, truncated: false });
+    expect(sliceLines("a\nb\nc\n", 99, undefined, 100)).toEqual({ content: "c\n", startLine: 3, endLine: 3, totalLines: 3, truncated: false });
+    expect(sliceLines("aaaa\nbbbb\ncccc\n", 1, 3, 10)).toEqual({ content: "aaaa\nbbbb\n", startLine: 1, endLine: 2, totalLines: 3, truncated: true });
+    expect(sliceLines("x".repeat(50), 1, 1, 10)).toEqual({ content: "x".repeat(10) + "\n", startLine: 1, endLine: 1, totalLines: 1, truncated: true });
+    expect(sliceLines("", undefined, undefined, 10)).toEqual({ content: "\n", startLine: 1, endLine: 1, totalLines: 1, truncated: false });
   });
 });
