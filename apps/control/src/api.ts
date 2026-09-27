@@ -31,6 +31,7 @@ import {
 } from "@airlock/contracts";
 import type { TaskEventBus } from "./events.ts";
 import type { LoadedProfile } from "./profiles.ts";
+import { ExportIntegrityError } from "./artifacts/index.ts";
 import { ARTIFACT_KIND_BUNDLE, STORE_KIND_VERIFICATIONS, type ArtifactStoreLike } from "./repair-handler.ts";
 import { LoginRateLimited, SESSION_COOKIE, readCookie, type SessionRecord, type SessionService } from "./sessions.ts";
 import type { Store } from "./store/index.ts";
@@ -106,6 +107,10 @@ export function createApp(deps: ApiDeps) {
     if (error instanceof AppError) return c.json({ error: error.message }, error.status);
     if (error instanceof z.ZodError) return c.json({ error: `invalid body: ${error.issues.map((i) => `${i.path.join(".")} ${i.message}`).join("; ").slice(0, 500)}` }, 400);
     if (error instanceof LoginRateLimited) return c.json({ error: error.message }, 429);
+    if (error instanceof ExportIntegrityError) {
+      console.error({ timestamp: new Date().toISOString(), context: { path: c.req.path }, error: `ExportIntegrityError: ${error.message.slice(0, 300)}` });
+      return c.json({ error: `sealed candidate no longer matches its manifest; export refused (${error.message.slice(0, 200)})` }, 409);
+    }
     if (error instanceof SupervisorUnavailableError) return c.json({ error: "supervisor unavailable" }, 503);
     if (error instanceof SupervisorFenceError) return c.json({ error: error.message.slice(0, 300) }, 409);
     if (error instanceof SupervisorError) return c.json({ error: error.message.slice(0, 300) }, 502);

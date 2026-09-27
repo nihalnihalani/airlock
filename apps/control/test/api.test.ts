@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Task } from "@airlock/contracts";
 import { createApp, STORE_KIND_GRANTS } from "../src/api.ts";
+import { exportBundle } from "../src/artifacts/index.ts";
 import { TaskEventBus } from "../src/events.ts";
 import { ARTIFACT_KIND_BUNDLE, STORE_KIND_VERIFICATIONS } from "../src/repair-handler.ts";
 import { SessionService } from "../src/sessions.ts";
@@ -33,7 +34,7 @@ interface Ctx {
   close: () => Promise<void>;
 }
 
-async function makeCtx(options: { withWorker?: boolean; now?: () => number; webDist?: string; trustProxy?: boolean } = {}): Promise<Ctx> {
+async function makeCtx(options: { withWorker?: boolean; now?: () => number; webDist?: string; trustProxy?: boolean; realExport?: boolean } = {}): Promise<Ctx> {
   const supervisor = new FakeSupervisor({ profile: fixture.profile, observe: fixtureObserve });
   let harness: Harness | null = null;
   let store: Store;
@@ -63,7 +64,7 @@ async function makeCtx(options: { withWorker?: boolean; now?: () => number; webD
     artifacts,
     worker: harness?.worker ?? { abort: () => undefined },
     bus,
-    exportBundle: exportBundleDouble,
+    exportBundle: options.realExport ? exportBundle : exportBundleDouble,
     zipFiles: zipFilesDouble,
     exportGrantTtlMs: 60_000,
     hostileMinIntervalMs: 10_000,
@@ -421,6 +422,29 @@ describe("preview and export", () => {
       // Verification records are immutable in the store too.
       const rec = await ctx.store.get<{ id: string; passed: boolean }>(OWNER, STORE_KIND_VERIFICATIONS, task.verificationRecordId!);
       expect(await ctx.store.insertImmutable(OWNER, STORE_KIND_VERIFICATIONS, { ...rec!, passed: false })).toBe(false);
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  test("export download whose sealed bundle bytes no longer match the manifest is refused with 409 and a reason, not 500", async () => {
+    const ctx = await makeCtx({ withWorker: true, realExport: true });
+    try {
+      const op = await login(ctx.app, OPERATOR);
+      const task = await completedTask(ctx, op);
+      const granted = await ctx.app.request(`/api/tasks/${task.id}/export`, json({}, op));
+      expect(granted.status).toBe(201);
+      const grant = (await granted.json()) as { url: string };
+      expect((await ctx.app.request(grant.url, { headers: { cookie: op } })).status).toBe(200);
+      // Tamper the stored bundle's bytes after sealing; the manifest and candidateDigest are untouched.
+      const key = `${ARTIFACT_KIND_BUNDLE}/${task.candidateDigest}`;
+      const bundle = ctx.artifacts.json.get(key) as { files: { contentBase64: string }[] };
+      bundle.files[0]!.contentBase64 = Buffer.from("def compute(x):\n    return 'tampered'\n").toString("base64");
+      const refused = await ctx.app.request(grant.url, { headers: { cookie: op } });
+      expect(refused.status).toBe(409);
+      const body = (await refused.json()) as { error: string };
+      expect(body.error).toContain("no longer matches");
+      expect(body.error).toContain("lib/mod.py");
     } finally {
       await ctx.close();
     }

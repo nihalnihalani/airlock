@@ -551,39 +551,51 @@ function utf8(text: string): Uint8Array {
   return enc.encode(text);
 }
 
+/**
+ * The sealed candidate no longer matches its own identity (manifest, digest, records, bytes).
+ * Thrown by `exportBundle`'s identity checks only, so the API can answer 409 with the reason while
+ * any other failure stays an internal error.
+ */
+export class ExportIntegrityError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ExportIntegrityError";
+  }
+}
+
 export async function exportBundle(input: ExportBundleInput): Promise<{ files: BundleFile[] }> {
   const { profile, baseFiles, bundle, verification, baseline, task, events } = input;
 
   // Re-verify identity before producing anything downloadable (invariant 3).
   const recomputed = await candidateDigestOf(bundle.manifest);
   if (recomputed !== bundle.candidateDigest) {
-    throw new Error("exportBundle: bundle.candidateDigest does not match its manifest");
+    throw new ExportIntegrityError("bundle.candidateDigest does not match its manifest");
   }
   if (verification.candidateDigest !== bundle.candidateDigest) {
-    throw new Error("exportBundle: verification record is for a different candidate");
+    throw new ExportIntegrityError("verification record is for a different candidate");
   }
   if (verification.role !== "candidate" || baseline.role !== "baseline") {
-    throw new Error("exportBundle: records have the wrong roles");
+    throw new ExportIntegrityError("records have the wrong roles");
   }
   if (verification.taskId !== task.id || baseline.taskId !== task.id) {
-    throw new Error("exportBundle: records belong to a different task");
+    throw new ExportIntegrityError("records belong to a different task");
   }
   if (bundle.manifest.profileId !== profile.id) {
-    throw new Error("exportBundle: manifest profile does not match");
+    throw new ExportIntegrityError("manifest profile does not match");
   }
   const allowed = new Set(profile.allowedReplacementPaths);
   const byPath = new Map<string, CollectedFile>();
   for (const f of bundle.files) {
-    if (!allowed.has(f.path)) throw new Error(`exportBundle: file outside allowed paths: ${f.path}`);
-    if (byPath.has(f.path)) throw new Error(`exportBundle: duplicate file ${f.path}`);
+    if (!allowed.has(f.path)) throw new ExportIntegrityError(`file outside allowed paths: ${f.path}`);
+    if (byPath.has(f.path)) throw new ExportIntegrityError(`duplicate file ${f.path}`);
     byPath.set(f.path, f);
   }
   for (const r of bundle.manifest.replacements) {
     const f = byPath.get(r.path);
-    if (!f) throw new Error(`exportBundle: manifest lists ${r.path} but bundle has no bytes for it`);
+    if (!f) throw new ExportIntegrityError(`manifest lists ${r.path} but bundle has no bytes for it`);
     const bytes = decodeBase64Strict(f.contentBase64);
     if (!bytes || bytes.byteLength !== r.byteLength || sha256HexSync(bytes) !== r.sha256 || f.sha256 !== r.sha256) {
-      throw new Error(`exportBundle: bytes for ${r.path} do not match the manifest`);
+      throw new ExportIntegrityError(`bytes for ${r.path} do not match the manifest`);
     }
   }
 
