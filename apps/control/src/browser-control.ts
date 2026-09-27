@@ -100,7 +100,8 @@ export class ControlService {
   private readonly pollMs: number;
 
   constructor(private readonly options: ControlServiceOptions) {
-    this.settleTimeoutMs = options.settleTimeoutMs ?? 10_000;
+    // 30 s covers a first Kata browser sandbox still booting (about 15 s measured on VX1).
+    this.settleTimeoutMs = options.settleTimeoutMs ?? 30_000;
     this.idleMs = options.idleMs ?? 5 * 60_000;
     this.refreshMinIntervalMs = options.refreshMinIntervalMs ?? 2000;
     this.pollMs = options.pollMs ?? 250;

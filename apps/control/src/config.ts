@@ -219,7 +219,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     formsSecret,
     fixturesOrigin,
     controlIdleMs: intEnv(env, "AIRLOCK_CONTROL_IDLE_MS", 5 * 60_000, 10_000, 60 * 60_000),
-    controlSettleMs: intEnv(env, "AIRLOCK_CONTROL_SETTLE_MS", 10_000, 1000, 120_000),
+    controlSettleMs: intEnv(env, "AIRLOCK_CONTROL_SETTLE_MS", 30_000, 1000, 120_000),
     proposalTtlMs: intEnv(env, "AIRLOCK_PROPOSAL_TTL_MS", 15 * 60_000, 60_000, 24 * 60 * 60_000),
     cleanupRetries: intEnv(env, "AIRLOCK_CLEANUP_RETRIES", 6, 0, 100),
     port: intEnv(env, "PORT", 3000, 1, 65535),
