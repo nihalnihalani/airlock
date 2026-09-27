@@ -8,7 +8,8 @@ Fails the build unless:
   sourceRoot, runtimeImage) and the adapter module file is present,
 * /opt/airlock/profile/contract.json is ABSENT (the sandbox never sees expected values),
 * the baseline tree at /opt/airlock/base digests to profile.baselineTreeDigest,
-* /usr/bin/timeout, /usr/bin/sleep and /bin/bash exist.
+* /usr/bin/timeout, /usr/bin/sleep and /bin/bash exist,
+* pytest imports (the pinned advisory test runner; ``python -m pytest`` must work offline).
 
 It also strips ``referenceCommitMaintainerOnly`` from the in-image profile.json: the maintainer
 reference commit must never reach a sandbox (CLAUDE.md §4 "never supplied to the agent").
@@ -67,6 +68,10 @@ def main(argv: list[str]) -> int:
     for tool in ("/usr/bin/timeout", "/usr/bin/sleep", "/bin/bash"):
         if not os.access(tool, os.X_OK):
             problems.append(f"required executable missing: {tool}")
+    try:
+        import pytest  # noqa: F401  (pinned in the Dockerfile; the only package beyond the interpreter)
+    except ImportError as exc:
+        problems.append(f"pytest is not importable: {exc}")
 
     expected_digest = profile.get("baselineTreeDigest")
     try:

@@ -19,9 +19,20 @@ ARG ADAPTER_MODULE
 RUN test -n "$PROFILE" && test -n "$ADAPTER_MODULE" \
  || { echo "build-args PROFILE and ADAPTER_MODULE are required" >&2; exit 1; }
 
-# No pip, no network, no bytecode writes at runtime. PIP_NO_INDEX is belt-and-braces: the sandbox
-# has no network anyway, and the profile schema declares no runtime dependencies (tabulate has
-# none), so nothing is ever installed into this image beyond the base interpreter.
+# pytest is the one addition beyond the base interpreter: the repository's own test suite is the
+# model's natural advisory regression check (`python -m pytest test -q -x`) and the sandbox has no
+# network to install it. Pinned, installed at BUILD time (the only step with network) and before
+# PIP_NO_INDEX is set; the resolved set is recorded in /opt/airlock/pip-freeze.txt and in README.md.
+ARG PYTEST_VERSION=9.1.1
+RUN mkdir -p /opt/airlock \
+ && pip install --no-cache-dir --disable-pip-version-check "pytest==${PYTEST_VERSION}" \
+ && python3 -c "import pytest; assert pytest.__version__ == '${PYTEST_VERSION}', pytest.__version__" \
+ && pip freeze --disable-pip-version-check > /opt/airlock/pip-freeze.txt \
+ && rm -rf /root/.cache
+
+# No network, no installs, no bytecode writes at runtime. PIP_NO_INDEX is belt-and-braces: the
+# sandbox has no network anyway, and the profile schema declares no runtime dependencies (tabulate
+# has none), so nothing else is ever installed into this image.
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_INDEX=1 \

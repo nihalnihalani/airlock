@@ -1,7 +1,8 @@
 """Shared fixtures for runtime/python tests.
 
 Run locally with:  uv run --with pytest pytest runtime/python/tests
-(pytest is deliberately not part of the runtime image.)
+(The runtime image carries a pinned pytest for the model's advisory runs of the repository's own
+tests; these tests here run on the host, outside the image.)
 """
 
 from __future__ import annotations

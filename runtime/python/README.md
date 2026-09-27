@@ -19,9 +19,16 @@ runtime/python/build.sh tabulate-365        # prepare-profile.sh + docker build;
 | `/opt/airlock/base/` | pristine tracked tree of `profile.baselineCommit`, root-owned, 0555 dirs / 0444 files, digest re-verified at build time |
 | `/opt/airlock/profile/` | `profile.json` (with `referenceCommitMaintainerOnly` stripped) and `<adapterModule>.py` only. `contract.json` is never copied; the build fails if it is present |
 | `/opt/airlock/*.py`, `probe.sh` | fixed scripts, 0555 |
-| Dependencies | none installed. The profile schema declares no runtime dependencies (tabulate has none); pytest and anything mentioned in an issue are never installed. `PIP_NO_INDEX=1` on top of `--network none` |
+| Dependencies | `pytest==9.1.1` only (build-time `pip install`, pinned by `ARG PYTEST_VERSION`; resolved set recorded in `/opt/airlock/pip-freeze.txt`: `iniconfig==2.3.0 packaging==26.3 pluggy==1.6.0 Pygments==2.21.0 pytest==9.1.1`, observed 2026-09-26). It is the model's advisory regression runner (`python -m pytest test -q -x`); `image_check.py` fails the build if it does not import. The profile schema declares no runtime dependencies (tabulate has none); nothing mentioned in an issue is ever installed. `PIP_NO_INDEX=1` on top of `--network none` at runtime |
 | Env | `PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 HOME=/workspace` |
-| Tools present | `/usr/bin/timeout`, `/usr/bin/sleep`, `/bin/bash` (checked at build) |
+| Tools present | `/usr/bin/timeout`, `/usr/bin/sleep`, `/bin/bash`, `python -m pytest` (checked at build) |
+
+Observed in the built image (2026-09-26, `--network none --user 1000:1000 --read-only --cap-drop ALL
+--security-opt no-new-privileges --pids-limit 64 --memory 512m`, tmpfs `/workspace`): `python -m pytest
+--version` → `pytest 9.1.1`; after `materialize.py`, `python -m pytest test -q -x` on the pristine
+`tabulate-365` tree → `278 passed, 39 skipped in 0.38s` (the skips are the optional numpy/pandas/wcwidth
+cases; none of those packages is installed). The probe stays all BLOCKED. Inside the sandbox this
+run is advisory only (CLAUDE.md §3.4): its exit code carries no authority.
 
 The rootfs is meant to run read-only; `/workspace` is supplied per attempt by the supervisor as a
 named volume for every role (author, baseline/candidate/preview, hostile), backed by a tmpfs capped at
@@ -101,7 +108,7 @@ reported `IndexError` is observed at baseline.
 
 ## Tests
 
-pytest is not in the image; run locally:
+These run on the host (not inside the image):
 
 ```
 uv run --with pytest pytest runtime/python/tests
