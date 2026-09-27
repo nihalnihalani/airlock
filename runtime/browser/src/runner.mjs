@@ -40,11 +40,11 @@ import { APPROVAL_INPUT_NAME, APPROVAL_NAME, isApprovalInputName, isApprovalName
 import { DownloadLedger } from "./downloads.mjs";
 import { AIRLOCK_DISABLED_FEATURES, chromiumLaunchArgs, featureFlagFailures } from "./launch.mjs";
 import { installMutationGuard, parseMutationOrigins } from "./mutation.mjs";
+import { UploadRefused, placedUpload } from "./uploads.mjs";
 import {
   DOWNLOAD_CHUNK_BYTES,
   MAX_DOWNLOAD_BYTES,
   MAX_REQUEST_BYTES,
-  MAX_UPLOAD_BYTES,
   UPLOAD_DIR,
   MAX_SCREENSHOT_BYTES,
   MUTATING_OPS,
@@ -575,15 +575,15 @@ const handlers = {
 
   async upload({ ref, generation, uploadId, filename, sha256 }) {
     state.checkRef(ref, generation);
-    // Only a regular file the supervisor placed under /tmp/uploads/<uploadId>/, never through a symlink.
-    const dir = path.join(UPLOAD_DIR, uploadId);
-    const file = path.join(dir, filename);
-    let st;
-    try { st = fs.lstatSync(file); } catch { throw new OpError("action_failed", `upload ${uploadId} has not been placed`); }
-    if (!st.isFile() || fs.lstatSync(dir).isSymbolicLink() || fs.realpathSync(file) !== file) throw new OpError("action_failed", "upload is not a regular file under /tmp/uploads");
-    if (st.size > MAX_UPLOAD_BYTES) throw new OpError("action_failed", `upload is ${st.size} bytes; limit ${MAX_UPLOAD_BYTES}`);
-    const actual = createHash("sha256").update(fs.readFileSync(file)).digest("hex");
-    if (actual !== sha256) throw new OpError("action_failed", "upload bytes do not match their sha256");
+    // Only a regular file the supervisor placed under /tmp/uploads/<uploadId>/, never through a symlink (uploads.mjs).
+    let placed;
+    try {
+      placed = placedUpload(uploadId, filename, sha256);
+    } catch (error) {
+      if (error instanceof UploadRefused) throw new OpError("action_failed", error.message);
+      throw error;
+    }
+    const { file } = placed;
     const page = activePage();
     const target = locate(page, ref);
     const isFileInput = await target.evaluate((el) => el instanceof HTMLInputElement && el.type === "file", undefined, { timeout: ACTION_TIMEOUT_MS });
@@ -605,7 +605,7 @@ const handlers = {
       }
     }
     await settle(page);
-    return { generation: state.generation, invalidated: state.generation !== generation, url: cutAtCodeUnits(page.url(), 2048), uploadId, filename, bytes: st.size, sha256 };
+    return { generation: state.generation, invalidated: state.generation !== generation, url: cutAtCodeUnits(page.url(), 2048), uploadId, filename, bytes: placed.size, sha256 };
   },
 
   async "tabs.close"({ tabId }) {
