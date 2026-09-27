@@ -190,6 +190,38 @@ describe("lifecycle", () => {
     core.stop();
   });
 
+  test("one attempt over its deadline is stopped while another attempt's command completes and dispatch stays open (CLAUDE.md §4)", async () => {
+    const REF2: AttemptRef = { taskId: "task2", attemptId: "att2", generation: 1 };
+    const docker = new FakeDocker((container, spec) => {
+      if (spec.cmd.join(" ").includes("slow-work")) return { stdout: "done\n", delayMs: 500 };
+      return defaultHandler()(container, spec);
+    });
+    const { core, journal } = makeCore(docker);
+    // att1 expires in 250 ms; att2 has a long deadline and a 500 ms command in flight across att1's expiry.
+    const base1 = { ref: REF, profileId: PROFILE.id, role: "author" as const, absoluteDeadline: future(250) };
+    const base2 = { ref: REF2, profileId: PROFILE.id, role: "author" as const, absoluteDeadline: future(60_000) };
+    await core.createAttempt({ ...base2, operation: await operationFor("create-b", base2) });
+    await core.createAttempt({ ...base1, operation: await operationFor("create-a", base1) });
+    const toolBody = { ref: REF2, args: { kind: "exec" as const, command: "slow-work" } };
+    const inFlight = core.authorTool(REF2, await operationFor("tool-b", toolBody), toolBody.args);
+    await new Promise((r) => setTimeout(r, 400));
+    // att1 is over its limit: revoked and stopped; att2 is untouched.
+    expect(journal.getAttempt("att1")?.revoked).toBe(true);
+    expect(docker.calls.some((c) => c.startsWith("stopContainer airlocktest-author-task1-att1"))).toBe(true);
+    expect(docker.calls.some((c) => c.startsWith("stopContainer airlocktest-author-task2-att2"))).toBe(false);
+    expect(journal.getAttempt("att2")?.revoked).toBe(false);
+    expect(journal.getAttempt("att2")?.status).toBe("running");
+    const outcome = await inFlight;
+    expect(outcome.body).toMatchObject({ kind: "exec", result: { status: "succeeded", exitCode: 0, stdout: "done\n" } });
+    // att2 still accepts commands; att1 does not.
+    const later = await core.authorTool(REF2, await operationFor("tool-b2", { ref: REF2, args: { kind: "exec" as const, command: "echo hi" } }), { kind: "exec", command: "echo hi" });
+    expect(later.body).toMatchObject({ kind: "exec", result: { status: "succeeded" } });
+    const fenced = await core.authorTool(REF, await operationFor("tool-a", { ref: REF, args: { kind: "exec" as const, command: "echo hi" } }), { kind: "exec", command: "echo hi" }).catch((e) => e as SupervisorError);
+    expect((fenced as SupervisorError).code).toBe("revoked");
+    expect(journal.countRunning()).toBe(1);
+    core.stop();
+  });
+
   test("the absolute deadline revokes and stops regardless of the caller", async () => {
     const docker = new FakeDocker(defaultHandler());
     const { core, journal } = makeCore(docker);

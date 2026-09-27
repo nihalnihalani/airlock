@@ -5,9 +5,10 @@
  */
 import { describe, expect, test } from "bun:test";
 import { join, resolve } from "node:path";
-import type { AttemptRef, AttemptState, FreezeResult } from "@airlock/contracts";
+import type { AttemptRef, AttemptState, BlastRadiusCard, FreezeResult } from "@airlock/contracts";
 import { resolveDockerSocket } from "../src/config";
 import { checkHost } from "../src/host";
+import { createSentinel, hostileRun } from "../src/hostile";
 import { Supervisor } from "../src/lifecycle";
 import { Journal } from "../src/operations";
 import { loadProfiles } from "../src/profiles";
@@ -93,5 +94,68 @@ describe("real docker (runc, dev-unsafe)", () => {
       }
     },
     180_000,
+  );
+
+  test.skipIf(!available)(
+    "one attempt over its limits (fork bomb, then deadline) is terminated while another attempt's command completes and the supervisor stays healthy",
+    async () => {
+      const dir = tempDir();
+      const config = { ...testConfig(dir), profilesDir: join(REPO, "profiles"), namespace: `airlockcc${Date.now().toString(36)}` };
+      const profiles = loadProfiles(config.profilesDir);
+      const host = await checkHost(api, config);
+      const journal = new Journal(config.journalPath);
+      const core = new Supervisor({ api, journal, config, profiles, host, log: (m) => console.info(`[integration] ${m}`) });
+      await core.start();
+      const sentinel = await createSentinel(config.dataDir);
+      const suffix = Date.now().toString(36);
+      const refA: AttemptRef = { taskId: "cca", attemptId: `a${suffix}`, generation: 1 };
+      const refB: AttemptRef = { taskId: "ccb", attemptId: `b${suffix}`, generation: 1 };
+      try {
+        const baseA = { ref: refA, profileId: "tabulate-365", role: "author" as const, absoluteDeadline: future(120_000) };
+        await core.createAttempt({ ...baseA, operation: await operationFor("cc-create-a", baseA) });
+        // A's long command is in flight while a hostile fork bomb runs in its own sandbox and B expires.
+        const inFlight = core.authorTool(refA, await operationFor("cc-exec-a", {}), { kind: "exec", command: "sleep 12; echo done" });
+        await new Promise((r) => setTimeout(r, 500));
+
+        const hostileBody = { operation: { operationId: "cc-hostile", requestDigest: "" }, profileId: "tabulate-365", command: ":(){ :|:& };:; sleep 3; echo alive" };
+        const hostile = await hostileRun(core, { ...hostileBody, operation: await operationFor("cc-hostile", { profileId: hostileBody.profileId, command: hostileBody.command }) }, sentinel);
+        const card = hostile.body as BlastRadiusCard;
+        expect(card.survived.supervisorHealthy).toBe(true);
+        expect(card.survived.hostSentinelUnchanged).toBe(true);
+        expect(card.survived.otherAttemptsRunning).toBe(1);
+        expect(card.teardown.clean).toBe(true);
+
+        // B: created with a short deadline; its command is cut by the deadline timer, not by A's or the hostile run.
+        const baseB = { ref: refB, profileId: "tabulate-365", role: "author" as const, absoluteDeadline: future(6_000) };
+        const createdB = await core.createAttempt({ ...baseB, operation: await operationFor("cc-create-b", baseB) });
+        expect((createdB.body as AttemptState).status).toBe("running");
+        const execB = await core.authorTool(refB, await operationFor("cc-exec-b", {}), { kind: "exec", command: "sleep 30; echo never" });
+        const resultB = (execB.body as { result: { status: string } }).result;
+        expect(resultB.status).not.toBe("succeeded");
+        expect(journal.getAttempt(refB.attemptId)?.revoked).toBe(true);
+
+        // A's command finished on its own, A is still running and dispatchable, the supervisor answers.
+        const resultA = (await inFlight).body as { result: { status: string; exitCode: number | null; stdout: string } };
+        expect(resultA.result.status).toBe("succeeded");
+        expect(resultA.result.exitCode).toBe(0);
+        expect(resultA.result.stdout).toBe("done\n");
+        expect(journal.getAttempt(refA.attemptId)?.status).toBe("running");
+        expect(journal.getAttempt(refA.attemptId)?.revoked).toBe(false);
+        expect(await api.ping()).toBe(true);
+        const again = await core.authorTool(refA, await operationFor("cc-exec-a2", {}), { kind: "exec", command: "echo still-here" });
+        expect((again.body as { result: { stdout: string } }).result.stdout).toBe("still-here\n");
+
+        const destroyedA = await core.destroy(refA, await operationFor("cc-destroy-a", { ref: refA }));
+        expect((destroyedA.body as DestroyResult).teardown.clean).toBe(true);
+        const destroyedB = await core.destroy(refB, await operationFor("cc-destroy-b", { ref: refB }));
+        expect((destroyedB.body as DestroyResult).teardown.clean).toBe(true);
+      } finally {
+        await core.destroy(refA, await operationFor("cc-destroy-a-final", { ref: refA })).catch(() => undefined);
+        await core.destroy(refB, await operationFor("cc-destroy-b-final", { ref: refB })).catch(() => undefined);
+        core.stop();
+        journal.close();
+      }
+    },
+    240_000,
   );
 });

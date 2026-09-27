@@ -16,7 +16,8 @@
  *   3. export zip carries patch.diff that applies cleanly to profiles/tabulate-365/base
  *   4. hostile `rm -rf / --no-preserve-root` dies inside its sandbox; the host survives; teardown clean
  *   5. forged-log scripted "repair" (unchanged code, forged success log) → CHECKS_FAILED
- *   6. cancel mid-command → status cancelled; no owned attempt or container remains
+ *   6. fork bomb in a hostile sandbox while task 3's command runs (task 3 unaffected, supervisor healthy);
+ *      then cancel mid-command → status cancelled; no owned attempt or container remains
  *
  * Every model run here is SCRIPTED (a labelled diagnostic), never a live repair. The stack runs on
  * plain runc with AIRLOCK_DEV_UNSAFE=1: local development only.
@@ -241,6 +242,7 @@ async function main() {
   // ---- 4. hostile ---------------------------------------------------------------------------------
   step("hostile panel: rm -rf / --no-preserve-root");
   const card = await api(BlastRadiusCard, "/api/hostile", { method: "POST", body: { command: "rm -rf / --no-preserve-root" } });
+  const lastHostileAt = Date.now();
   console.log(`    died:     container=${card.died.container} runtime=${card.died.runtime} reason=${card.died.reason}`);
   console.log(`    exec:     ${card.exec.status} exit=${card.exec.exitCode} ${card.exec.durationMs}ms stderr(tail)=${JSON.stringify(card.exec.stderr.slice(-160))}`);
   console.log(`    survived: supervisorHealthy=${card.survived.supervisorHealthy} hostSentinelUnchanged=${card.survived.hostSentinelUnchanged} otherAttemptsRunning=${card.survived.otherAttemptsRunning} hostUptimeSeconds=${card.survived.hostUptimeSeconds}`);
@@ -261,16 +263,35 @@ async function main() {
   const t2Preview = await fetch(`${CONTROL}/api/tasks/${t2.task.id}/preview`, { method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify({ candidateDigest: t2.task.candidateDigest, input: reported.input }) });
   ok(t2Preview.status === 409, `preview on a failed candidate is refused (${t2Preview.status})`);
 
-  // ---- 6. cancel mid-flight -----------------------------------------------------------------------
-  step("task 3: cancel while a sandbox command is running");
+  // ---- 6. another task over its limits while a task runs; then cancel mid-flight -------------------
+  step("task 3: fork bomb in a hostile sandbox while task 3's command runs; then cancel during its next command");
   let cancelled: Task | null = null;
+  let bomb: BlastRadiusCard | null = null;
+  let runsSeen = 0;
   const t3 = await runTask("slow", "slow, cancelled", async (e) => {
-    if (!cancelled && e.kind === "model" && (e.data as { toolCalls?: { name: string }[] })?.toolCalls?.some((c) => c.name === "run")) {
+    if (e.kind !== "model" || !(e.data as { toolCalls?: { name: string }[] })?.toolCalls?.some((c) => c.name === "run")) return;
+    runsSeen++;
+    if (runsSeen === 1) {
       await sleep(1500); // the run has been dispatched into the sandbox by now
+      // /api/hostile is limited to one run per 10 s per session; task 3's command runs for 25 s.
+      await sleep(Math.max(0, 10_500 - (Date.now() - lastHostileAt)));
+      // CLAUDE.md §4: one task over its limits is terminated while another task and the control plane stay healthy.
+      bomb = await api(BlastRadiusCard, "/api/hostile", { method: "POST", body: { command: ":(){ :|:& };:; sleep 3; echo alive" } });
+      console.log(`    fork bomb: exec ${bomb.exec.status} exit=${bomb.exec.exitCode}; survived: supervisorHealthy=${bomb.survived.supervisorHealthy} otherAttemptsRunning=${bomb.survived.otherAttemptsRunning}; teardown clean=${bomb.teardown.clean}`);
+    } else if (runsSeen === 2 && !cancelled) {
+      await sleep(1500);
       cancelled = await api(Task, `/api/tasks/${e.taskId}/cancel`, { method: "POST", body: {} });
       console.log(`    cancel → status ${cancelled.status} (phase ${cancelled.phase})`);
     }
   });
+  ok(bomb !== null, "hostile fork bomb ran while task 3's command was executing");
+  const bombCard = bomb as unknown as BlastRadiusCard;
+  ok(bombCard.survived.supervisorHealthy && bombCard.survived.hostSentinelUnchanged, "supervisor and host sentinel survived the fork bomb");
+  ok(bombCard.survived.otherAttemptsRunning === 1, `task 3's attempt was still running during the fork bomb (otherAttemptsRunning=${bombCard.survived.otherAttemptsRunning})`);
+  ok(bombCard.teardown.clean, "fork-bomb sandbox torn down clean");
+  const firstExec = t3.events.find((e) => e.kind === "exec" && (e.data as { tool?: string })?.tool === "run");
+  const firstExecData = firstExec?.data as { status?: string; exitCode?: number | null; result?: { stdout?: string } } | undefined;
+  ok(firstExecData?.status === "succeeded" && firstExecData.exitCode === 0 && /done/.test(firstExecData.result?.stdout ?? ""), `task 3's first command completed unaffected (${firstExecData?.status} exit=${firstExecData?.exitCode})`);
   ok(cancelled !== null && (cancelled as Task).status === "cancelling", "cancel was accepted while running");
   ok(t3.task.status === "cancelled", `final status cancelled (${t3.task.status})`);
   ok(t3.task.outcome === undefined, "no outcome invented for a cancelled task");
