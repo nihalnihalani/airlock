@@ -95,7 +95,7 @@ Stack: Bun + TypeScript, Hono, PGlite, dockerode, React/Vite; Python 3.12 pinned
 ## 5. Quick reference
 
 - Hero issue: [python-tabulate #365](https://github.com/astanin/python-tabulate/issues/365), empty table plus `maxheadercolwidths` → `IndexError`. Demo wrapper: a trusted Report Export form calling the real library. Labelled historical replay, not a benchmark claim.
-- Phases: `prepare → reproduce → baseline → repair → freeze → verify → ready`. Terminal outcomes as in §1.
+- Phases: `prepare → baseline → reproduce → repair → freeze → verify → ready` (the author sandbox is created and probed in `baseline`; a second repair attempt re-enters `reproduce`). Terminal outcomes as in §1.
 - Proposed caps (measure before advertising): 1 CPU, 512 MiB, 64 PIDs, 30 s per author command, 64 KiB captured output, 5 min per author attempt, 2 repair attempts, 1 MiB per accepted source file, 4 MiB total candidate changes.
 - Vultr: control plane on any plan; sandbox host on a VX1 plan (`/dev/kvm`); models served from `atl`. Inference API: no JSON mode, no embeddings; append `-normalize` for standard tool-call IDs; 401 and 422 are both auth failures.
 - Research evidence on the reproducible cases: `research/22-feasibility-lab.md`. Rules: `research/01-rules-and-compliance.md`.

@@ -100,8 +100,8 @@ describe("supervisor client", () => {
   });
 
   test("health needs no token; invalid attempt ids are refused locally", async () => {
-    const { c, seen } = client(() => ok({ status: "ok", docker: true, host: fakeHost() }));
-    expect((await c.health()).docker).toBe(true);
+    const { c, seen } = client(() => ok({ ok: true }));
+    expect((await c.health()).ok).toBe(true);
     expect(seen[0]!.auth).toBeNull();
     await expect(c.getAttempt("../x")).rejects.toMatchObject({ status: 400 });
     expect(seen).toHaveLength(1);
@@ -115,5 +115,43 @@ describe("supervisor client", () => {
     });
     await expect(c.revoke({ ref }, { signal: controller.signal })).rejects.toMatchObject({ message: "Call aborted" });
     expect(seen).toHaveLength(1);
+  });
+  test("renew posts {ref, authorizedUntil, operation} to /attempts/:id/renew; 404/409 are typed (authority lost)", async () => {
+    const until = new Date(Date.now() + 40_000).toISOString();
+    const { c, seen } = client(() => ok({ ...attemptState, authorizedUntil: until }));
+    const state = await c.renew({ ref, authorizedUntil: until });
+    expect(state.authorizedUntil).toBe(until);
+    expect(seen[0]!.url).toBe("http://sup.test:4300/attempts/att-1/renew");
+    const body = seen[0]!.body as { ref: unknown; authorizedUntil: string; operation: { operationId: string; requestDigest: string } };
+    expect(body.ref).toEqual(ref);
+    expect(body.authorizedUntil).toBe(until);
+    expect(body.operation.requestDigest).toBe(await requestDigestOf(body as Record<string, unknown>));
+    const fenced = client(() => new Response(JSON.stringify({ error: "revoked" }), { status: 409 }));
+    await expect(fenced.c.renew({ ref, authorizedUntil: until })).rejects.toBeInstanceOf(SupervisorFenceError);
+    const gone = client(() => new Response(JSON.stringify({ error: "unknown attempt" }), { status: 404 }));
+    await expect(gone.c.renew({ ref, authorizedUntil: until })).rejects.toBeInstanceOf(SupervisorNotFoundError);
+  });
+
+  test("createAttempt carries authorizedUntil only when given", async () => {
+    const { c, seen } = client(() => ok(attemptState));
+    const until = new Date(Date.now() + 40_000).toISOString();
+    await c.createAttempt({ ref, profileId: "fx-1", role: "author", absoluteDeadline: new Date(Date.now() + 60_000).toISOString(), authorizedUntil: until });
+    await c.createAttempt({ ref, profileId: "fx-1", role: "author", absoluteDeadline: new Date(Date.now() + 60_000).toISOString() });
+    expect((seen[0]!.body as { authorizedUntil?: string }).authorizedUntil).toBe(until);
+    expect("authorizedUntil" in (seen[1]!.body as object)).toBe(false);
+  });
+
+  test("beforeSend receives the exact Operation before anything is sent; if it throws, nothing is sent; retries replay the same id", async () => {
+    const recorded: { operationId: string; requestDigest: string }[] = [];
+    let sentBeforeHook = false;
+    const flaky = client((_seen, n) => (n === 1 ? new Response("{}", { status: 503 }) : ok(attemptState)));
+    await flaky.c.revoke({ ref }, { beforeSend: (op) => { sentBeforeHook = flaky.seen.length > 0; recorded.push(op); } });
+    expect(sentBeforeHook).toBe(false);
+    expect(recorded).toHaveLength(1);
+    expect(flaky.seen).toHaveLength(2);
+    for (const call of flaky.seen) expect((call.body as { operation: unknown }).operation).toEqual(recorded[0]);
+    const refused = client(() => ok(attemptState));
+    await expect(refused.c.destroy({ ref }, { beforeSend: () => { throw new Error("journal unavailable"); } })).rejects.toThrow("journal unavailable");
+    expect(refused.seen).toHaveLength(0);
   });
 });

@@ -46,11 +46,15 @@ export const relPath = z
 // Phases, statuses, outcomes
 // ---------------------------------------------------------------------------------------------
 
-/** Controller phases (37 §"The end-to-end run"). Separate from worker status. */
+/**
+ * Controller phases, in the order a run actually passes them (the author sandbox is created and
+ * probed during `baseline`, so the baseline record carries the probe; `reproduce` is the model's own
+ * reproduction; a second repair attempt re-enters `reproduce`). Separate from worker status.
+ */
 export const Phase = z.enum([
   "prepare",
-  "reproduce",
   "baseline",
+  "reproduce",
   "repair",
   "freeze",
   "verify",
@@ -652,6 +656,8 @@ export const Task = z.object({
    * reproduction and baseline only, and ends without a repair attempt. Never set on diagnostics.
    */
   repairDisabledReason: z.string().max(1024).optional(),
+  /** Created by the live-repair gate (operator only); see CreateTaskRequest.liveGate. */
+  liveGate: z.boolean().optional(),
   createdAt: isoDate,
   updatedAt: isoDate,
 });
@@ -732,6 +738,11 @@ export const CreateTaskRequest = z.object({
    * control plane runs with `AIRLOCK_MODEL_DRIVER=scripted:<directory>` and the script exists.
    */
   scriptedDriver: plainId.optional(),
+  /**
+   * Operator only: this task is an attempt of the live-repair gate, the run that produces the
+   * evidence repair availability requires, so it is not repair-disabled for lacking that evidence.
+   */
+  liveGate: z.boolean().optional(),
 });
 
 export const PreviewRequest = z.object({

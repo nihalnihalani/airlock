@@ -473,3 +473,95 @@ describe("zipFiles", () => {
     expect(out).toContain("No errors detected");
   });
 });
+
+describe("validateEnvelope: collector rejections and required files (M9)", () => {
+  const goodFile = collected("tabulate/__init__.py", "print('candidate')\n");
+  const basePaths = ["tabulate/__init__.py", "README.md"];
+  for (const reason of ["symlink", "hard link (st_nlink=2)", "not a regular file", "exceeds maxFileBytes (1048576)", "invalid path in allowlist", "duplicate", "unreadable: PermissionError"]) {
+    test(`a rejection of the allowed file refuses the seal: ${reason}`, () => {
+      const r = validateEnvelope(envelope([], [{ path: "tabulate/__init__.py", reason }]), profile, { basePaths });
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.reasons.join("\n")).toContain(`tabulate/__init__.py: rejected by the collector (${reason}`);
+        expect(r.inconclusive).toBeUndefined();
+      }
+    });
+  }
+
+  test("a rejection naming a case/normalization variant of the allowed path is a conflict and refuses the seal", () => {
+    const r = validateEnvelope(envelope([goodFile], [{ path: "tabulate/__INIT__.py", reason: "conflicting" }]), profile, { basePaths });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reasons.join()).toMatch(/rejected by the collector \(conflicting; reported as/);
+  });
+
+  test("a missing allowed file that exists in the base tree is required: refused", () => {
+    const r = validateEnvelope(envelope([], [{ path: "tabulate/__init__.py", reason: "missing" }]), profile, { basePaths });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reasons.join()).toContain("required file is missing from the candidate (present in the base tree)");
+  });
+
+  test("without the base tree a missing allowed file fails closed", () => {
+    const r = validateEnvelope(envelope([], [{ path: "tabulate/__init__.py", reason: "missing" }]), profile);
+    expect(r.ok).toBe(false);
+  });
+
+  test("a missing allowed path that is NOT in the base tree is an optional slot: accepted", () => {
+    const wide = { ...profile, allowedReplacementPaths: ["tabulate/__init__.py", "tabulate/new_helper.py"] };
+    const r = validateEnvelope(envelope([goodFile], [{ path: "tabulate/new_helper.py", reason: "missing" }]), wide, { basePaths });
+    expect(r.ok).toBe(true);
+  });
+
+  test("a base-tree allowed file the collector neither returned nor rejected refuses the seal", () => {
+    const r = validateEnvelope(envelope([]), profile, { basePaths });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reasons.join()).toContain("neither collected nor rejected");
+  });
+
+  test("rejections outside the allowlist (scratch files) are ignored and returned for the event", () => {
+    const r = validateEnvelope(envelope([goodFile], [{ path: "scratch/repro.py", reason: "symlink" }, { path: "../../etc/passwd", reason: "invalid path" }]), profile, { basePaths });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.ignored).toEqual([{ path: "scratch/repro.py", reason: "symlink" }, { path: "../../etc/passwd", reason: "invalid path" }]);
+  });
+
+  test("a malformed envelope is a collector fault (inconclusive), not the candidate's failure", () => {
+    const r = validateEnvelope({ ...envelope([goodFile]), rejected: [{ path: 3, reason: null }] as unknown as FileEnvelope["rejected"] }, profile, { basePaths });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.inconclusive).toBe(true);
+    const v = validateEnvelope({ ...envelope([goodFile]), schemaVersion: 2 as unknown as 1 }, profile, { basePaths });
+    expect(!v.ok && v.inconclusive).toBe(true);
+  });
+});
+
+describe("digest ordering is locale-independent (D13)", () => {
+  const paths = ["a.py", "B.py", "_.py", "ä.py", "z.py", "\u{1F600}.py", "�.py"];
+  const codePointOrder = [...paths].sort((x, y) => {
+    const a = [...x].map((c) => c.codePointAt(0)!);
+    const b = [...y].map((c) => c.codePointAt(0)!);
+    for (let i = 0; i < Math.min(a.length, b.length); i++) if (a[i] !== b[i]) return a[i]! - b[i]!;
+    return a.length - b.length;
+  });
+
+  test("buildManifest orders by code point, never by the process collation", () => {
+    const wide = { ...profile, allowedReplacementPaths: paths };
+    const m = buildManifest(wide, paths.map((p) => collected(p, p)).reverse());
+    expect(m.replacements.map((r) => r.path)).toEqual(codePointOrder);
+    // localeCompare / a collator would order the same inputs differently, and differently per locale.
+    const en = [...paths].sort(new Intl.Collator("en").compare);
+    const sv = [...paths].sort(new Intl.Collator("sv").compare);
+    expect(en).not.toEqual(codePointOrder);
+    expect(sv).not.toEqual(en);
+    expect([..."aB_"].sort((x, y) => x.localeCompare(y))).not.toEqual(["B", "_", "a"]);
+    expect(m.replacements.slice(0, 3).map((r) => r.path)).toEqual(["B.py", "_.py", "a.py"]);
+  });
+
+  test("the digest is identical whatever the input order, and validateEnvelope sorts the same way", async () => {
+    const wide = { ...profile, allowedReplacementPaths: paths, caps: { ...profile.caps, maxFiles: 16 } };
+    const files = paths.map((p) => collected(p, p));
+    const d1 = await candidateDigestOf(buildManifest(wide, files));
+    const d2 = await candidateDigestOf(buildManifest(wide, [...files].reverse()));
+    expect(d1).toBe(d2);
+    const v = validateEnvelope(envelope([...files].reverse()), wide);
+    expect(v.ok).toBe(true);
+    if (v.ok) expect(v.files.map((f) => f.path)).toEqual(codePointOrder);
+  });
+});

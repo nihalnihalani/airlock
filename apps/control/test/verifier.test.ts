@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { CaseContract, VerificationRecord, type HostCheck, type InvokeResult, type Observation } from "@airlock/contracts";
-import { COMPARATOR_VERSION, compare, type CompareInput } from "../src/verifier/index.ts";
+import { COMPARATOR_VERSION, aggregateInvocations, compare, type CaseInvocation, type CompareInput } from "../src/verifier/index.ts";
 
 const contractJson = await Bun.file(new URL("../../../profiles/tabulate-365/contract.json", import.meta.url)).json();
 const contract = CaseContract.parse(contractJson);
@@ -95,7 +95,7 @@ describe("compare: happy paths", () => {
     expect(r.completedCases).toBe(6);
     expect(r.cases.every((c) => c.passed)).toBe(true);
     expect(r.comparatorVersion).toBe(COMPARATOR_VERSION);
-    expect(COMPARATOR_VERSION).toBe("1.0.0");
+    expect(COMPARATOR_VERSION).toBe("1.1.0");
     expect(r.runtimeImageDigest).toBe("sha256:img");
     expect(r.runtimeProfile.host).toEqual(host);
     expect(r.runtimeProfile.teardown.clean).toBe(true);
@@ -417,4 +417,105 @@ describe("diagnostic candidate fixture (measured with uv)", () => {
     },
     180_000,
   );
+});
+
+describe("compare: outcome in words (M11, D9)", () => {
+  const withObs = (role: "baseline" | "candidate", edit: (o: Observation) => Observation) => matching(role).map(edit);
+  test("baseline: REPRODUCED when every baseline expectation holds", () => {
+    expect(run("baseline", matching("baseline")).outcome).toBe("REPRODUCED");
+  });
+  test("baseline: NOT_REPRODUCED only when the measured reported case did not fail as expected", () => {
+    const obs = withObs("baseline", (o) => (o.caseId === REPORTED ? { caseId: REPORTED, status: "ok", valueCanonical: '""' } : o));
+    const r = run("baseline", obs);
+    expect(r.passed).toBe(false);
+    expect(r.outcome).toBe("NOT_REPRODUCED");
+  });
+  test("baseline: a reproduced reported case with regression drift is INCONCLUSIVE, not NOT_REPRODUCED", () => {
+    const obs = withObs("baseline", (o) => (o.caseId === "reg-small-table-plain" ? { ...o, valueCanonical: '"drifted"' } : o));
+    const r = run("baseline", obs);
+    expect(r.cases.find((c) => c.caseId === REPORTED)?.passed).toBe(true);
+    expect(r.outcome).toBe("INCONCLUSIVE");
+  });
+  test("baseline: an incomplete run is INCONCLUSIVE", () => {
+    expect(run("baseline", matching("baseline"), {}, { status: "timed_out", timedOut: true, exitCode: null }).outcome).toBe("INCONCLUSIVE");
+  });
+  test("candidate: PASSED_CHECKS, CHECKS_FAILED on a measured failure, INCONCLUSIVE on an infrastructure fault", () => {
+    expect(run("candidate", matching("candidate")).outcome).toBe("PASSED_CHECKS");
+    const broken = withObs("candidate", (o) => (o.caseId === REPORTED ? { caseId: REPORTED, status: "error", exceptionType: "IndexError", message: "list index out of range" } : o));
+    expect(run("candidate", broken).outcome).toBe("CHECKS_FAILED");
+    // A candidate that hangs the adapter is its own failure, not infrastructure.
+    expect(run("candidate", [], {}, { status: "timed_out", timedOut: true, exitCode: null }).outcome).toBe("CHECKS_FAILED");
+    const badInspection = invoke(matching("candidate")).inspection;
+    expect(run("candidate", [], { inspection: { ...badInspection, allPassed: false } }).outcome).toBe("INCONCLUSIVE");
+  });
+});
+
+describe("compare: one fresh invocation per case (D3), probe and host listing (M6, M7)", () => {
+  const probe = { probedAt: NOW, metadataEndpoint: "BLOCKED", dns: "BLOCKED", outboundTcp: "BLOCKED", dockerSocket: "BLOCKED", hostMounts: "BLOCKED", allBlocked: true } as const;
+  const hostListing = { listedAt: NOW, scope: "host" as const, containers: [], volumes: [] };
+  function perCase(role: "baseline" | "candidate", edit: (caseId: string, inv: InvokeResult) => InvokeResult | null = (_id, inv) => inv): CaseInvocation[] {
+    return matching(role).map((o, i) => {
+      const inv = edit(o.caseId, invoke([o], { operationId: `op-${i}`, container: `c-${i}`, teardown: { destroyedAt: NOW, containersRemaining: [], volumesRemaining: [], clean: true, host: hostListing } }));
+      return inv ? { caseId: o.caseId, invoke: inv } : { caseId: o.caseId, invoke: null, error: "supervisor unavailable" };
+    });
+  }
+  function runPerCase(role: "baseline" | "candidate", invocations: CaseInvocation[]) {
+    const aggregate = aggregateInvocations(invocations);
+    if (!aggregate) throw new Error("no aggregate");
+    const record = compare({ id: "ver-2", taskId: "task-1", role, contract, invoke: aggregate, invocations, probe, host, adapterDigest: HEX, contractDigest: HEX, candidateDigest: HEX, now: NOW });
+    VerificationRecord.parse(record);
+    return { record, aggregate };
+  }
+
+  test("every case on its own invocation passes; the record carries the author probe and the host-wide listing", () => {
+    const { record, aggregate } = runPerCase("candidate", perCase("candidate"));
+    expect(record.passed).toBe(true);
+    expect(record.outcome).toBe("PASSED_CHECKS");
+    expect(record.completedCases).toBe(6);
+    expect(record.runtimeProfile.probe).toEqual(probe);
+    expect(record.runtimeProfile.teardown.host).toEqual(hostListing);
+    expect(record.runtimeProfile.teardown.clean).toBe(true);
+    expect(aggregate.observations).toHaveLength(6);
+  });
+
+  test("a failed invocation makes only its own case incomplete, and the record cannot pass", () => {
+    const { record, aggregate } = runPerCase("candidate", perCase("candidate", (id, inv) => (id === "reg-small-table-plain" ? null : inv)));
+    expect(record.passed).toBe(false);
+    expect(record.completedCases).toBe(5);
+    const failed = record.cases.filter((c) => !c.passed);
+    expect(failed.map((c) => c.caseId)).toEqual(["reg-small-table-plain"]);
+    expect(failed[0]?.reason).toContain("invocation failed");
+    expect(record.outcome).toBe("INCONCLUSIVE");
+    expect(aggregate.exec.status).toBe("failed");
+    expect(aggregate.teardown.clean).toBe(false);
+  });
+
+  test("a timed-out invocation fails only its own case; the others still count", () => {
+    const { record } = runPerCase("candidate", perCase("candidate", (id, inv) => (id === REPORTED ? { ...inv, exec: { ...inv.exec, status: "timed_out", timedOut: true, exitCode: null } } : inv)));
+    expect(record.passed).toBe(false);
+    expect(record.cases.filter((c) => !c.passed).map((c) => c.caseId)).toEqual([REPORTED]);
+    expect(record.outcome).toBe("CHECKS_FAILED");
+  });
+
+  test("an observation for another case inside a case's invocation cannot pass that case", () => {
+    const { record } = runPerCase("candidate", perCase("candidate", (id, inv) => (id === REPORTED ? { ...inv, observations: [...inv.observations, { caseId: "reg-small-table-plain", status: "ok", valueCanonical: "1" }] } : inv)));
+    expect(record.cases.find((c) => c.caseId === REPORTED)?.passed).toBe(false);
+    expect(record.passed).toBe(false);
+  });
+
+  test("invocations on different runtime images invalidate the record", () => {
+    const { record } = runPerCase("candidate", perCase("candidate", (id, inv) => (id === REPORTED ? { ...inv, inspection: { ...inv.inspection, imageDigest: "sha256:other" } } : inv)));
+    expect(record.passed).toBe(false);
+    expect(record.outcome).toBe("INCONCLUSIVE");
+  });
+
+  test("baseline per case: the reported case reproduced but a regression drifted → INCONCLUSIVE", () => {
+    const { record } = runPerCase("baseline", perCase("baseline", (id, inv) => (id === "reg-maxcolwidths-wrap" ? { ...inv, observations: [{ caseId: id, status: "ok", valueCanonical: '"drift"' }] } : inv)));
+    expect(record.outcome).toBe("INCONCLUSIVE");
+    expect(record.cases.find((c) => c.caseId === REPORTED)?.passed).toBe(true);
+  });
+
+  test("no invocation returned → no aggregate (no record can be made)", () => {
+    expect(aggregateInvocations([{ caseId: REPORTED, invoke: null, error: "down" }])).toBeNull();
+  });
 });

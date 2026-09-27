@@ -59,20 +59,31 @@ export class SupervisorUnavailableError extends SupervisorError {
   }
 }
 
-export const HealthResponse = z.object({
-  status: z.enum(["ok", "degraded"]),
-  docker: z.boolean(),
-  host: HostCheck,
-});
+/** 429: the execution host has no admission capacity for another sandbox right now. Retryable. */
+export class SupervisorCapacityError extends SupervisorError {
+  constructor(message: string, operationId?: string) {
+    super(message, 429, operationId);
+    this.name = "SupervisorCapacityError";
+  }
+}
+
+/** Unauthenticated liveness only; the host check is on the authenticated `/host`. */
+export const HealthResponse = z.object({ ok: z.boolean() });
 export type HealthResponse = z.infer<typeof HealthResponse>;
 
 export interface SupervisorClient {
   health(signal?: AbortSignal): Promise<HealthResponse>;
   host(signal?: AbortSignal): Promise<HostCheck>;
   createAttempt(
-    input: { ref: AttemptRef; profileId: string; role: SandboxRole; absoluteDeadline: string },
+    input: { ref: AttemptRef; profileId: string; role: SandboxRole; absoluteDeadline: string; authorizedUntil?: string },
     opts?: CallOptions,
   ): Promise<AttemptState>;
+  /**
+   * Extend an attempt's execution authorization (contracts `RenewRequest`). The supervisor never
+   * extends past the absolute deadline and never revives a revoked/destroyed attempt: 404/409 mean
+   * the authority is gone.
+   */
+  renew(input: { ref: AttemptRef; authorizedUntil: string }, opts?: CallOptions): Promise<AttemptState>;
   authorTool(input: { ref: AttemptRef; args: AuthorToolArgs }, opts?: CallOptions): Promise<AuthorToolResult>;
   freeze(input: { ref: AttemptRef }, opts?: CallOptions): Promise<FreezeResult>;
   revoke(input: { ref: AttemptRef }, opts?: CallOptions): Promise<AttemptState>;
@@ -99,6 +110,11 @@ export interface CallOptions {
   operationId?: string;
   /** Per-request timeout (ms). Defaults depend on the call. */
   timeoutMs?: number;
+  /**
+   * Called once with the call's Operation after it is built and BEFORE the first byte is sent, so
+   * the caller can persist the dispatch intent (operation journal). If it throws, nothing is sent.
+   */
+  beforeSend?: (operation: Operation) => Promise<void> | void;
 }
 
 export type DestroyResult = z.infer<typeof DestroyResultSchema>;
@@ -119,6 +135,7 @@ const DEFAULT_TIMEOUTS = {
   authorTool: 90_000,
   freeze: 120_000,
   revoke: 60_000,
+  renew: 15_000,
   destroy: 60_000,
   invoke: 180_000,
   hostile: 120_000,
@@ -161,8 +178,13 @@ export class HttpSupervisorClient implements SupervisorClient {
   listAttempts(signal?: AbortSignal) {
     return this.get("/attempts", z.array(AttemptState), signal, true);
   }
-  createAttempt(input: { ref: AttemptRef; profileId: string; role: SandboxRole; absoluteDeadline: string }, opts?: CallOptions) {
-    return this.mutate("/attempts", input, AttemptState, DEFAULT_TIMEOUTS.createAttempt, opts);
+  createAttempt(input: { ref: AttemptRef; profileId: string; role: SandboxRole; absoluteDeadline: string; authorizedUntil?: string }, opts?: CallOptions) {
+    const body: Record<string, unknown> = { ...input };
+    if (input.authorizedUntil === undefined) delete body.authorizedUntil;
+    return this.mutate("/attempts", body, AttemptState, DEFAULT_TIMEOUTS.createAttempt, opts);
+  }
+  renew(input: { ref: AttemptRef; authorizedUntil: string }, opts?: CallOptions) {
+    return this.mutate(`/attempts/${encodeURIComponent(input.ref.attemptId)}/renew`, input, AttemptState, DEFAULT_TIMEOUTS.renew, opts);
   }
   authorTool(input: { ref: AttemptRef; args: AuthorToolArgs }, opts?: CallOptions) {
     return this.mutate(`/attempts/${encodeURIComponent(input.ref.attemptId)}/tool`, input, AuthorToolResult, DEFAULT_TIMEOUTS.authorTool, opts);
@@ -240,6 +262,9 @@ export class HttpSupervisorClient implements SupervisorClient {
   ): Promise<T> {
     const operation = await buildOperation(body, opts?.operationId);
     const payload = JSON.stringify({ ...body, operation });
+    // The intent is recorded before anything leaves this process (37 §Cancellation: a crash between
+    // intent and acknowledgement must be reconcilable by operation id, never re-executed blindly).
+    if (opts?.beforeSend) await opts.beforeSend(operation);
     const timeoutMs = opts?.timeoutMs ?? defaultTimeout;
     let lastError: unknown;
     for (let attempt = 0; attempt <= this.retries; attempt++) {
@@ -294,6 +319,7 @@ export class HttpSupervisorClient implements SupervisorClient {
       const message = await errorText(response);
       if (response.status === 409) throw new SupervisorFenceError(message, operationId);
       if (response.status === 404) throw new SupervisorNotFoundError(message, operationId);
+      if (response.status === 429) throw new SupervisorCapacityError(message, operationId);
       if (response.status === 503) throw new SupervisorUnavailableError(message, operationId);
       throw new SupervisorError(message, response.status, operationId);
     }

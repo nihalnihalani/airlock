@@ -15,6 +15,15 @@
  * - Missing observation, duplicate, unknown id, exec.status !== "succeeded", exec.timedOut,
  *   truncated output or any protocolErrors → the affected case fails with a reason, passed=false.
  * - completedCases = cases with exactly one valid observation; requiredCases = contract length.
+ * - Per-case mode (`invocations`, 37 §Execution bridge: a fresh one-shot sandbox per case): each
+ *   case is judged ONLY against its own invocation; a failed/missing invocation, or run-level
+ *   failure of that invocation, makes that case incomplete (it cannot pass). Invocations for ids
+ *   outside the contract, or runs on different runtime images, invalidate the whole record.
+ * - `outcome` (M11): baseline REPRODUCED | NOT_REPRODUCED | INCONCLUSIVE; candidate PASSED_CHECKS |
+ *   CHECKS_FAILED | INCONCLUSIVE. Baseline NOT_REPRODUCED needs every reported case measured and
+ *   at least one not showing its expected failure; a reproduced reported case with regression
+ *   drift or incomplete regression cases is INCONCLUSIVE (D9). Candidate INCONCLUSIVE means no
+ *   measured failure and an infrastructure fault (failed invocation, inspection, record-level).
  */
 import {
   SCHEMA_VERSION,
@@ -24,14 +33,16 @@ import {
   type Expectation,
   type HostCheck,
   type InvokeResult,
+  type IsolationProbe,
   type Observation,
+  type TeardownRecord,
   type VerificationRecord,
   Observation as ObservationSchema,
   canonicalJson,
 } from "@airlock/contracts";
 import type { z } from "zod";
 
-export const COMPARATOR_VERSION = "1.0.0";
+export const COMPARATOR_VERSION = "1.1.0";
 
 export interface CompareInput {
   id: string;
@@ -44,6 +55,17 @@ export interface CompareInput {
   contractDigest: string;
   candidateDigest: string;
   now: string;
+  /** Checkpoint 4 from the author attempt of this run, recorded in `runtimeProfile.probe` (M6). */
+  probe?: IsolationProbe;
+  /** Per-case one-shot invocations (D3). When present, `invoke` is their aggregate (`aggregateInvocations`). */
+  invocations?: CaseInvocation[];
+}
+
+/** One contract case's own invocation; `invoke` null when the supervisor call itself failed. */
+export interface CaseInvocation {
+  caseId: string;
+  invoke: InvokeResult | null;
+  error?: string;
 }
 
 type Verdict = z.infer<typeof CaseVerdict>;
@@ -157,19 +179,11 @@ function runLevelFailures(invoke: InvokeResult): string[] {
   return reasons;
 }
 
-export function compare(input: CompareInput): VerificationRecord {
-  const { contract, invoke, role } = input;
-  const contractIds = new Set<string>();
-  const contractCases: ContractCase[] = [];
-  for (const c of contract.cases) {
-    // A contract with a duplicated id is malformed; only the first definition is required and any
-    // observation for it is ambiguous, so the case is marked failed below via the duplicate path.
-    if (!contractIds.has(c.id)) {
-      contractIds.add(c.id);
-      contractCases.push(c);
-    }
-  }
+type Judged = { verdicts: Verdict[]; measured: boolean[]; completed: number; runFailures: string[] };
 
+/** Judge `cases` against ONE invocation's observations (the original single-run rules). */
+function judgeRun(contractCases: ContractCase[], role: "baseline" | "candidate", invoke: InvokeResult): Judged {
+  const contractIds = new Set(contractCases.map((c) => c.id));
   // Bucket sanitized observations by caseId; count raw occurrences (including unparseable ones
   // that still carry a caseId string) so duplicates cannot hide behind a malformed twin.
   const byCase = new Map<string, Observation[]>();
@@ -204,7 +218,8 @@ export function compare(input: CompareInput): VerificationRecord {
     runFailures.push(`${malformed.length} malformed observation(s) at index ${malformed.slice(0, 5).join(",")}`);
   }
 
-  let completedCases = 0;
+  let completed = 0;
+  const measured: boolean[] = [];
   const verdicts: Verdict[] = contractCases.map((c) => {
     const expected = role === "baseline" ? c.baseline : c.candidate;
     const list = byCase.get(c.id) ?? [];
@@ -212,6 +227,7 @@ export function compare(input: CompareInput): VerificationRecord {
     const base = { caseId: c.id, kind: c.kind, expected };
 
     if (list.length === 0) {
+      measured.push(false);
       const reason =
         seen > 0
           ? "observation for this case was malformed"
@@ -221,6 +237,7 @@ export function compare(input: CompareInput): VerificationRecord {
       return { ...base, passed: false, reason: clip(reason) };
     }
     if (list.length > 1 || seen > 1) {
+      measured.push(false);
       return {
         ...base,
         observed: list[0],
@@ -229,7 +246,8 @@ export function compare(input: CompareInput): VerificationRecord {
       };
     }
     const observed = list[0] as Observation;
-    completedCases += 1;
+    completed += 1;
+    measured.push(runFailures.length === 0);
     const j = judge(expected, observed);
     if (j.passed && runFailures.length > 0) {
       return {
@@ -241,14 +259,149 @@ export function compare(input: CompareInput): VerificationRecord {
     }
     return { ...base, observed, passed: j.passed, reason: clip(j.reason) };
   });
+  return { verdicts, measured, completed, runFailures };
+}
+
+/**
+ * Aggregate per-case invocations into the one `exec`/`inspection`/`teardown` a VerificationRecord
+ * carries: succeeded only if every invocation returned and succeeded; teardown clean only if every
+ * invocation's was; the host-wide listing is the one taken after the LAST invocation (M7).
+ * Returns null when no invocation returned at all (nothing was inspected; no record can be made).
+ */
+export function aggregateInvocations(invocations: CaseInvocation[]): InvokeResult | null {
+  const returned = invocations.filter((i): i is CaseInvocation & { invoke: InvokeResult } => i.invoke !== null);
+  const first = returned[0]?.invoke;
+  if (!first) return null;
+  const failed = invocations.filter((i) => i.invoke === null);
+  const notOk = returned.find((i) => i.invoke.exec.status !== "succeeded");
+  const cap = 8 * 1024;
+  const join = (pick: (r: InvokeResult) => string) =>
+    returned
+      .map((i) => (pick(i.invoke) ? `[${i.caseId}] ${pick(i.invoke)}` : ""))
+      .filter(Boolean)
+      .join("\n");
+  const stdout = join((r) => r.exec.stdout);
+  const stderr = [join((r) => r.exec.stderr), ...failed.map((i) => `[${i.caseId}] invocation failed: ${i.error ?? "unknown error"}`)].filter(Boolean).join("\n");
+  const teardowns = returned.map((i) => i.invoke.teardown);
+  const last = teardowns[teardowns.length - 1] as TeardownRecord;
+  const teardown: TeardownRecord = {
+    destroyedAt: last.destroyedAt,
+    containersRemaining: [...new Set(teardowns.flatMap((t) => t.containersRemaining))],
+    volumesRemaining: [...new Set(teardowns.flatMap((t) => t.volumesRemaining))],
+    clean: failed.length === 0 && teardowns.every((t) => t.clean),
+    ...(last.host ? { host: last.host } : {}),
+  };
+  return {
+    operationId: first.operationId,
+    role: first.role,
+    container: first.container,
+    inspection: returned.every((i) => i.invoke.inspection.allPassed) ? first.inspection : (returned.find((i) => !i.invoke.inspection.allPassed)?.invoke.inspection ?? first.inspection),
+    exec: {
+      status: failed.length > 0 ? "failed" : (notOk?.invoke.exec.status ?? "succeeded"),
+      exitCode: failed.length > 0 ? null : (notOk?.invoke.exec.exitCode ?? 0),
+      stdout: stdout.slice(0, cap),
+      stderr: stderr.slice(0, cap),
+      truncated: returned.some((i) => i.invoke.exec.truncated) || stdout.length > cap || stderr.length > cap,
+      timedOut: returned.some((i) => i.invoke.exec.timedOut),
+      durationMs: returned.reduce((sum, i) => sum + i.invoke.exec.durationMs, 0),
+    },
+    observations: returned.flatMap((i) => i.invoke.observations),
+    protocolErrors: [
+      ...returned.flatMap((i) => i.invoke.protocolErrors.map((e) => clip(`[${i.caseId}] ${e}`, 512))),
+      ...failed.map((i) => clip(`[${i.caseId}] invocation failed: ${i.error ?? "unknown error"}`, 512)),
+    ],
+    teardown,
+  };
+}
+
+export type RecordOutcome = NonNullable<VerificationRecord["outcome"]>;
+
+/** The comparator's verdict in words (see the file header for the rules). */
+export function deriveOutcome(
+  role: "baseline" | "candidate",
+  verdicts: { kind: "reported" | "regression"; passed: boolean }[],
+  measured: boolean[],
+  passed: boolean,
+  infrastructureFault: boolean,
+): RecordOutcome {
+  if (role === "baseline") {
+    if (passed) return "REPRODUCED";
+    const reported = verdicts.map((v, i) => ({ v, m: measured[i] === true })).filter((x) => x.v.kind === "reported");
+    if (reported.length > 0 && reported.every((x) => x.m) && reported.some((x) => !x.v.passed)) return "NOT_REPRODUCED";
+    return "INCONCLUSIVE";
+  }
+  if (passed) return "PASSED_CHECKS";
+  if (verdicts.some((v, i) => measured[i] === true && !v.passed)) return "CHECKS_FAILED";
+  return infrastructureFault ? "INCONCLUSIVE" : "CHECKS_FAILED";
+}
+
+export function compare(input: CompareInput): VerificationRecord {
+  const { contract, invoke, role } = input;
+  const contractIds = new Set<string>();
+  const contractCases: ContractCase[] = [];
+  for (const c of contract.cases) {
+    // A contract with a duplicated id is malformed; only the first definition is required.
+    if (!contractIds.has(c.id)) {
+      contractIds.add(c.id);
+      contractCases.push(c);
+    }
+  }
+
+  let judged: Judged;
+  const recordFailures: string[] = [];
+  let infrastructureFault = !invoke.inspection.allPassed;
+  if (input.invocations) {
+    const invocations = input.invocations;
+    const strays = invocations.filter((i) => !contractIds.has(i.caseId)).map((i) => i.caseId);
+    if (strays.length > 0) recordFailures.push(`invocations for case ids outside the contract: ${clip(strays.slice(0, 5).join(", "), 300)}`);
+    const images = new Set(invocations.flatMap((i) => (i.invoke ? [i.invoke.inspection.imageDigest] : [])));
+    if (images.size > 1) recordFailures.push(`invocations ran on ${images.size} different runtime images`);
+    const verdicts: Verdict[] = [];
+    const measured: boolean[] = [];
+    let completed = 0;
+    for (const c of contractCases) {
+      const expected = role === "baseline" ? c.baseline : c.candidate;
+      const own = invocations.filter((i) => i.caseId === c.id);
+      const only = own[0];
+      if (own.length !== 1 || !only) {
+        verdicts.push({ caseId: c.id, kind: c.kind, expected, passed: false, reason: own.length === 0 ? "not invoked" : `case invoked ${own.length} times` });
+        measured.push(false);
+        infrastructureFault = true;
+        continue;
+      }
+      if (only.invoke === null) {
+        verdicts.push({ caseId: c.id, kind: c.kind, expected, passed: false, reason: clip(`invocation failed: ${only.error ?? "unknown error"}`) });
+        measured.push(false);
+        infrastructureFault = true;
+        continue;
+      }
+      if (!only.invoke.inspection.allPassed) infrastructureFault = true;
+      const one = judgeRun([c], role, only.invoke);
+      verdicts.push(one.verdicts[0] as Verdict);
+      measured.push(one.measured[0] === true);
+      completed += one.completed;
+    }
+    judged = { verdicts, measured, completed, runFailures: [] };
+  } else {
+    judged = judgeRun(contractCases, role, invoke);
+  }
+  if (recordFailures.length > 0) {
+    infrastructureFault = true;
+    judged = {
+      ...judged,
+      measured: judged.measured.map(() => false),
+      verdicts: judged.verdicts.map((v) => (v.passed ? { ...v, passed: false, reason: clip(`observation matched but the record is invalid: ${recordFailures.join("; ")}`) } : v)),
+    };
+  }
 
   const requiredCases = contractCases.length;
   const passed =
-    runFailures.length === 0 &&
+    recordFailures.length === 0 &&
+    judged.runFailures.length === 0 &&
     requiredCases > 0 &&
-    verdicts.length === requiredCases &&
-    verdicts.every((v) => v.passed) &&
-    completedCases === requiredCases;
+    judged.verdicts.length === requiredCases &&
+    judged.verdicts.every((v) => v.passed) &&
+    judged.completed === requiredCases;
 
   return {
     schemaVersion: SCHEMA_VERSION,
@@ -260,16 +413,18 @@ export function compare(input: CompareInput): VerificationRecord {
     adapterDigest: input.adapterDigest,
     contractDigest: input.contractDigest,
     comparatorVersion: COMPARATOR_VERSION,
-    cases: verdicts,
+    cases: judged.verdicts,
     requiredCases,
-    completedCases,
+    completedCases: judged.completed,
     exec: invoke.exec,
     runtimeProfile: {
       host: input.host,
       inspection: invoke.inspection,
+      ...(input.probe ? { probe: input.probe } : {}),
       teardown: invoke.teardown,
     },
     passed,
+    outcome: deriveOutcome(role, judged.verdicts, judged.measured, passed, infrastructureFault),
     createdAt: input.now,
   };
 }
