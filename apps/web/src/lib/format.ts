@@ -124,3 +124,16 @@ export function statusTone(status: TaskStatus): Tone {
   if (status === "cancelling") return "warn";
   return "bad";
 }
+
+/**
+ * The URL, if and only if it is an absolute http(s) URL; null otherwise. Anything else (javascript:,
+ * data:, relative paths) is shown as text, never used as an href.
+ */
+export function httpUrl(raw: string): string | null {
+  try {
+    const url = new URL(raw);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.href : null;
+  } catch {
+    return null;
+  }
+}

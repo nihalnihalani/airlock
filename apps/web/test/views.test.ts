@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { RunEvent } from "@airlock/contracts";
 import { extractErrorMessage } from "../src/lib/api";
 import { extractCheckpoints, runtimeTier, toExecRow, toModelCallRow } from "../src/lib/eventViews";
-import { tail } from "../src/lib/format";
+import { httpUrl, tail } from "../src/lib/format";
 import { hrefFor, parseHash } from "../src/lib/router";
 
 function ev(seq: number, kind: RunEvent["kind"], data?: Record<string, unknown>): RunEvent {
@@ -160,5 +160,17 @@ describe("tail", () => {
     expect(t.text).toBe("c\nd");
     expect(t.clipped).toBe(true);
     expect(tail("", 2)).toEqual({ text: "", clipped: false });
+  });
+});
+
+describe("httpUrl", () => {
+  test("only absolute http(s) URLs become links", () => {
+    expect(httpUrl("https://github.com/astanin/python-tabulate/issues/365")).toBe("https://github.com/astanin/python-tabulate/issues/365");
+    expect(httpUrl("http://example.com/x")).toBe("http://example.com/x");
+    expect(httpUrl("javascript:alert(1)")).toBeNull();
+    expect(httpUrl("JavaScript:alert(1)")).toBeNull();
+    expect(httpUrl("data:text/html,<b>x</b>")).toBeNull();
+    expect(httpUrl("/relative")).toBeNull();
+    expect(httpUrl("not a url")).toBeNull();
   });
 });

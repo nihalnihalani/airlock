@@ -9,7 +9,7 @@ import { Skeleton } from "../components/ui/skeleton";
 import { canOperate, useSession } from "../hooks/session";
 import { useSharedTaskList } from "../hooks/useTaskList";
 import { createTask, describeError, getProfiles } from "../lib/api";
-import { formatBytes, formatDurationMs, shortSha } from "../lib/format";
+import { formatBytes, formatDurationMs, httpUrl, shortSha } from "../lib/format";
 import { hrefFor, navigate } from "../lib/router";
 
 const ISSUE_MAX = 20000;
@@ -29,6 +29,7 @@ function PathChips({ paths }: { paths: string[] }) {
 
 function ProfileCard({ profile }: { profile: ProfileManifest }) {
   const caps = profile.caps;
+  const issueHref = httpUrl(profile.issueUrl);
   return (
     <div className="w-full rounded-xl border border-border bg-card p-4 text-left dark:border-transparent">
       <div className="flex flex-wrap items-center gap-2">
@@ -47,8 +48,8 @@ function ProfileCard({ profile }: { profile: ProfileManifest }) {
       <dl className="mt-3 grid grid-cols-[minmax(0,7.5rem)_minmax(0,1fr)] gap-x-3 gap-y-2 text-xs">
         <dt className="text-muted-foreground">issue</dt>
         <dd className="min-w-0">
-          {/^https?:\/\//i.test(profile.issueUrl) ? (
-            <a className="inline-flex max-w-full items-center gap-1 underline-offset-4 hover:underline" href={profile.issueUrl} target="_blank" rel="noreferrer noopener">
+          {issueHref ? (
+            <a className="inline-flex max-w-full items-center gap-1 underline-offset-4 hover:underline" href={issueHref} target="_blank" rel="noreferrer noopener">
               <span className="truncate">{profile.issueUrl}</span>
               <IconExternalLink className="size-3 shrink-0" />
             </a>
