@@ -27,7 +27,7 @@ export function BlastRadiusView({ card }: { card: BlastRadiusCard }) {
               { key: "runtime", value: <Badge tone={card.died.runtime === "runc" ? "bad" : "ok"}>{card.died.runtime}</Badge> },
               { key: "guest kernel", value: <Mono wrap>{card.died.guestUname || "(empty)"}</Mono> },
               { key: "reason", value: card.died.reason },
-              { key: "workspace files", value: <Badge tone={workspace.tone}>{workspace.text}</Badge> },
+              { key: "workspace files", value: <Badge tone={workspace.tone} className="h-auto whitespace-normal">{workspace.text}</Badge> },
             ]}
           />
         </div>
@@ -51,7 +51,7 @@ export function BlastRadiusView({ card }: { card: BlastRadiusCard }) {
                 ),
               },
               { key: "supervisor healthy", value: <BoolChip value={s.supervisorHealthy} /> },
-              { key: "host sentinel unchanged", value: <BoolChip value={s.hostSentinelUnchanged} /> },
+              { key: "host sentinel", value: <BoolChip value={s.hostSentinelUnchanged} yes="unchanged" no="changed" /> },
               { key: "host uptime", value: formatSeconds(s.hostUptimeSeconds) },
               {
                 key: "sibling attempts",

@@ -140,7 +140,7 @@ export function MarkRow({ item }: { item: Extract<ThreadItem, { type: "mark" }> 
   const Icon = MARK_ICON[item.kind];
   const detail = item.detail.trim();
   const titleClass = cn(
-    "shrink-0 text-[13px] font-medium",
+    "min-w-0 truncate text-[13px] font-medium",
     item.tone === "neutral" ? (item.phase ? "text-foreground" : "text-foreground/80") : TONE_TEXT[item.tone],
   );
   const line = (

@@ -252,7 +252,7 @@ export function GeneralTaskComposer({ modeSwitch }: { modeSwitch: ReactNode }) {
     const errors: string[] = [];
     for (const file of list) {
       if (file.size > UPLOAD_MAX_BYTES) {
-        errors.push(`${file.name}: ${uploadErrorMessage(413, `This file is ${formatBytes(file.size)}; not sent.`)}`);
+        errors.push(`${file.name}: ${uploadErrorMessage(413, `This file is ${formatBytes(file.size)}; not sent.`, true)}`);
         continue;
       }
       setUploading(file.name);

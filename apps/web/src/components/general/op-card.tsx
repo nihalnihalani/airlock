@@ -105,11 +105,11 @@ function LiveFrameLine({ op, terminal }: { op: Operation; terminal: boolean }) {
       <IconEye className="size-3.5 shrink-0" />
       <span className="shrink-0 font-medium text-foreground/80">Live frame</span>
       {id ? (
-        <a className="shrink-0 underline underline-offset-4" href={artifactHref(id)} target="_blank" rel="noreferrer noopener">
+        <a className="min-w-0 truncate underline underline-offset-4" href={artifactHref(id)} target="_blank" rel="noreferrer noopener">
           <Mono>{id}</Mono>
         </a>
       ) : null}
-      {obs.saved?.sha256 ? <span className="shrink-0">sha256 {obs.saved.sha256.slice(0, 12)}</span> : null}
+      {obs.saved?.sha256 ? <span className="hidden shrink-0 sm:inline">sha256 {obs.saved.sha256.slice(0, 12)}</span> : null}
       <span className="min-w-0 flex-1 truncate" title={obs.summary}>
         {obs.url ?? obs.summary}
       </span>
@@ -221,7 +221,7 @@ export function OperationCard({
         ) : null}
         {obs.code !== null ? (
           <div className="flex flex-col gap-1">
-            <Label>code as written by the model</Label>
+            <Label>code as written (by the model, or the labelled script of a diagnostic)</Label>
             <Pre className="max-h-80">{obs.code}</Pre>
           </div>
         ) : null}

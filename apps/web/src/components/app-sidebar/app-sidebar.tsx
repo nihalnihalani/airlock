@@ -108,11 +108,11 @@ function TaskRow({ row, active, onNavigate, review }: { row: TaskRowView; active
         <div className="mt-px flex min-w-0 items-center gap-1.5 text-[12px] leading-4 text-muted-foreground">
           <span className="shrink-0" title={row.profileId}>{row.profileLabel}</span>
           <span className="shrink-0 text-muted-foreground/50">·</span>
-          <span className={cn("min-w-0 truncate font-medium", TONE_TEXT[row.badge.tone])}>{row.badge.label}</span>
+          <span className={cn("shrink-0 font-medium", TONE_TEXT[row.badge.tone])} title={row.badge.label}>{row.badge.label}</span>
           {row.cleanup ? (
             <>
               <span className="shrink-0 text-muted-foreground/50">·</span>
-              <span className={cn("shrink-0 truncate", TONE_TEXT[row.cleanup.tone])} title="Cleanup, separate from the result">
+              <span className={cn("min-w-0 truncate", TONE_TEXT[row.cleanup.tone])} title={`Cleanup, separate from the result: ${row.cleanup.label}`}>
                 {row.cleanup.label}
               </span>
             </>

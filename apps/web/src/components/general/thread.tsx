@@ -172,7 +172,7 @@ export function GeneralMark({ item }: { item: Extract<GeneralItem, { type: "mark
       <RowMark className={cn("size-6 rounded-md", item.tone !== "neutral" && TONE_TEXT[item.tone])}>
         <MarkIcon kind={item.kind} />
       </RowMark>
-      <span className={cn("shrink-0 text-[13px] font-medium", item.tone === "neutral" ? "text-foreground/80" : TONE_TEXT[item.tone])}>{item.title}</span>
+      <span title={item.title} className={cn("min-w-0 truncate text-[13px] font-medium", item.tone === "neutral" ? "text-foreground/80" : TONE_TEXT[item.tone])}>{item.title}</span>
       {item.state === "unknown" ? <Badge tone="warn">outcome unknown; not retried</Badge> : null}
       {detail.length > 0 ? <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{detail.split("\n")[0]}</span> : <span className="flex-1" />}
       <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/70">{formatTime(item.at)}</span>

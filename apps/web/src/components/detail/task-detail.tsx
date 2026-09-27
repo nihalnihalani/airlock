@@ -138,7 +138,11 @@ export function TaskDetail({
             { key: "tokens", value: `${usage.input.toLocaleString()} in / ${usage.output.toLocaleString()} out` },
           ]}
         />
-        <p className="mt-2 text-[11px] text-muted-foreground">All runtime model calls go through Vultr Serverless Inference.</p>
+        <p className="mt-2 text-[11px] text-muted-foreground">
+          {hosts.length > 0 && hosts.every((h) => /^scripted/i.test(h))
+            ? "Scripted diagnostic: no model was called. Live runs call Vultr Serverless Inference only."
+            : "All runtime model calls go through Vultr Serverless Inference."}
+        </p>
       </PanelSection>
 
       {showArtifacts && task.candidateDigest && task.verificationRecordId ? (

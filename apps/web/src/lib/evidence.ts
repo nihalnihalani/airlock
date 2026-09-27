@@ -303,6 +303,14 @@ export interface RepairNotice {
   body: string;
 }
 
+/** A server reason as a sentence: capitalised, ending in punctuation. */
+export function sentence(text: string): string {
+  const t = text.trim();
+  if (!t) return t;
+  const cap = t[0]!.toUpperCase() + t.slice(1);
+  return /[.!?:]$/.test(cap) ? cap : `${cap}.`;
+}
+
 export function repairNotice(availability: RepairAvailability | null, error: string | null): RepairNotice {
   if (!availability) {
     return {
@@ -317,14 +325,14 @@ export function repairNotice(availability: RepairAvailability | null, error: str
     return {
       tone: "warn",
       title: "Diagnostics driver",
-      body: `${availability.reason} This control plane runs scripted diagnostics: a case replays a labelled fixed script through the real sandbox, freeze and comparator; no model is called.`,
+      body: `${sentence(availability.reason)} This control plane runs scripted diagnostics: a case replays a labelled fixed script through the real sandbox, freeze and comparator; no model is called.`,
     };
   }
   if (!availability.available) {
     return {
       tone: "warn",
       title: "Live repair is disabled",
-      body: `${availability.reason} A case started now reproduces the issue and measures the baseline only; no repair is attempted.`,
+      body: `${sentence(availability.reason)} A case started now reproduces the issue and measures the baseline only; no repair is attempted.`,
     };
   }
   const ev = availability.evidence;
@@ -363,7 +371,9 @@ export function refusalLead(status: number, message = ""): string | null {
     case "notfound":
       return "Not found, or not yours to read.";
     case "capacity":
-      if (/\blimited to\b|rate.?limit/i.test(message)) return "Rate limited, try again shortly.";
+      if (/\blimited to\b|rate.?limit|too many/i.test(message)) return "Rate limited, try again shortly.";
+      // "a hostile run is already in progress": the server's words say it; this is not capacity.
+      if (/in progress/i.test(message)) return null;
       // The server already said so: do not repeat it.
       return /capacity/i.test(message) ? null : "Execution host at capacity, try again shortly.";
     case "unavailable":

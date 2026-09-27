@@ -14,6 +14,7 @@ import {
   kernelRelease,
   refusalLead,
   repairNotice,
+  sentence,
   siblingRows,
   workspaceSummary,
 } from "../src/lib/evidence";
@@ -254,6 +255,12 @@ describe("repair availability (U5)", () => {
     expect(n.title).toBe("Diagnostics driver");
     expect(n.body).toContain("no model is called");
     expect(n.body).not.toContain("baseline only");
+    expect(n.body.startsWith("Scripted diagnostics driver: runs are diagnostics, not model repairs. This control plane")).toBe(true);
+  });
+  test("server reasons read as sentences", () => {
+    expect(sentence("no receipt")).toBe("No receipt.");
+    expect(sentence("Already fine.")).toBe("Already fine.");
+    expect(sentence("  ")).toBe("");
   });
   test("unknown is never presented as available", () => {
     expect(repairNotice(null, "HTTP 500").title).toBe("Repair availability unknown");
@@ -280,6 +287,8 @@ describe("diagnostics (G6) and refusals (item 9)", () => {
     expect(refusalLead(429, "no execution slot free")).toBe("Execution host at capacity, try again shortly.");
     expect(refusalLead(429, "execution host at capacity (4 sandboxes)")).toBeNull();
     expect(refusalLead(429, "hostile runs are limited to one per 10 s per session")).toBe("Rate limited, try again shortly.");
+    expect(refusalLead(429, "a hostile run is already in progress; try again when it finishes")).toBeNull();
+    expect(refusalLead(429, "Too many login attempts; wait a minute and try again")).toBe("Rate limited, try again shortly.");
     expect(refusalLead(403)).toBe("Not allowed for this role.");
     expect(refusalLead(500)).toBeNull();
   });

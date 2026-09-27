@@ -84,7 +84,7 @@ export function GeneralTaskDetail({
             { key: "task", value: <Mono wrap>{task.id}</Mono> },
             { key: "owner", value: task.owner },
             { key: "profile", value: `${task.profileId}${profile ? ` v${profile.version}` : ""}` },
-            { key: "attempt", value: task.attemptId ? <Mono wrap>{task.attemptId}</Mono> : <span className="text-muted-foreground">none recorded</span> },
+            { key: "attempt", value: task.attemptId ? <Mono wrap>{task.attemptId}</Mono> : <span className="text-muted-foreground">none active (attempts are listed in the thread)</span> },
             { key: "created", value: formatDateTime(task.createdAt) },
             { key: "updated", value: formatDateTime(task.updatedAt) },
           ]}

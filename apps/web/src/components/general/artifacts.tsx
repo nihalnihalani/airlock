@@ -21,6 +21,7 @@ export function Screenshot({
   height,
   sentToModel,
   className,
+  noun = "Screenshot",
 }: {
   artifactId: string;
   sha256?: string | null | undefined;
@@ -31,19 +32,21 @@ export function Screenshot({
   /** true: attached to the next model turn; false: evidence only; undefined: not known here. */
   sentToModel?: boolean | undefined;
   className?: string;
+  /** "Screenshot" for browser captures; "Image" for an image the task produced (e.g. a chart). */
+  noun?: "Screenshot" | "Image";
 }) {
   const [failed, setFailed] = useState(false);
   return (
     <figure className={className ?? "flex flex-col gap-1.5"}>
       {failed ? (
         <div className="flex h-24 items-center justify-center gap-2 rounded-lg border border-dashed text-xs text-muted-foreground">
-          <IconPhoto className="size-4" /> Screenshot {artifactId} could not be loaded.
+          <IconPhoto className="size-4" /> {noun} {artifactId} could not be loaded.
         </div>
       ) : (
-        <a href={artifactHref(artifactId)} target="_blank" rel="noreferrer noopener" title="Open the stored screenshot">
+        <a href={artifactHref(artifactId)} target="_blank" rel="noreferrer noopener" title={`Open the stored ${noun.toLowerCase()}`}>
           <img
             src={artifactHref(artifactId)}
-            alt={`Screenshot ${artifactId}${url ? ` of ${url}` : ""}`}
+            alt={`${noun} ${artifactId}${url ? ` of ${url}` : ""}`}
             loading="lazy"
             decoding="async"
             referrerPolicy="no-referrer"
@@ -126,7 +129,7 @@ export function ArtifactPreview({ artifact }: { artifact: Artifact }) {
   const kind = previewKind(artifact);
   const tooBig = artifact.byteLength > PREVIEW_MAX_BYTES;
   const { text, error } = useArtifactText(artifact, (kind === "csv" || kind === "json" || kind === "text") && !tooBig);
-  if (kind === "image") return <Screenshot artifactId={artifact.id} sha256={artifact.sha256} url={artifact.source?.url ?? null} capturedAt={artifact.createdAt} />;
+  if (kind === "image") return <Screenshot artifactId={artifact.id} sha256={artifact.sha256} url={artifact.source?.url ?? null} capturedAt={artifact.createdAt} noun={artifact.kind === "screenshot" ? "Screenshot" : "Image"} />;
   if (kind === "none") return null;
   if (tooBig) return <p className="text-xs text-muted-foreground">Too large to preview here ({formatBytes(artifact.byteLength)}); download it instead.</p>;
   if (error) return <p className="text-xs text-destructive">Preview unavailable: {error}</p>;

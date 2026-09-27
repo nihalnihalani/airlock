@@ -141,6 +141,12 @@ describe("previews and uploads", () => {
     expect(uploadErrorMessage(415, "unsupported")).toMatch(/PNG, JPEG, PDF, JSON, CSV/);
     expect(uploadErrorMessage(500, "boom")).toBe("boom");
   });
+  test("the server's words are attributed, not run on into ours; a local refusal is not", () => {
+    const m = uploadErrorMessage(415, "unsupported file type: accepted are PNG, JPEG");
+    expect(m).toContain("UTF-8 text only. Server: \u201cunsupported file type: accepted are PNG, JPEG\u201d");
+    expect(uploadErrorMessage(413, "This file is 11.0 MiB; not sent.", true)).toMatch(/quota shown\. This file is 11\.0 MiB; not sent\.$/);
+    expect(uploadErrorMessage(415, "")).toMatch(/text only\.$/);
+  });
 });
 
 describe("operation states", () => {
@@ -222,6 +228,16 @@ describe("result dimension and checks", () => {
     expect(rows.find((r) => r.key === "code runs")?.value).toBe("2 / 20");
     expect(rows.find((r) => r.key === "sessions")?.value).toBe("1 / 5");
   });
+  test("budget counters the control plane does not report are not shown as 0", () => {
+    const limits = { modelCalls: 30, tokens: 1000, wallClockMs: 1, browserOps: 60, codeRuns: 20, browserSessions: 3, codeSandboxes: 2, recoveries: 2, attemptMs: 1 };
+    const rows = generalBudgetRows({ modelCallsUsed: 4, repairAttemptsUsed: 0 }, limits);
+    expect(rows.find((r) => r.key === "model calls")?.value).toBe("4 / 30");
+    expect(rows.find((r) => r.key === "code runs")?.value).toBe("not reported (limit 20)");
+    expect(rows.find((r) => r.key === "browser ops")?.value).toBe("not reported (limit 60)");
+    expect(rows.find((r) => r.key === "sessions")?.value).toBe("not reported (limit 5)");
+    // recoveries is written only once one happens
+    expect(rows.find((r) => r.key === "recoveries")?.value).toBe("0 / 2");
+  });
 });
 
 describe("general thread", () => {
@@ -277,6 +293,24 @@ describe("general thread", () => {
     expect(run!.exec?.exitCode).toBe(0);
     expect(submit!.claim).toEqual({ summary: "Lowest is North", outputs: ["outputs/summary.json"], sources: ["https://a.example.org/"], unsupported: null });
     expect(items[items.length - 1]).toMatchObject({ type: "working" });
+  });
+
+  test("the freeze collection answers the submit_result op recorded under the same operationId", () => {
+    const items = buildGeneralThread(task({ status: "done", outcome: "RESULT_VERIFIED" }), [
+      ev("model", "Model turn 4", "Submitting.", { model: "scripted:x", toolCalls: [{ name: "submit_result" }] }),
+      ev("tool", "submit_result", "claim\noutputs: outputs/summary.json\nsources: (none)", { tool: "submit_result", opState: "completed", outputs: ["outputs/summary.json"], sources: [] }),
+      ev("phase", "freeze", "stopping the sandboxes and collecting outputs/ read-only"),
+      ev("tool", "submit_result started", "", { tool: "submit_result", opState: "started", attemptId: "att-1", operationId: "op-freeze" }),
+      ev("lifecycle", "Code sandbox stopped and outputs collected", "stopConfirmed=true files=1", { tool: "collect-outputs", opState: "completed", operationId: "op-freeze", attemptId: "att-1", stopConfirmed: true }),
+      ev("phase", "Outcome RESULT_VERIFIED", "all checks passed", { outcome: "RESULT_VERIFIED" }),
+    ]);
+    const ops = items.flatMap((i) => (i.type === "op" ? [i.op] : i.type === "turn" ? i.ops : []));
+    const freeze = ops.find((o) => o.operationId === "op-freeze");
+    expect(freeze?.state).toBe("completed");
+    expect(freeze?.seqs.length).toBe(2);
+    expect(opStateView(freeze!.state, true, freeze!.tool).label).not.toBe("no outcome recorded");
+    // The collection is still shown as its own row.
+    expect(items.some((i) => i.type === "mark" && i.title.startsWith("Code sandbox stopped"))).toBe(true);
   });
 
   test("tool events before any model turn are standalone; lifecycle rows keep their op state", () => {

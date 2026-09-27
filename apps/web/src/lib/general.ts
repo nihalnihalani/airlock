@@ -108,16 +108,20 @@ export function domainListProblems(entries: readonly string[], profile: { browse
 
 export const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
 
-/** Explains an upload refusal in plain words; the server's own message follows verbatim. */
-export function uploadErrorMessage(status: number, serverMessage: string): string {
+/**
+ * Explains an upload refusal in plain words; the server's own message follows verbatim, marked as
+ * the server's. `local` is for a refusal made in this browser before anything was sent.
+ */
+export function uploadErrorMessage(status: number, serverMessage: string, local = false): string {
+  const said = serverMessage.trim() ? (local ? ` ${serverMessage.trim()}` : ` Server: “${serverMessage.trim()}”`) : "";
   switch (status) {
     case 413:
-      return `Too large (HTTP 413): each file is limited to 10 MiB, and your uploads together to the quota shown. ${serverMessage}`;
+      return `Too large (HTTP 413): each file is limited to 10 MiB, and your uploads together to the quota shown.${said}`;
     case 415:
-      return `Unsupported type (HTTP 415): the server sniffs the bytes and accepts PNG, JPEG, PDF, JSON, CSV (a .csv that parses) or UTF-8 text only. ${serverMessage}`;
+      return `Unsupported type (HTTP 415): the server sniffs the bytes and accepts PNG, JPEG, PDF, JSON, CSV (a .csv that parses) or UTF-8 text only.${said}`;
     case 401:
     case 403:
-      return `Not allowed (HTTP ${status}): sign in as operator or judge to upload. ${serverMessage}`;
+      return `Not allowed (HTTP ${status}): sign in as operator or judge to upload.${said}`;
     default:
       return serverMessage;
   }
@@ -644,6 +648,15 @@ export function buildGeneralThread(task: Task | null, events: readonly RunEvent[
       continue;
     }
     const state = parseOpState(data["opState"]);
+    // A lifecycle/error event that names an operation already on screen is that operation's answer
+    // (e.g. the freeze-phase output collection answers the op recorded as "submit_result started"):
+    // close the card with it instead of leaving it "dispatched; waiting" forever.
+    const answered = str(data["operationId"], 128);
+    const answeredOp = answered ? byOperation.get(answered) : undefined;
+    if (answeredOp && state && state !== "started") {
+      answeredOp.seqs.push(ev.seq);
+      answeredOp.state = state;
+    }
     const mark: GeneralMarkItem = { type: "mark", key: `mark-${ev.seq}`, seq: ev.seq, at: ev.at, kind: ev.kind, title: ev.kind === "phase" && ev.title in PHASE_LABEL ? `${PHASE_LABEL[ev.title as Phase]} phase` : ev.title, detail: ev.detail, tone: markTone(ev, state), state };
     // Sandbox lifecycle and errors raised while a turn's tools run stay inside that turn.
     if (open && (ev.kind === "lifecycle" || ev.kind === "error" || ev.kind === "info")) {
@@ -835,14 +848,17 @@ export interface ProfileBudgets {
 }
 
 export function generalBudgetRows(budget: Task["budget"], limits: ProfileBudgets | null): { key: string; value: string }[] {
-  const of = (used: number | undefined, limit: number | undefined) => `${used ?? 0}${limit !== undefined ? ` / ${limit.toLocaleString("en-US")}` : ""}`;
+  // A counter the control plane did not report is "not reported", never a made-up 0.
+  const of = (used: number | undefined, limit: number | undefined) =>
+    used === undefined ? `not reported${limit !== undefined ? ` (limit ${limit.toLocaleString("en-US")})` : ""}` : `${used}${limit !== undefined ? ` / ${limit.toLocaleString("en-US")}` : ""}`;
   return [
     { key: "model calls", value: of(budget.modelCallsUsed, limits?.modelCalls) },
     { key: "tokens", value: `${(budget.tokensUsed ?? 0).toLocaleString("en-US")}${limits ? ` / ${limits.tokens.toLocaleString("en-US")}` : ""}` },
     { key: "browser ops", value: of(budget.browserOps, limits?.browserOps) },
     { key: "code runs", value: of(budget.codeRuns, limits?.codeRuns) },
     { key: "sessions", value: of(budget.sessions, limits ? limits.browserSessions + limits.codeSandboxes : undefined) },
-    { key: "recoveries", value: of(budget.recoveries, limits?.recoveries) },
+    // `recoveries` is recorded only once one happens: absent means none so far.
+    { key: "recoveries", value: of(budget.recoveries ?? 0, limits?.recoveries) },
   ];
 }
 
