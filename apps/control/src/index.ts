@@ -101,9 +101,10 @@ async function main() {
     previewMinIntervalMs: config.previewMinIntervalMs,
     scriptedDrivers,
     webDist: config.webDist,
-    trustProxy: config.trustProxy,
+    trustedProxies: config.trustedProxies,
   });
-  if (config.trustProxy) console.log({ timestamp: new Date().toISOString(), message: "AIRLOCK_TRUST_PROXY=1: the login rate limit keys on the reverse proxy's X-Forwarded-For hop" });
+  if (config.trustedProxies.length > 0)
+    console.log({ timestamp: new Date().toISOString(), message: "AIRLOCK_TRUST_PROXY: the login rate limit keys on the reverse proxy's X-Forwarded-For hop for requests arriving from these peers; other peers are keyed on their own address", trustedProxies: config.trustedProxies });
   if (config.webDist) console.log({ timestamp: new Date().toISOString(), message: "serving web UI", dir: config.webDist });
   else console.warn("no web UI directory (apps/web/dist); only /api is served. Build it with: bun run --cwd apps/web build");
 

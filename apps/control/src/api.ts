@@ -78,11 +78,13 @@ export interface ApiDeps {
   /** Built web UI directory served for every non-/api GET (SPA fallback to index.html). */
   webDist?: string | null;
   /**
-   * Only when a reverse proxy in front of this process is known to overwrite/append
-   * X-Forwarded-For does the login limiter key on the proxy's (rightmost) hop; otherwise those
-   * headers are attacker-supplied and the socket peer address is used.
+   * Socket peer addresses of the reverse proxies in front of this process (`"loopback"` stands
+   * for 127.0.0.0/8 and ::1). Only a request whose socket peer is one of them has its
+   * X-Forwarded-For (rightmost hop) / X-Real-IP honoured by the login limiter; a request that
+   * reaches the port directly from any other peer, and a request whose peer is unknown, is keyed
+   * on its peer no matter what headers it carries. Empty or absent: headers are never trusted.
    */
-  trustProxy?: boolean;
+  trustedProxies?: string[];
   now?: () => number;
   /** SSE poll interval (ms) as a safety net behind the bus. */
   ssePollMs?: number;
@@ -168,9 +170,11 @@ export function createApp(deps: ApiDeps) {
   };
   // The login limiter's key. X-Forwarded-For / X-Real-IP are client-controlled unless a trusted
   // proxy sets them, and even then only the hop the proxy appended (the rightmost) is its word;
-  // rotating the leftmost entry must not buy a fresh budget. Without a trusted proxy the key is
-  // the socket peer address (Bun's server.requestIP); when that is unknown every client shares
-  // one bucket, which fails closed rather than open.
+  // rotating the leftmost entry must not buy a fresh budget. A proxy is trusted by its socket
+  // peer address, never by a flag alone: a client that reaches the port directly (bypassing the
+  // proxy) writes its own rightmost hop, so its headers are ignored and it is keyed on its peer.
+  // Without a trusted proxy the key is the socket peer address (Bun's server.requestIP); when that
+  // is unknown every client shares one bucket, which fails closed rather than open.
   const peerAddress = (c: Context<Env>): string | null => {
     const server = c.env as { requestIP?: (req: Request) => { address: string } | null } | undefined;
     try {
@@ -180,13 +184,18 @@ export function createApp(deps: ApiDeps) {
       return null;
     }
   };
+  const trustedProxies = deps.trustedProxies ?? [];
+  const isTrustedProxy = (peer: string): boolean => {
+    const plain = peer.startsWith("::ffff:") ? peer.slice("::ffff:".length) : peer;
+    return trustedProxies.some((p) => (p === "loopback" ? plain.startsWith("127.") || plain === "::1" : p === plain || p === peer));
+  };
   const clientKey = (c: Context<Env>): string => {
-    if (deps.trustProxy) {
+    const peer = peerAddress(c);
+    if (peer && trustedProxies.length > 0 && isTrustedProxy(peer)) {
       const hops = (c.req.header("x-forwarded-for") ?? "").split(",").map((h) => h.trim()).filter(Boolean);
       const hop = hops.at(-1) ?? c.req.header("x-real-ip")?.trim();
       if (hop) return `proxy:${hop.slice(0, 128)}`;
     }
-    const peer = peerAddress(c);
     return peer ? `peer:${peer}` : "unknown";
   };
 

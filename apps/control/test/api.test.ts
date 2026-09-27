@@ -34,7 +34,7 @@ interface Ctx {
   close: () => Promise<void>;
 }
 
-async function makeCtx(options: { withWorker?: boolean; now?: () => number; webDist?: string; trustProxy?: boolean; realExport?: boolean } = {}): Promise<Ctx> {
+async function makeCtx(options: { withWorker?: boolean; now?: () => number; webDist?: string; trustedProxies?: string[]; realExport?: boolean } = {}): Promise<Ctx> {
   const supervisor = new FakeSupervisor({ profile: fixture.profile, observe: fixtureObserve });
   let harness: Harness | null = null;
   let store: Store;
@@ -71,7 +71,7 @@ async function makeCtx(options: { withWorker?: boolean; now?: () => number; webD
     ssePollMs: 20,
     ...(options.now ? { now: options.now } : {}),
     ...(options.webDist ? { webDist: options.webDist } : {}),
-    ...(options.trustProxy ? { trustProxy: true } : {}),
+    ...(options.trustedProxies ? { trustedProxies: options.trustedProxies } : {}),
   });
   return { app, store, supervisor, artifacts, harness, bus, close: async () => (harness ? harness.close() : store.close()) };
 }
@@ -127,14 +127,53 @@ describe("sessions", () => {
     }
   });
 
-  test("with a trusted proxy the limit is keyed on the rightmost X-Forwarded-For hop, so a rotating client-supplied leftmost entry does not evade it", async () => {
-    const ctx = await makeCtx({ trustProxy: true });
+  // Over a real socket (Bun.serve) so the peer address reaches the app, as in index.ts.
+  const serve = (app: Ctx["app"]) => {
+    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: app.fetch });
+    const post = async (headers: Record<string, string>, password = "wrong-wrong") =>
+      (await fetch(`http://127.0.0.1:${server.port}/api/session`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify({ password }) })).status;
+    return { post, stop: () => server.stop(true) };
+  };
+
+  test("with a trusted loopback proxy the limit is keyed on the rightmost X-Forwarded-For hop, so a rotating client-supplied leftmost entry does not evade it", async () => {
+    const ctx = await makeCtx({ trustedProxies: ["loopback"] });
+    const s = serve(ctx.app);
     try {
       let last = 0;
-      for (let i = 0; i < 12; i++) last = (await ctx.app.request("/api/session", { ...json({ password: "wrong-wrong" }), headers: { "content-type": "application/json", "x-forwarded-for": `10.0.0.${i}, 203.0.113.7` } })).status;
+      for (let i = 0; i < 12; i++) last = await s.post({ "x-forwarded-for": `10.0.0.${i}, 203.0.113.7` });
       expect(last).toBe(429);
       // Another client behind the same proxy has its own budget.
-      expect((await ctx.app.request("/api/session", { ...json({ password: "wrong-wrong" }), headers: { "content-type": "application/json", "x-forwarded-for": "10.0.0.1, 203.0.113.8" } })).status).toBe(401);
+      expect(await s.post({ "x-forwarded-for": "10.0.0.1, 203.0.113.8" })).toBe(401);
+    } finally {
+      s.stop();
+      await ctx.close();
+    }
+  });
+
+  test("a client that reaches the port directly, bypassing the trusted proxy, cannot evade the limit with its own X-Forwarded-For or X-Real-IP", async () => {
+    // The proxy is at 203.0.113.7; this connection's peer is 127.0.0.1, so its headers are attacker-supplied.
+    const ctx = await makeCtx({ trustedProxies: ["203.0.113.7"] });
+    const s = serve(ctx.app);
+    try {
+      const statuses = new Set<number>();
+      for (let i = 0; i < 12; i++) statuses.add(await s.post({ "x-forwarded-for": `10.0.0.${i}` }));
+      expect(statuses.has(429)).toBe(true);
+      for (let i = 0; i < 3; i++) expect(await s.post({ "x-real-ip": `10.1.0.${i}` })).toBe(429);
+      // The correct password on the locked-out peer is refused too.
+      expect(await s.post({ "x-forwarded-for": "10.0.0.99" }, OPERATOR)).toBe(429);
+    } finally {
+      s.stop();
+      await ctx.close();
+    }
+  });
+
+  test("a trusted proxy flag without a known peer address does not trust the headers", async () => {
+    // app.request() carries no server env, so the peer is unknown: fail closed on one shared key.
+    const ctx = await makeCtx({ trustedProxies: ["loopback"] });
+    try {
+      let last = 0;
+      for (let i = 0; i < 12; i++) last = (await ctx.app.request("/api/session", { ...json({ password: "wrong-wrong" }), headers: { "content-type": "application/json", "x-forwarded-for": `10.0.0.${i}, 203.0.113.${i}` } })).status;
+      expect(last).toBe(429);
     } finally {
       await ctx.close();
     }
