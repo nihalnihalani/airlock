@@ -622,12 +622,22 @@ export const PreviewResult = z.object({
   inspection: RuntimeInspection,
 });
 
+/** Contract case identity for display: never the inputs or expectations (those live in the records). */
+export const ContractCaseTitle = z.object({
+  id: plainId,
+  kind: z.enum(["reported", "regression"]),
+  title: z.string(),
+});
+export type ContractCaseTitle = z.infer<typeof ContractCaseTitle>;
+
 export const TaskView = z.object({
   task: Task,
   baseline: VerificationRecord.optional(),
   verification: VerificationRecord.optional(),
   manifest: SourceManifest.optional(),
   host: HostCheck.optional(),
+  /** Titles of the profile's frozen contract cases, in contract order (for the case table). */
+  cases: z.array(ContractCaseTitle).optional(),
 });
 export type TaskView = z.infer<typeof TaskView>;
 

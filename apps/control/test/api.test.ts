@@ -172,8 +172,11 @@ describe("routes and roles", () => {
       expect(task.owner).toBe("operator");
       const list = (await (await ctx.app.request("/api/tasks")).json()) as Task[];
       expect(list.map((t) => t.id)).toEqual([task.id]);
-      const view = (await (await ctx.app.request(`/api/tasks/${task.id}`)).json()) as { task: Task };
+      const view = (await (await ctx.app.request(`/api/tasks/${task.id}`)).json()) as { task: Task; cases?: { id: string; kind: string; title: string }[] };
       expect(view.task.id).toBe(task.id);
+      // Contract case titles ride on the view for the case table; inputs/expectations do not.
+      expect(view.cases?.map((c) => c.id)).toEqual(fixture.profile.contract.cases.map((c) => c.id));
+      expect(view.cases?.every((c) => typeof c.title === "string" && !("input" in c))).toBe(true);
       expect((await ctx.app.request(`/api/tasks/${task.id}/cancel`, json({}, judge))).status).toBe(403);
       const cancelled = await ctx.app.request(`/api/tasks/${task.id}/cancel`, json({}, op));
       expect(cancelled.status).toBe(200);

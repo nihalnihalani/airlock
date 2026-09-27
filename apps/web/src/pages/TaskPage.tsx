@@ -105,7 +105,7 @@ export function TaskPage({ id }: { id: string }) {
 
   const checkpoints = useMemo(() => extractCheckpoints(view, stream.log.events), [view, stream.log.events]);
   const tier = useMemo(() => runtimeTier(checkpoints), [checkpoints]);
-  const caseTitles = useMemo(() => new Map<string, string>(), []);
+  const caseTitles = useMemo(() => new Map((view?.cases ?? []).map((c) => [c.id, c.title])), [view?.cases]);
 
   const cancel = async () => {
     if (!window.confirm("Cancel this task? The supervisor will revoke dispatch and stop the sandbox.")) return;

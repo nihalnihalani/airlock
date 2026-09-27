@@ -208,6 +208,8 @@ export function createApp(deps: ApiDeps) {
   app.get("/api/tasks/:id", async (c) => {
     const { owner, task } = await loadTask(taskId(c));
     const view: TaskView = { task };
+    const profile = deps.profiles.get(task.profileId);
+    if (profile) view.cases = profile.contract.cases.map((cs) => ({ id: cs.id, kind: cs.kind, title: cs.title }));
     if (task.baselineRecordId) {
       const rec = await deps.store.get<VerificationRecord>(owner, STORE_KIND_VERIFICATIONS, task.baselineRecordId);
       if (rec) view.baseline = rec;
