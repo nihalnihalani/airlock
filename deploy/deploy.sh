@@ -79,11 +79,16 @@ if [[ ! -f "$SECRETS" ]]; then
   umask 022
   log "generated $SECRETS"
 fi
+# Secrets added after a stack was first deployed are appended, never regenerated.
+if ! grep -q '^AIRLOCK_FORMS_SECRET=' "$SECRETS"; then
+  (umask 077 && echo "AIRLOCK_FORMS_SECRET=$(openssl rand -hex 32)" >> "$SECRETS")
+fi
 chmod 0600 "$SECRETS"
 read_kv() { grep -E "^$2=" "$1" | head -n1 | cut -d= -f2- | tr -d '"'"'"' \r'; }
 SUPERVISOR_TOKEN="$(read_kv "$SECRETS" SUPERVISOR_TOKEN)"
 OPERATOR_PASSWORD="$(read_kv "$SECRETS" AIRLOCK_OPERATOR_PASSWORD)"
 JUDGE_PASSWORD="$(read_kv "$SECRETS" AIRLOCK_JUDGE_PASSWORD)"
+FORMS_SECRET="$(read_kv "$SECRETS" AIRLOCK_FORMS_SECRET)"
 [[ ${#SUPERVISOR_TOKEN} -ge 16 ]] || { echo "deploy: SUPERVISOR_TOKEN in $SECRETS is too short" >&2; exit 1; }
 INFERENCE_KEY="${VULTR_INFERENCE_API_KEY:-}"
 if [[ -z "$INFERENCE_KEY" && -f "$ENV_FILE" ]]; then INFERENCE_KEY="$(read_kv "$ENV_FILE" VULTR_INFERENCE_API_KEY)"; fi
@@ -246,8 +251,20 @@ AIRLOCK_MODEL_MAX_TOKENS=${AIRLOCK_MODEL_MAX_TOKENS:-16384}
 AIRLOCK_MODEL_REASONING_EFFORT=${AIRLOCK_MODEL_REASONING_EFFORT:-}
 AIRLOCK_OPERATOR_PASSWORD=$OPERATOR_PASSWORD
 AIRLOCK_JUDGE_PASSWORD=$JUDGE_PASSWORD
+AIRLOCK_GENERAL_DIAGNOSTIC_SCRIPTS_DIR=/opt/airlock/app/apps/control/test/fixtures/scripted-general
+AIRLOCK_FIXTURES_ORIGIN=https://forms.$PUBLIC_HOST
+AIRLOCK_FORMS_ORIGINS=https://forms.$PUBLIC_HOST
+AIRLOCK_FORMS_SECRET=$FORMS_SECRET
 EOF
-  "${SSH[@]}" "root@$CONTROL_IP" "systemctl daemon-reload && systemctl restart airlock-control.service"
+  log "writing /etc/airlock/fixtures.env (root, 0600; origin https://forms.$PUBLIC_HOST)"
+  write_env "$CONTROL_IP" /etc/airlock/fixtures.env <<EOF
+AIRLOCK_FIXTURES_ORIGIN=https://forms.$PUBLIC_HOST
+AIRLOCK_FORMS_SECRET=$FORMS_SECRET
+AIRLOCK_FIXTURES_DATA_DIR=/var/lib/airlock/fixtures
+AIRLOCK_FIXTURES_LISTEN=127.0.0.1:3100
+AIRLOCK_TRUST_PROXY=1
+EOF
+  "${SSH[@]}" "root@$CONTROL_IP" "systemctl daemon-reload && systemctl restart airlock-control.service airlock-fixtures.service"
   log "waiting for the control plane on 127.0.0.1:3000"
   READY=0
   for i in $(seq 1 40); do
@@ -270,12 +287,15 @@ EOF
     "${SSH[@]}" "root@$CONTROL_IP" "journalctl -u caddy -n 30 --no-pager" >&2 || true
     exit 1
   fi
-  log "control plane host view: $(curl -fsS -m 10 "https://$PUBLIC_HOST/api/host" | jq -c '{selectedRuntime, devUnsafe, kvmPresent, availableRuntimes}')"
+  # /api/host needs a session now; the public view is liveness plus repair availability.
+  log "control plane: health $(curl -fsS -m 10 "https://$PUBLIC_HOST/api/health" | jq -c .) repair $(curl -fsS -m 10 "https://$PUBLIC_HOST/api/repair-availability" | jq -c '{available, reason, driver}')"
+  log "fixtures: $(curl -fsS -m 10 -o /dev/null -w '%{http_code}' "https://forms.$PUBLIC_HOST/data/regional-sales" || echo unreachable)"
 fi
 
 echo
 echo "Airlock is deployed."
 echo "  public URL        https://$PUBLIC_HOST"
+echo "  demo fixtures     https://forms.$PUBLIC_HOST/data/regional-sales  (disclosed synthetic data; airlock-forms-v1 forms)"
 echo "  model driver      ${DRIVER_VALUE:-unchanged} ${MODEL:+(model $MODEL)}"
 echo "  passwords         $SECRETS  (AIRLOCK_OPERATOR_PASSWORD, AIRLOCK_JUDGE_PASSWORD; judge = hostile panel + preview)"
 echo "  supervisor        http://$SANDBOX_VPC_IP:4300 (VPC only; VM B has no public listener)"
