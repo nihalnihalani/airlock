@@ -202,9 +202,28 @@ export class HttpSupervisorClient implements SupervisorClient {
     };
   }
 
+  /**
+   * Reads are idempotent: a transport failure or timeout is retried once, then reported as
+   * SupervisorUnavailableError naming the supervisor, never as a raw fetch error. A caller-side
+   * abort is reported as an aborted call, not as an unreachable supervisor.
+   */
   private async get<T>(path: string, schema: z.ZodType<T>, signal: AbortSignal | undefined, auth: boolean): Promise<T> {
-    const response = await this.request(path, { method: "GET", headers: auth ? this.headers(false) : { accept: "application/json" } }, DEFAULT_TIMEOUTS.read, signal);
-    return this.decode(response, schema);
+    const headers = auth ? this.headers(false) : { accept: "application/json" };
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (signal?.aborted) throw new SupervisorError("Call aborted", 0);
+      try {
+        const response = await this.request(path, { method: "GET", headers }, DEFAULT_TIMEOUTS.read, signal);
+        return await this.decode(response, schema);
+      } catch (error) {
+        if (error instanceof SupervisorError) throw error;
+        if (signal?.aborted) throw new SupervisorError("Call aborted", 0);
+        lastError = error;
+        if (attempt === 0) await new Promise((r) => setTimeout(r, this.retryDelayMs));
+      }
+    }
+    const message = lastError instanceof Error ? lastError.message : "unreachable";
+    throw new SupervisorUnavailableError(`Supervisor unreachable at ${this.baseUrl} (${path}): ${message.slice(0, 200)}`);
   }
 
   private async mutate<T>(

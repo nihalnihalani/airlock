@@ -45,6 +45,29 @@ describe("supervisor client", () => {
     expect(down.seen).toHaveLength(3);
   });
 
+  test("a transport failure on a read (host, getAttempt) surfaces as SupervisorUnavailableError naming the supervisor, never a raw fetch error", async () => {
+    const down = client(() => {
+      throw new TypeError("Unable to connect. Is the computer able to access the url?");
+    });
+    const error = (await down.c.host().catch((e) => e as Error)) as Error;
+    expect(error).toBeInstanceOf(SupervisorUnavailableError);
+    expect(error.message).toContain("http://sup.test:4300");
+    expect(error.message).toContain("Unable to connect");
+    await expect(down.c.getAttempt("att-1")).rejects.toBeInstanceOf(SupervisorUnavailableError);
+    // Reads are idempotent: the read is retried once before giving up.
+    expect(down.seen.length).toBeGreaterThanOrEqual(2);
+    // A caller-side cancellation is reported as an aborted call, not as an unreachable supervisor.
+    const controller = new AbortController();
+    const hanging = (async (_input: string | URL | Request, init?: RequestInit) =>
+      new Promise<Response>((_, reject) => init?.signal?.addEventListener("abort", () => reject(new Error("The operation was aborted")), { once: true }))) as typeof fetch;
+    const slow = { c: new HttpSupervisorClient({ baseUrl: "http://sup.test:4300/", token: "t".repeat(20), fetch: hanging, retries: 0, retryDelayMs: 0 }) };
+    const pending = slow.c.host(controller.signal).catch((e) => e as Error);
+    controller.abort();
+    const aborted = (await pending) as Error;
+    expect(aborted).not.toBeInstanceOf(SupervisorUnavailableError);
+    expect(aborted.message).toContain("aborted");
+  });
+
   test("a transport failure is retried with the SAME operationId", async () => {
     const { c, seen } = client((_seen, n) => {
       if (n === 1) throw new TypeError("fetch failed");
