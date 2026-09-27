@@ -1,0 +1,21 @@
+/tabulate/version.py
+
+build
+dist
+.tox
+*~
+*.pyc
+/tabulate.egg-info/
+*.egg*
+*.pyc
+.*
+build/
+.coverage
+coverage.xml
+dist/
+doc/changelog.rst
+venv*
+website-build/
+## Unit test / coverage reports
+.coverage
+.tox
