@@ -108,7 +108,7 @@ export function fakeRunner(overrides: Partial<Record<string, (req: RunnerRequest
 export const PROXY_HINT = { value: "" };
 
 export function defaultHandler(
-  overrides: Partial<Record<"uname" | "hostname" | "probe" | "materialize" | "collector" | "adapter" | "author" | "head" | "ready" | "count" | "browserProbe", ScriptedExec>> & { runner?: (req: RunnerRequest) => ScriptedExec } = {},
+  overrides: Partial<Record<"uname" | "hostname" | "probe" | "materialize" | "collector" | "outputs" | "adapter" | "author" | "head" | "ready" | "count" | "browserProbe", ScriptedExec>> & { runner?: (req: RunnerRequest) => ScriptedExec } = {},
 ): ExecHandler {
   const runner = overrides.runner ?? fakeRunner();
   return (_container, spec) => {
@@ -117,14 +117,15 @@ export function defaultHandler(
       const req = JSON.parse(new TextDecoder().decode(spec.stdin ?? new Uint8Array())) as RunnerRequest;
       return runner(req);
     }
+    if (cmd.includes("stdout.write('ready")) return overrides.ready ?? { stdout: "ready\n" };
     if (cmd.includes("node -e")) return overrides.browserProbe ?? { stdout: `${BROWSER_PROBE_OK}\n` };
-    if (cmd.includes("sys.stdout.write('ready")) return overrides.ready ?? { stdout: "ready\n" };
     if (cmd.includes("airlock-blast")) return overrides.count ?? { stdout: "16\n" };
     if (cmd.includes("/bin/uname")) return overrides.uname ?? { stdout: "Linux fake 6.1.0 #1 SMP x86_64 GNU/Linux\n" };
     if (cmd.includes("/bin/hostname")) return overrides.hostname ?? { stdout: "sandbox\n" };
     if (cmd.includes("probe.sh")) return overrides.probe ?? { stdout: `${PROBE_OK}\n` };
     if (cmd.includes("materialize.py")) return overrides.materialize ?? { stdout: '{"materialized": 10, "replaced": []}\n' };
     if (cmd.includes("collector.py")) return overrides.collector ?? { stdout: JSON.stringify({ schemaVersion: 1, files: [], rejected: [] }) };
+    if (cmd.includes("collect_outputs.py")) return overrides.outputs ?? { stdout: JSON.stringify({ schemaVersion: 1, files: [], rejected: [] }) };
     if (cmd.includes("adapter.py")) return overrides.adapter ?? { stdout: "" };
     if (cmd.includes("/usr/bin/head")) return overrides.head ?? { stdout: "file contents" };
     return overrides.author ?? { stdout: "1\n" };
@@ -340,6 +341,8 @@ export class FakeDocker implements DockerApi {
    * A landed write is recorded as `putArchive-landed <name>`.
    */
   archive: { delayMs?: number; hang?: boolean; ignoreAbort?: boolean; refuse?: boolean } = {};
+  /** Every archive that landed, with its bytes (tests parse the tar headers). */
+  readonly archives: { container: string; path: string; tar: Uint8Array }[] = [];
   async putArchive(name: string, tar: Uint8Array, path: string, signal?: AbortSignal) {
     this.record(`putArchive ${name} ${path} ${tar.length}b`);
     // Same contract as the runtime adapter (runtime.ts): 404 → not_found, other 4xx → invalid_body.
@@ -355,6 +358,7 @@ export class FakeDocker implements DockerApi {
     // Docker accepts archive writes into a stopped container: only a removed one refuses.
     if (!this.containers.has(name)) throw Object.assign(new Error("no such container"), { statusCode: 404 });
     this.record(`putArchive-landed ${name}`);
+    this.archives.push({ container: name, path, tar });
   }
   async exec(name: string, spec: ExecSpec, signal: AbortSignal): Promise<ExecSession> {
     this.record(`exec ${name} ${spec.cmd.join(" ")}`);
@@ -371,4 +375,23 @@ function matches(labels: Record<string, string>, filters: string[]): boolean {
     const [k, v] = f.split("=");
     return k !== undefined && labels[k] === v;
   });
+}
+
+/** Parse ustar headers written by src/tar.ts: name, mode, uid, gid, type and file bytes. */
+export function tarEntries(tar: Uint8Array): { path: string; mode: number; uid: number; gid: number; type: "file" | "dir"; bytes: Uint8Array }[] {
+  const out: { path: string; mode: number; uid: number; gid: number; type: "file" | "dir"; bytes: Uint8Array }[] = [];
+  const dec = new TextDecoder();
+  const str = (a: number, b: number) => dec.decode(tar.subarray(a, b)).replace(/\0.*$/s, "");
+  let off = 0;
+  while (off + 512 <= tar.length) {
+    if (tar.subarray(off, off + 512).every((b) => b === 0)) break;
+    const name = str(off, off + 100);
+    const prefix = str(off + 345, off + 500);
+    const size = Number.parseInt(str(off + 124, off + 136), 8);
+    const typeflag = String.fromCharCode(tar[off + 156] ?? 48);
+    const full = (prefix ? `${prefix}/${name}` : name).replace(/\/$/, "");
+    out.push({ path: full, mode: Number.parseInt(str(off + 100, off + 108), 8), uid: Number.parseInt(str(off + 108, off + 116), 8), gid: Number.parseInt(str(off + 116, off + 124), 8), type: typeflag === "5" ? "dir" : "file", bytes: tar.slice(off + 512, off + 512 + size) });
+    off += 512 + Math.ceil(size / 512) * 512;
+  }
+  return out;
 }

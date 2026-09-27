@@ -201,8 +201,13 @@ def read_file(dir_fd: int, name: bytes, st: os.stat_result, ext: str, file_cap: 
                 raise Rejected("not valid UTF-8 (truncated sequence)") from None
             if ext == ".json":
                 text_parts.append(tail)
+                text = "".join(text_parts)
+                # An explicit nesting bound, not the interpreter's recursion limit (which differs
+                # between Python versions): deeper documents are refused before parsing.
+                if json_depth(text) > MAX_JSON_DEPTH:
+                    raise Rejected(f"JSON nested deeper than {MAX_JSON_DEPTH}")
                 try:
-                    json.loads("".join(text_parts))
+                    json.loads(text)
                 except (ValueError, RecursionError):
                     raise Rejected("not valid JSON") from None
         else:
@@ -210,6 +215,32 @@ def read_file(dir_fd: int, name: bytes, st: os.stat_result, ext: str, file_cap: 
     finally:
         os.close(fd)
     return {"byteLength": length, "sha256": digest.hexdigest(), "contentBase64": "".join(b64), "mediaType": MEDIA_TYPES[ext]}
+
+
+MAX_JSON_DEPTH = 64
+
+
+def json_depth(text: str) -> int:
+    """Maximum bracket nesting outside string literals (a lexical scan; parsing validates the rest)."""
+    depth = deepest = 0
+    in_string = escaped = False
+    for ch in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+        elif ch == '"':
+            in_string = True
+        elif ch in "[{":
+            depth += 1
+            if depth > deepest:
+                deepest = depth
+        elif ch in "]}":
+            depth -= 1
+    return deepest
 
 
 class Walker:

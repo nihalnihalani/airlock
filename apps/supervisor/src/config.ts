@@ -44,6 +44,40 @@ export interface SupervisorConfig {
    * AIRLOCK_BROWSER_IMAGE is not set: `role: "browser"` is then refused as unsupported.
    */
   browser: BrowserPlaneConfig | undefined;
+  /**
+   * The general code sandboxes (milestone 4): `analysis` (offline Python data image) and `node`
+   * (offline Node image). Each is undefined when its image variable is not set, and the role is then
+   * refused as unsupported. A node plane requires the analysis plane: its outputs are collected with
+   * the analysis image (runtime/outputs/collect_outputs.py).
+   */
+  code: { analysis: CodeRuntimeConfig | undefined; node: CodeRuntimeConfig | undefined };
+}
+
+export type CodeRole = "analysis" | "node";
+
+/**
+ * One code runtime profile. Like the browser profile it is configuration, not a repository profile:
+ * a request selects it with `profileId` equal to the role. Caps are the supervisor's, never the caller's.
+ */
+export interface CodeRuntimeConfig {
+  role: CodeRole;
+  image: string;
+  /** Pinned `sha256:` image ID (AIRLOCK_<ROLE>_IMAGE_ID); required outside dev-unsafe. */
+  imageId: string | undefined;
+  cpus: number;
+  memoryBytes: number;
+  pidsLimit: number;
+  commandTimeoutMs: number;
+  attemptTimeoutMs: number;
+  /** Size of the per-attempt /workspace tmpfs volume. */
+  workspaceBytes: number;
+  /** Captured stdout+stderr per exec. */
+  outputBytes: number;
+  /** One `write` under code/ and one bounded `read` of code/ or outputs/. */
+  maxFileBytes: number;
+  /** One `put` under inputs/ (decoded bytes) and the per-attempt total of every put. */
+  maxInputFileBytes: number;
+  maxInputTotalBytes: number;
 }
 
 /**
@@ -208,6 +242,13 @@ export function loadConfig(env: Record<string, string | undefined>, repoRoot: st
 
   const browser = loadBrowserPlane(env, repoRoot, { production, devUnsafe: effectiveDevUnsafe });
   if (!browser.ok) return browser;
+  const analysis = loadCodePlane(env, "analysis", { production, devUnsafe: effectiveDevUnsafe });
+  if (!analysis.ok) return analysis;
+  const node = loadCodePlane(env, "node", { production, devUnsafe: effectiveDevUnsafe });
+  if (!node.ok) return node;
+  if (node.value && !analysis.value) {
+    return { ok: false, reason: "AIRLOCK_NODE_IMAGE is set without AIRLOCK_ANALYSIS_IMAGE: node outputs are collected with the analysis image (runtime/outputs/collect_outputs.py)." };
+  }
 
   return {
     ok: true,
@@ -230,6 +271,63 @@ export function loadConfig(env: Record<string, string | undefined>, repoRoot: st
       instanceId,
       capacity: { memoryBytes: memoryBudget, pids: pidsBudget, scratchBytes: scratchBudget, maxSandboxes, vmOverheadBytes: vmOverhead },
       browser: browser.value,
+      code: { analysis: analysis.value, node: node.value },
+    },
+  };
+}
+
+/** Defaults per code role (research/40 Stage 3/4; measure before advertising). */
+export const CODE_DEFAULTS: Record<CodeRole, { memoryBytes: number; workspaceBytes: number }> = {
+  analysis: { memoryBytes: 1024 ** 3, workspaceBytes: 256 * 1024 ** 2 },
+  node: { memoryBytes: 512 * 1024 ** 2, workspaceBytes: 256 * 1024 ** 2 },
+};
+
+/**
+ * AIRLOCK_ANALYSIS_* / AIRLOCK_NODE_*: IMAGE (unset = role off), IMAGE_ID (pin), CPUS, MEMORY_BYTES,
+ * PIDS, COMMAND_TIMEOUT_MS, ATTEMPT_TIMEOUT_MS, WORKSPACE_BYTES, OUTPUT_BYTES.
+ */
+function loadCodePlane(
+  env: Record<string, string | undefined>,
+  role: CodeRole,
+  mode: { production: boolean; devUnsafe: boolean },
+): { ok: true; value: CodeRuntimeConfig | undefined } | { ok: false; reason: string } {
+  const prefix = `AIRLOCK_${role.toUpperCase()}`;
+  const image = env[`${prefix}_IMAGE`]?.trim();
+  if (!image) return { ok: true, value: undefined };
+  if (!IMAGE_REF.test(image)) return { ok: false, reason: `${prefix}_IMAGE is not an image reference.` };
+  const imageId = env[`${prefix}_IMAGE_ID`]?.trim() || undefined;
+  if (imageId !== undefined && !IMAGE_ID.test(imageId)) return { ok: false, reason: `${prefix}_IMAGE_ID must be a \`sha256:<64 hex>\` image ID.` };
+  if (imageId === undefined && (mode.production || !mode.devUnsafe)) {
+    return { ok: false, reason: `${prefix}_IMAGE_ID is not set. Outside dev-unsafe the supervisor enforces the built ${role} image ID on every inspection; deploy captures it after the build.` };
+  }
+  const n = (name: string, fallback: number, min: number, max: number): number | string => {
+    const value = parseBytes(env[`${prefix}_${name}`], fallback);
+    return value === undefined || value < min || value > max ? `${prefix}_${name} must be an integer between ${min} and ${max}.` : value;
+  };
+  const cpusRaw = env[`${prefix}_CPUS`]?.trim();
+  const cpus = !cpusRaw ? 1 : /^\d+(\.\d+)?$/.test(cpusRaw) && Number(cpusRaw) >= 0.1 && Number(cpusRaw) <= 64 ? Number(cpusRaw) : `${prefix}_CPUS must be a CPU count between 0.1 and 64.`;
+  const values = {
+    cpus,
+    memoryBytes: n("MEMORY_BYTES", CODE_DEFAULTS[role].memoryBytes, 128 * 1024 ** 2, 64 * 1024 ** 3),
+    pidsLimit: n("PIDS", 128, 16, 4096),
+    commandTimeoutMs: n("COMMAND_TIMEOUT_MS", 30_000, 1_000, 600_000),
+    attemptTimeoutMs: n("ATTEMPT_TIMEOUT_MS", 15 * 60_000, 60_000, 6 * 3600_000),
+    workspaceBytes: n("WORKSPACE_BYTES", CODE_DEFAULTS[role].workspaceBytes, 64 * 1024 ** 2, 8 * 1024 ** 3),
+    outputBytes: n("OUTPUT_BYTES", 64 * 1024, 1024, 4 * 1024 ** 2),
+  };
+  for (const value of Object.values(values)) if (typeof value === "string") return { ok: false, reason: value };
+  const v = values as { [K in keyof typeof values]: number };
+  if (v.workspaceBytes < 48 * 1024 ** 2) return { ok: false, reason: `${prefix}_WORKSPACE_BYTES must hold the 32 MiB input quota plus room for outputs.` };
+  return {
+    ok: true,
+    value: {
+      role,
+      image,
+      imageId,
+      ...v,
+      maxFileBytes: 1024 * 1024,
+      maxInputFileBytes: 8 * 1024 * 1024,
+      maxInputTotalBytes: 32 * 1024 * 1024,
     },
   };
 }

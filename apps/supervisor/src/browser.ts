@@ -22,6 +22,7 @@ import {
   type RuntimeInspection,
   type RuntimeName,
 } from "@airlock/contracts";
+import { DownloadChunkResult, DownloadListResult, type RunnerFileOp, UploadResult } from "./browser-files";
 import type { BrowserPlaneConfig } from "./config";
 import type { ContainerCreateSpec, ContainerDetail, NetworkDetail } from "./docker-api";
 import type { EffectiveCheck } from "./runtime";
@@ -363,11 +364,19 @@ export function toInspection(
 // ---------------------------------------------------------------------------------------------
 
 /** The per-operation budget (research/40 Stage 1 starting points). */
-export function opBudgetMs(op: BrowserOp["op"]): number {
+export function opBudgetMs(op: RunnerOpName): number {
   if (op === "navigate") return 30_000;
   if (op === "screenshot") return 20_000;
+  // up to 10 s waiting for an in-flight download, then reading a 2 MiB chunk
+  if (op === "download.read") return 20_000;
+  // click + up to 10 s for the file chooser + settle
+  if (op === "upload") return 25_000;
   return 15_000;
 }
+
+/** Every op name the runner accepts (contracts BrowserOp plus the file operations). */
+export type RunnerOpName = BrowserOp["op"] | RunnerFileOp["op"];
+export type RunnerOp = BrowserOp | RunnerFileOp;
 
 /**
  * Timeouts for one runner call, nested so the innermost fires first: the client's own transport
@@ -375,7 +384,7 @@ export function opBudgetMs(op: BrowserOp["op"]): number {
  * errors, not transport loss), coreutils `timeout` in the container (+8 s), and the supervisor's
  * hard stream deadline (+12 s). Anything past the client timeout is loss of control.
  */
-export function opTimeouts(op: BrowserOp["op"]): { clientMs: number; containerSeconds: number; supervisorMs: number } {
+export function opTimeouts(op: RunnerOpName): { clientMs: number; containerSeconds: number; supervisorMs: number } {
   const budget = opBudgetMs(op);
   return { clientMs: budget + 5_000, containerSeconds: Math.ceil((budget + 8_000) / 1000), supervisorMs: budget + 12_000 };
 }
@@ -383,7 +392,7 @@ export function opTimeouts(op: BrowserOp["op"]): { clientMs: number; containerSe
 /** Response bytes allowed on stdout: the protocol's 4 MiB plus framing margin. */
 export const RESPONSE_CAP_BYTES = 4 * 1024 * 1024 + 64 * 1024;
 
-export function runnerRequest(operationId: string, op: BrowserOp): Uint8Array {
+export function runnerRequest(operationId: string, op: RunnerOp): Uint8Array {
   const request: Record<string, unknown> = { schemaVersion: 1, id: operationId, op: op.op };
   if ("args" in op && op.args !== undefined) request.args = op.args;
   return new TextEncoder().encode(JSON.stringify(request));
@@ -417,7 +426,7 @@ export type ParsedReply =
  * fails its schema, a screenshot whose bytes do not match its digest — is interrupted.
  */
 export function classifyReply(
-  op: BrowserOp,
+  op: RunnerOp,
   operationId: string,
   outcome: { status: string; exitCode: number | null; stdout: string; truncated: boolean; controlLost: boolean },
 ): ParsedReply {
@@ -451,11 +460,14 @@ function parseLine(stdout: string): BrowserResponse | null {
   return parsed.success ? parsed.data : null;
 }
 
-const GENERATION_OPS = new Set(["navigate", "click", "type", "key", "scroll", "tabs.list", "tabs.switch", "tabs.close"]);
+const GENERATION_OPS = new Set(["navigate", "click", "type", "key", "scroll", "tabs.list", "tabs.switch", "tabs.close", "upload"]);
 
 export function validateResult(op: string, result: unknown): string | undefined {
   if (op === "status") return issue(BrowserStatusResult.safeParse(result));
   if (op === "observe") return issue(BrowserObserveResult.safeParse(result));
+  if (op === "download.list") return issue(DownloadListResult.safeParse(result));
+  if (op === "download.read") return issue(DownloadChunkResult.safeParse(result));
+  if (op === "upload") return issue(UploadResult.safeParse(result));
   if (op === "screenshot") {
     const parsed = BrowserScreenshotResult.safeParse(result);
     if (!parsed.success) return issue(parsed);

@@ -67,7 +67,7 @@ describe("A: inspection image id and typed outputs", () => {
     core.stop();
   });
 
-  test("milestone-4 vocabulary is refused until supported: author tool put, roles analysis/node", async () => {
+  test("milestone-4 vocabulary on a supervisor without code runtimes: put refused on repair attempts, analysis/node unsupported", async () => {
     const dir = tempDir();
     const { core } = makeCore(new FakeDocker(), undefined, { dir });
     await create(core);
@@ -77,9 +77,9 @@ describe("A: inspection image id and typed outputs", () => {
     const body = { ref: REF, args, operation: { operationId: "p1", requestDigest: await requestDigestOf({ ref: REF, args, operation: { operationId: "p1" } }) } };
     const put = await app.request("/attempts/att1/tool", { method: "POST", headers: auth, body: JSON.stringify(body) });
     expect(put.status).toBe(400);
-    expect(((await put.json()) as { error: string }).error).toMatch(/not supported yet/);
+    expect(((await put.json()) as { error: string }).error).toMatch(/analysis and node attempts only/);
     const analysis = { ref: { ...REF, attemptId: "an1" }, profileId: PROFILE.id, role: "analysis" as const, absoluteDeadline: future(60_000) };
-    expect(err(await core.createAttempt({ ...analysis, operation: await operationFor("an1", analysis) }).catch((e) => e)).code).toBe("invalid_body");
+    expect(err(await core.createAttempt({ ...analysis, operation: await operationFor("an1", analysis) }).catch((e) => e)).code).toBe("unsupported_profile");
     core.stop();
   });
 });

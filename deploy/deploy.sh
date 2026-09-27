@@ -13,7 +13,9 @@
 #      its image ID (AIRLOCK_RUNTIME_IMAGE_ID, enforced by the supervisor on every inspection), write
 #      /etc/airlock/supervisor.env (root, 0600; also AIRLOCK_INSTANCE_ID = the sandbox instance id from
 #      state.json), build airlock-egress:dev and airlock-browser:dev and pin their IDs
-#      (AIRLOCK_EGRESS_IMAGE_ID / AIRLOCK_BROWSER_IMAGE_ID), (re)apply the egress guard, restart airlock-supervisor, wait for /health on the VPC address, log the /host check.
+#      (AIRLOCK_EGRESS_IMAGE_ID / AIRLOCK_BROWSER_IMAGE_ID), build airlock-runtime-analysis:dev and
+#      airlock-runtime-node:dev (runtime/analysis/build.sh, runtime/node/build.sh) and pin their IDs
+#      (AIRLOCK_ANALYSIS_IMAGE_ID / AIRLOCK_NODE_IMAGE_ID), (re)apply the egress guard, restart airlock-supervisor, wait for /health on the VPC address, log the /host check.
 #   4. VM A: deploy/host/control-host.sh (caddy, bun, service user, unit), `bun install --frozen-lockfile`,
 #      `bun run --cwd apps/web build`, write /etc/airlock/control.env (root, 0600; AIRLOCK_PRODUCTION=1, AIRLOCK_INSTANCE_ID, AIRLOCK_DIAGNOSTIC_SCRIPTS_DIR), restart airlock-control,
 #      wait for /api/session on 127.0.0.1:3000 and then over https on the public name.
@@ -136,6 +138,16 @@ if [[ -z "$ONLY" || "$ONLY" == "sandbox" ]]; then
   BROWSER_IMAGE_ID="$("${SSH[@]}" "root@$SANDBOX_IP" "docker image inspect --format '{{.Id}}' airlock-browser:dev")"
   [[ "$EGRESS_IMAGE_ID" =~ ^sha256:[a-f0-9]{64}$ && "$BROWSER_IMAGE_ID" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "deploy: could not read the browser/egress image IDs on VM B" >&2; exit 1; }
   log "browser image ID: $BROWSER_IMAGE_ID; egress image ID: $EGRESS_IMAGE_ID"
+  # Code sandboxes (milestone 4): offline analysis (Python) and Node images, built from hash-locked
+  # dependencies and pinned by ID like the others. The node build's probe-parity test needs node on
+  # the build host; VM B has none, so it is skipped here (SKIP_PARITY=1) and enforced in development
+  # builds, where runtime/node/build.sh runs it before every build.
+  log "building the code-sandbox images on VM B (runtime/analysis, runtime/node)"
+  "${SSH[@]}" "root@$SANDBOX_IP" "cd /opt/airlock/app && runtime/analysis/build.sh dev >/dev/null && SKIP_PARITY=1 runtime/node/build.sh dev >/dev/null"
+  ANALYSIS_IMAGE_ID="$("${SSH[@]}" "root@$SANDBOX_IP" "docker image inspect --format '{{.Id}}' airlock-runtime-analysis:dev")"
+  NODE_IMAGE_ID="$("${SSH[@]}" "root@$SANDBOX_IP" "docker image inspect --format '{{.Id}}' airlock-runtime-node:dev")"
+  [[ "$ANALYSIS_IMAGE_ID" =~ ^sha256:[a-f0-9]{64}$ && "$NODE_IMAGE_ID" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "deploy: could not read the analysis/node image IDs on VM B" >&2; exit 1; }
+  log "analysis image ID: $ANALYSIS_IMAGE_ID; node image ID: $NODE_IMAGE_ID"
   # the host firewall for the per-attempt bridges (installed by sandbox-host.sh; the tree now has the script)
   "${SSH[@]}" "root@$SANDBOX_IP" "install -m 0755 /opt/airlock/app/deploy/host/airlock-egress-guard.sh /usr/local/sbin/airlock-egress-guard && systemctl enable airlock-egress-guard.service >/dev/null 2>&1; systemctl restart airlock-egress-guard.service && iptables -S AIRLOCK-FWD | head -3"
   log "writing /etc/airlock/supervisor.env (root, 0600)"
@@ -165,6 +177,16 @@ AIRLOCK_BROWSER_MEMORY_BYTES=${AIRLOCK_BROWSER_MEMORY_BYTES:-}
 AIRLOCK_BROWSER_PIDS=${AIRLOCK_BROWSER_PIDS:-}
 AIRLOCK_BROWSER_SHM_BYTES=${AIRLOCK_BROWSER_SHM_BYTES:-}
 AIRLOCK_BROWSER_TMP_BYTES=${AIRLOCK_BROWSER_TMP_BYTES:-}
+AIRLOCK_ANALYSIS_IMAGE=airlock-runtime-analysis:dev
+AIRLOCK_ANALYSIS_IMAGE_ID=$ANALYSIS_IMAGE_ID
+AIRLOCK_ANALYSIS_MEMORY_BYTES=${AIRLOCK_ANALYSIS_MEMORY_BYTES:-}
+AIRLOCK_ANALYSIS_COMMAND_TIMEOUT_MS=${AIRLOCK_ANALYSIS_COMMAND_TIMEOUT_MS:-}
+AIRLOCK_ANALYSIS_WORKSPACE_BYTES=${AIRLOCK_ANALYSIS_WORKSPACE_BYTES:-}
+AIRLOCK_NODE_IMAGE=airlock-runtime-node:dev
+AIRLOCK_NODE_IMAGE_ID=$NODE_IMAGE_ID
+AIRLOCK_NODE_MEMORY_BYTES=${AIRLOCK_NODE_MEMORY_BYTES:-}
+AIRLOCK_NODE_COMMAND_TIMEOUT_MS=${AIRLOCK_NODE_COMMAND_TIMEOUT_MS:-}
+AIRLOCK_NODE_WORKSPACE_BYTES=${AIRLOCK_NODE_WORKSPACE_BYTES:-}
 EOF
   "${SSH[@]}" "root@$SANDBOX_IP" "systemctl daemon-reload && systemctl restart airlock-supervisor.service"
   log "waiting for the supervisor on http://$SANDBOX_VPC_IP:4300/health (VPC only)"

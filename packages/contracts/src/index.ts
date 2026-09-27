@@ -1142,8 +1142,34 @@ export const BrowserStatusResult = z.object({
 });
 export type BrowserStatusResult = z.infer<typeof BrowserStatusResult>;
 
+/**
+ * Bounded file transfer through the browser runner: downloads land in a per-attempt tmpfs with
+ * count/size/total limits enforced while in progress; `download.read` returns the bytes (the
+ * supervisor re-verifies size and sha256); `upload` places owner-authorized bytes (sha256-checked)
+ * for a file input — never an arbitrary host path.
+ */
+export const BrowserFileOp = z.discriminatedUnion("op", [
+  z.object({ op: z.literal("download.list"), args: z.object({}).strict().optional() }),
+  z.object({ op: z.literal("download.read"), args: z.object({ downloadId: z.string().regex(/^dl-[0-9]{1,6}$/) }).strict() }),
+  z.object({
+    op: z.literal("upload"),
+    args: z
+      .object({
+        ref: browserRef,
+        generation: browserGeneration,
+        filename: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/),
+        artifactSha256: sha256Hex,
+        contentBase64: z.string().max(Math.ceil((10 * 1024 * 1024) / 3) * 4),
+      })
+      .strict(),
+  }),
+]);
+export type BrowserFileOp = z.infer<typeof BrowserFileOp>;
+export const BrowserAnyOp = z.union([BrowserOp, BrowserFileOp]);
+export type BrowserAnyOp = z.infer<typeof BrowserAnyOp>;
+
 /** Supervisor route body: one runner operation on a live browser attempt. */
-export const BrowserOpRequest = z.object({ ref: AttemptRef, operation: Operation, request: BrowserOp });
+export const BrowserOpRequest = z.object({ ref: AttemptRef, operation: Operation, request: BrowserAnyOp });
 /**
  * Supervisor reply: the runner's response plus the supervisor's own observation of the exec.
  * `interrupted` means the runner was lost mid-operation: the outcome is unknown and the attempt

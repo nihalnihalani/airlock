@@ -4,7 +4,9 @@
 // profile under /tmp (tmpfs) that dies with the container. Chromium's own sandbox is enabled
 // (`chromiumSandbox: true`; the runner refuses to start if Playwright would add --no-sandbox).
 // All traffic goes to $AIRLOCK_PROXY with no bypass (not even loopback); QUIC is disabled and WebRTC
-// may not use non-proxied UDP. Downloads are refused, service workers blocked, extensions disabled.
+// may not use non-proxied UDP. Service workers are blocked, extensions disabled. Downloads are accepted
+// into a bounded tmpfs directory (count, per-file in-progress and total limits; downloads.mjs) and read
+// back in chunks; uploads are set only from files the supervisor placed under /tmp/uploads.
 //
 // The only interface is a unix socket (default /run/airlock/runner.sock, dir 0700, socket 0600)
 // that accepts ONE bounded JSON request line per connection and answers ONE bounded JSON line.
@@ -23,7 +25,8 @@
 // of the Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
 // Airlock changes: single credential-free context per container (no bot ids, no HTTP API, no
 // COMPUTER_TOKEN), sandbox forced on, proxy-only networking, popups tracked but never followed,
-// explicit dialog/file-chooser/download refusal, generation-bound refs, unix-socket framing.
+// explicit dialog refusal, file choosers cancelled unless a supervisor-placed upload is pending for
+// that control, bounded downloads, generation-bound refs, unix-socket framing.
 
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -31,8 +34,13 @@ import net from "node:net";
 import path from "node:path";
 import { chromium } from "playwright-core";
 import { parseAriaSnapshot, cutAtCodeUnits } from "./aria.mjs";
+import { DownloadLedger } from "./downloads.mjs";
 import {
+  DOWNLOAD_CHUNK_BYTES,
+  MAX_DOWNLOAD_BYTES,
   MAX_REQUEST_BYTES,
+  MAX_UPLOAD_BYTES,
+  UPLOAD_DIR,
   MAX_SCREENSHOT_BYTES,
   MUTATING_OPS,
   VIEWPORT,
@@ -43,6 +51,7 @@ import {
   okResponse,
   parseRequest,
   pngSize,
+  sniffMediaType,
 } from "./protocol.mjs";
 import { SessionState, StaleReference } from "./state.mjs";
 
@@ -68,6 +77,12 @@ if (!/^http:\/\/[A-Za-z0-9.-]{1,253}:[0-9]{1,5}$/.test(PROXY)) {
 // ---------------------------------------------------------------------------------------------
 
 const profileDir = fs.mkdtempSync(path.join("/tmp", "airlock-profile-"));
+// Chromium writes partial downloads here (named by GUID); completed files move to DOWNLOAD_DIR by id.
+const DOWNLOAD_RAW_DIR = fs.mkdtempSync(path.join("/tmp", "airlock-downloads-raw-"));
+const DOWNLOAD_DIR = fs.mkdtempSync(path.join("/tmp", "airlock-downloads-"));
+fs.mkdirSync(UPLOAD_DIR, { recursive: true, mode: 0o700 });
+const DOWNLOAD_POLL_MS = 100;
+const UPLOAD_CHOOSER_WAIT_MS = 10_000;
 const LAUNCH_ARGS = [
   `--proxy-server=${PROXY}`,
   // Chromium bypasses the proxy for loopback implicitly; `<-loopback>` removes that bypass.
@@ -93,7 +108,8 @@ try {
     chromiumSandbox: true,
     args: LAUNCH_ARGS,
     viewport: VIEWPORT,
-    acceptDownloads: false,
+    acceptDownloads: true,
+    downloadsPath: DOWNLOAD_RAW_DIR,
     serviceWorkers: "block",
     ignoreHTTPSErrors: false,
     bypassCSP: false,
@@ -147,14 +163,117 @@ function track(page, initial) {
     dialog.dismiss().catch(() => {});
   });
   page.on("filechooser", (chooser) => {
-    // Nothing is ever set on the chooser, so the selection is cancelled.
+    // Only an `upload` op in progress for THIS page may answer a chooser, once, with the file the
+    // supervisor placed. Every other chooser gets nothing set, so the selection is cancelled.
+    const pending = pendingUpload;
+    if (pending && pending.page === page && !pending.used) {
+      pending.used = true;
+      event({ type: "filechooser", action: "uploaded", multiple: chooser.isMultiple(), tabId: state.tabIdOf(page), uploadId: pending.uploadId, filename: pending.filename });
+      chooser.setFiles(pending.file, { timeout: ACTION_TIMEOUT_MS }).then(pending.resolve, pending.reject);
+      return;
+    }
     event({ type: "filechooser", action: "cancelled", multiple: chooser.isMultiple(), tabId: state.tabIdOf(page) });
   });
-  page.on("download", (download) => {
-    event({ type: "download", action: "cancelled", suggestedFilename: cutAtCodeUnits(download.suggestedFilename(), 200), tabId: state.tabIdOf(page) });
-    download.cancel().catch(() => {});
-  });
+  page.on("download", (download) => handleDownload(download, page));
   page.on("crash", () => event({ type: "page_crashed", tabId: state.tabIdOf(page) }));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Downloads (C16): admitted up to the count limit, watched while in progress, checked on completion.
+// ---------------------------------------------------------------------------------------------
+
+const ledger = new DownloadLedger();
+const inFlight = new Map(); // downloadId -> Playwright Download
+let downloadMonitor = null;
+/** Set while an `upload` op waits for a file chooser on one page. */
+let pendingUpload = null;
+
+function partialSizes() {
+  const sizes = [];
+  for (const name of fs.readdirSync(DOWNLOAD_RAW_DIR)) {
+    try {
+      const st = fs.lstatSync(path.join(DOWNLOAD_RAW_DIR, name));
+      if (st.isFile()) sizes.push(st.size);
+    } catch {}
+  }
+  return sizes;
+}
+
+function cancelInFlight(reason) {
+  for (const [downloadId, download] of inFlight) {
+    if (ledger.cancel(downloadId, reason)) {
+      const record = ledger.get(downloadId);
+      event({ type: "download", action: "cancelled", downloadId, reason, suggestedFilename: record.suggestedFilename, tabId: record.tabId });
+      log("download_cancelled", { downloadId, reason });
+    }
+    download.cancel().catch(() => {});
+  }
+}
+
+function watchDownloads() {
+  if (downloadMonitor) return;
+  downloadMonitor = setInterval(() => {
+    if (inFlight.size === 0) {
+      clearInterval(downloadMonitor);
+      downloadMonitor = null;
+      return;
+    }
+    let reason = null;
+    try { reason = ledger.progress(partialSizes()); } catch (error) { reason = "monitor_error"; }
+    if (reason) cancelInFlight(reason);
+  }, DOWNLOAD_POLL_MS);
+}
+
+function handleDownload(download, page) {
+  const record = ledger.begin({
+    suggestedFilename: boundMessage(cutAtCodeUnits(download.suggestedFilename(), 200)),
+    url: cutAtCodeUnits(download.url(), 2048),
+    tabId: state.tabIdOf(page),
+  });
+  const { downloadId } = record;
+  if (record.state !== "in_progress") {
+    event({ type: "download", action: "cancelled", downloadId, reason: record.reason, suggestedFilename: record.suggestedFilename, tabId: record.tabId });
+    download.cancel().catch(() => {});
+    download.delete().catch(() => {});
+    return;
+  }
+  inFlight.set(downloadId, download);
+  watchDownloads();
+  log("download_started", { downloadId, url: record.url.slice(0, 200) });
+  record.done = (async () => {
+    const failure = await download.failure().catch((error) => error?.message ?? "failed");
+    inFlight.delete(downloadId);
+    try {
+      if (ledger.get(downloadId)?.state !== "in_progress") return; // cancelled by the monitor
+      if (failure) {
+        ledger.fail(downloadId, failure);
+        event({ type: "download", action: "failed", downloadId, reason: boundMessage(failure).slice(0, 200), suggestedFilename: record.suggestedFilename, tabId: record.tabId });
+        return;
+      }
+      const raw = await download.path();
+      const st = fs.lstatSync(raw);
+      if (!st.isFile() || st.size > MAX_DOWNLOAD_BYTES) {
+        ledger.cancel(downloadId, "size_limit");
+        event({ type: "download", action: "cancelled", downloadId, reason: "size_limit", suggestedFilename: record.suggestedFilename, tabId: record.tabId });
+        return;
+      }
+      const bytes = fs.readFileSync(raw);
+      const sha256 = createHash("sha256").update(bytes).digest("hex");
+      const mediaType = sniffMediaType(bytes, record.suggestedFilename);
+      const refusal = ledger.complete(downloadId, { bytes: bytes.length, sha256, mediaType });
+      if (refusal) {
+        event({ type: "download", action: "cancelled", downloadId, reason: refusal, suggestedFilename: record.suggestedFilename, tabId: record.tabId });
+        return;
+      }
+      fs.writeFileSync(path.join(DOWNLOAD_DIR, downloadId), bytes, { mode: 0o600, flag: "wx" });
+      event({ type: "download", action: "saved", downloadId, bytes: bytes.length, sha256, mediaType, suggestedFilename: record.suggestedFilename, tabId: record.tabId });
+      log("download_saved", { downloadId, bytes: bytes.length, mediaType });
+    } catch (error) {
+      ledger.fail(downloadId, error?.message ?? "download handling failed");
+    } finally {
+      await download.delete().catch(() => {});
+    }
+  })();
 }
 
 for (const page of context.pages()) track(page, true);
@@ -356,6 +475,84 @@ const handlers = {
     return { generation: state.generation, activeTabId: state.activeTabId, tabs: await tabsList() };
   },
 
+  async "download.list"() {
+    return ledger.list();
+  },
+
+  async "download.read"({ downloadId, offset }) {
+    const record = ledger.get(downloadId);
+    if (!record) throw new OpError("invalid_request", `no download ${downloadId}`);
+    if (record.state === "in_progress" && record.done) {
+      // Give a download that is still arriving a bounded moment to finish.
+      await Promise.race([record.done, new Promise((r) => setTimeout(r, 10_000))]);
+    }
+    if (record.state !== "completed") {
+      throw new OpError("action_failed", `download ${downloadId} is ${record.state}${record.reason ? ` (${record.reason})` : ""}`);
+    }
+    if (offset > record.bytes) throw new OpError("invalid_request", `offset ${offset} is past the end (${record.bytes} bytes)`);
+    const length = Math.min(DOWNLOAD_CHUNK_BYTES, record.bytes - offset);
+    const chunk = Buffer.alloc(length);
+    const fd = fs.openSync(path.join(DOWNLOAD_DIR, downloadId), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    try {
+      let read = 0;
+      while (read < length) {
+        const n = fs.readSync(fd, chunk, read, length - read, offset + read);
+        if (n === 0) break;
+        read += n;
+      }
+      if (read !== length) throw new OpError("action_failed", `download ${downloadId} is shorter than recorded`);
+    } finally {
+      fs.closeSync(fd);
+    }
+    return {
+      downloadId,
+      suggestedFilename: record.suggestedFilename,
+      url: record.url,
+      mediaType: record.mediaType,
+      bytes: record.bytes,
+      sha256: record.sha256,
+      offset,
+      chunkBytes: length,
+      chunkBase64: chunk.toString("base64"),
+      eof: offset + length === record.bytes,
+    };
+  },
+
+  async upload({ ref, generation, uploadId, filename, sha256 }) {
+    state.checkRef(ref, generation);
+    // Only a regular file the supervisor placed under /tmp/uploads/<uploadId>/, never through a symlink.
+    const dir = path.join(UPLOAD_DIR, uploadId);
+    const file = path.join(dir, filename);
+    let st;
+    try { st = fs.lstatSync(file); } catch { throw new OpError("action_failed", `upload ${uploadId} has not been placed`); }
+    if (!st.isFile() || fs.lstatSync(dir).isSymbolicLink() || fs.realpathSync(file) !== file) throw new OpError("action_failed", "upload is not a regular file under /tmp/uploads");
+    if (st.size > MAX_UPLOAD_BYTES) throw new OpError("action_failed", `upload is ${st.size} bytes; limit ${MAX_UPLOAD_BYTES}`);
+    const actual = createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+    if (actual !== sha256) throw new OpError("action_failed", "upload bytes do not match their sha256");
+    const page = activePage();
+    const target = locate(page, ref);
+    const isFileInput = await target.evaluate((el) => el instanceof HTMLInputElement && el.type === "file", undefined, { timeout: ACTION_TIMEOUT_MS });
+    if (isFileInput) {
+      await target.setInputFiles(file, { timeout: ACTION_TIMEOUT_MS });
+      event({ type: "filechooser", action: "uploaded", multiple: false, tabId: state.activeTabId, uploadId, filename, via: "input" });
+    } else {
+      // A button that opens a chooser: the chooser handler answers it with this file, once.
+      let settleUpload;
+      const answered = new Promise((resolve, reject) => { settleUpload = { resolve, reject }; });
+      answered.catch(() => {}); // a late setFiles failure after the wait gave up must not crash the runner
+      pendingUpload = { page, file, uploadId, filename, used: false, resolve: settleUpload.resolve, reject: settleUpload.reject };
+      try {
+        await target.click({ timeout: ACTION_TIMEOUT_MS });
+        const outcome = await Promise.race([answered.then(() => "set"), new Promise((r) => setTimeout(() => r("none"), UPLOAD_CHOOSER_WAIT_MS))]);
+        if (outcome !== "set") throw new OpError("action_failed", "no file chooser opened for this control");
+      } finally {
+        pendingUpload = null;
+      }
+    }
+    await settle(page);
+    return { generation: state.generation, invalidated: state.generation !== generation, url: cutAtCodeUnits(page.url(), 2048), uploadId, filename, bytes: st.size, sha256 };
+  },
+
   async "tabs.close"({ tabId }) {
     const page = state.tabs.get(tabId);
     if (!page) throw new OpError("tab_not_found", `no tab ${tabId}`);
@@ -440,7 +637,7 @@ const shutdown = async (signal) => {
   log("stopping", { signal });
   server.close();
   await context.close().catch(() => {});
-  fs.rmSync(profileDir, { recursive: true, force: true });
+  for (const dir of [profileDir, DOWNLOAD_RAW_DIR, DOWNLOAD_DIR, UPLOAD_DIR]) fs.rmSync(dir, { recursive: true, force: true });
   process.exit(0);
 };
 process.on("SIGTERM", () => void shutdown("SIGTERM"));

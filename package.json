@@ -14,8 +14,8 @@
     "dev:up": "scripts/dev-up.sh",
     "dev:down": "scripts/dev-down.sh",
     "smoke": "bun scripts/smoke.ts",
-    "test:python": "python3 -m pytest runtime/python/tests -q",
-    "test:browser": "node --test runtime/browser/test/"
+    "test:python": "python3 -m pytest runtime/python/tests runtime/outputs/tests -q",
+    "test:browser": "node --test runtime/browser/test/*.test.mjs"
   },
   "devDependencies": {
     "@types/bun": "^1.2.0",

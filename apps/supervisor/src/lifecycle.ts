@@ -21,13 +21,16 @@ import {
   type AttemptRef,
   BrowserEvidence as BrowserEvidenceSchema,
   type AttemptState,
+  type AuthorToolArgs,
   type AuthorToolResult,
   type BrowserOp,
   type BrowserOpResult,
   type BrowserStatusResult,
   type Caps,
+  type CollectOutputsResult,
   FileEnvelope,
   type FreezeResult,
+  OutputEnvelope as OutputEnvelopeSchema,
   type HostListing,
   type IsolationProbe,
   type Operation,
@@ -38,7 +41,21 @@ import {
   workspaceBytesOf,
 } from "@airlock/contracts";
 import { HostCapacity, browserCosts, sandboxCost } from "./capacity";
-import type { BrowserPlaneConfig, SupervisorConfig } from "./config";
+import type { BrowserPlaneConfig, CodeRole, CodeRuntimeConfig, SupervisorConfig } from "./config";
+import {
+  CODE_WORKSPACE,
+  InputQuota,
+  OUTPUTS_COLLECTOR,
+  OUTPUTS_COLLECTOR_STDOUT_BYTES,
+  type SandboxProfile,
+  codePathProblem,
+  codeProfile,
+  decodeBase64Strict,
+  isCodeRole,
+  outputsCollectorProfile,
+  sha256Hex,
+  validateOutputEnvelope,
+} from "./code";
 import {
   BROWSER_PROFILE_ID,
   BROWSER_USER,
@@ -47,6 +64,7 @@ import {
   type ExpectedContainer,
   type ParsedReply,
   RESPONSE_CAP_BYTES,
+  type RunnerOp,
   browserProbeArgv,
   checkEgressAllow,
   checkNetwork,
@@ -64,6 +82,24 @@ import {
   toInspection,
 } from "./browser";
 import type { CreateAttemptRequest, DestroyResult } from "./types";
+import {
+  DOWNLOAD_CHUNK_BYTES,
+  type DownloadChunkResult,
+  type DownloadReadResult,
+  MAX_DOWNLOAD_BYTES,
+  MAX_UPLOADS,
+  MAX_UPLOAD_BYTES,
+  MAX_UPLOAD_TOTAL_BYTES,
+  type SupervisorBrowserOp,
+  UPLOAD_CHUNK_BYTES,
+  UPLOAD_FINALIZE,
+  UPLOAD_FIRST_CHUNK,
+  UPLOAD_NEXT_CHUNK,
+  chunkProblem,
+  sha256Of,
+  sniffMediaType,
+  uploadIdFor,
+} from "./browser-files";
 import type { DockerApi } from "./docker-api";
 import { SupervisorError, describe } from "./errors";
 import { MAX_STDIN_BYTES, SANDBOX_USER, SUPERVISOR_GRACE_MS, authorCommand, runExec, timedCommand } from "./exec";
@@ -119,7 +155,7 @@ export interface ProvisionRequest {
   container: string;
   volume: string;
   labels: Record<string, string>;
-  profile: ProfileManifest;
+  profile: SandboxProfile;
   mount: { target: "/workspace" | "/candidate"; readOnly: boolean };
   workingDir: "/workspace" | "/";
   /** Create the volume (fresh workspace) or reuse an existing one (collector). */
@@ -151,6 +187,10 @@ export class Supervisor {
   /** The newest runner generation seen per browser attempt (BrowserOpResult.generationBefore). */
   private readonly browserGenerations = new Map<string, number>();
   private readonly browserWaits: { healthMs: number; listeningMs: number; pollMs: number };
+  /** Uploads placed into each browser attempt (count and bytes). */
+  private readonly uploadQuota = new Map<string, { count: number; bytes: number }>();
+  /** Bytes placed under inputs/ per analysis/node attempt (per-file and per-attempt quotas). */
+  private readonly inputQuota = new InputQuota();
   private janitorTimer: ReturnType<typeof setInterval> | undefined;
   private stopped = false;
 
@@ -255,8 +295,9 @@ export class Supervisor {
       }
       const createsWorkspace = role !== "collector";
       const record = byAttempt.get(container.labels[ATTEMPT_LABEL] ?? "");
-      const profile = record ? this.profiles.get(record.profileId) : undefined;
-      const costs = (profile ? [profile] : profiles).map((p) => sandboxCost(p.caps, this.capacity.budget, createsWorkspace));
+      const profile = record ? this.profileOrUndefined(record) : undefined;
+      const candidates: SandboxProfile[] = [...profiles, ...this.codeProfiles()];
+      const costs = (profile ? [profile] : candidates).map((p) => sandboxCost(p.caps, this.capacity.budget, createsWorkspace));
       const cost = costs.reduce((max, c) => (c.memoryBytes > max.memoryBytes ? c : max), costs[0] ?? { memoryBytes: 0, pids: 0, scratchBytes: 0 });
       this.capacity.adopt(container.name, cost);
     }
@@ -272,7 +313,7 @@ export class Supervisor {
    * Host admission (M2): reserve this sandbox's memory, PIDs and scratch against the host budget,
    * synchronously, before any Docker call. Throws `capacity` (429) with nothing created.
    */
-  admit(container: string, profile: ProfileManifest, createsWorkspace: boolean): void {
+  admit(container: string, profile: SandboxProfile, createsWorkspace: boolean): void {
     this.capacity.reserve(container, sandboxCost(profile.caps, this.capacity.budget, createsWorkspace));
     this.log.debug("capacity reserved", { container, used: this.capacity.used() });
   }
@@ -280,6 +321,30 @@ export class Supervisor {
     const profile = this.profiles.get(profileId);
     if (!profile) throw new SupervisorError("unsupported_profile", `Profile ${profileId} is not supported by this supervisor.`);
     return profile;
+  }
+
+  /** The configured analysis/node runtime, or `unsupported_profile` (400) when its image is not set. */
+  codePlane(role: CodeRole): CodeRuntimeConfig {
+    const plane = this.config.code?.[role];
+    if (!plane) throw new SupervisorError("unsupported_profile", `The ${role} runtime is not configured on this supervisor (AIRLOCK_${role.toUpperCase()}_IMAGE is not set).`);
+    return plane;
+  }
+
+  private codeProfiles(): SandboxProfile[] {
+    return (["analysis", "node"] as const).flatMap((role) => (this.config.code?.[role] ? [codeProfile(this.config.code[role]!)] : []));
+  }
+
+  /** The runtime profile an attempt record was created with (repository profile, or analysis/node runtime). */
+  private profileFor(record: Pick<AttemptRecord, "role" | "profileId">): SandboxProfile {
+    return isCodeRole(record.role) ? codeProfile(this.codePlane(record.role)) : this.profile(record.profileId);
+  }
+
+  private profileOrUndefined(record: Pick<AttemptRecord, "role" | "profileId">): SandboxProfile | undefined {
+    try {
+      return this.profileFor(record);
+    } catch {
+      return undefined;
+    }
   }
 
   /** Idempotent operation wrapper: same id + digest replays; different digest conflicts. */
@@ -377,6 +442,9 @@ export class Supervisor {
       dockerRuntime: this.config.dockerRuntime,
       mount: { volume: request.volume, target: request.mount.target, readOnly: request.mount.readOnly },
       workingDir: request.workingDir,
+      ...(request.profile.imagePin ? { imagePin: request.profile.imagePin } : {}),
+      ...(request.profile.readinessArgv ? { readinessArgv: request.profile.readinessArgv } : {}),
+      ...(request.profile.extraEnvPrefixes ? { extraEnvPrefixes: request.profile.extraEnvPrefixes } : {}),
     };
     return { ...spec, defaultRuntime: this.host.defaultRuntime };
   }
@@ -430,7 +498,7 @@ export class Supervisor {
       options,
     );
     // Dev-unsafe without a pin: record the image ID actually observed (HostCheck.runtimeImageId).
-    if (!this.config.runtimeImageId && /^sha256:[a-f0-9]{64}$/.test(result.detail.image)) this.host.check.runtimeImageId = result.detail.image;
+    if (!expected.imagePin && !this.config.runtimeImageId && /^sha256:[a-f0-9]{64}$/.test(result.detail.image)) this.host.check.runtimeImageId = result.detail.image;
     return result;
   }
 
@@ -621,12 +689,20 @@ export class Supervisor {
     // replays the recorded receipt even when a time-dependent check (the deadline) would fail now.
     return this.withRefOperation(body.ref, body.operation, "createAttempt", async () => {
       if (body.role === "browser") return this.createBrowserAttempt(body);
-      if (body.role === "analysis" || body.role === "node") throw new SupervisorError("invalid_body", `Role ${body.role} is not supported by this supervisor yet.`);
+      const code = isCodeRole(body.role);
       if (body.egressAllow !== undefined) throw new SupervisorError("invalid_body", "egressAllow applies to browser attempts only; task sandboxes have no network.");
-      if (body.role !== "author" && body.role !== "hostile") {
+      if (!code && body.role !== "author" && body.role !== "hostile") {
         throw new SupervisorError("invalid_body", `Role ${body.role} is a one-shot role; use POST /invoke.`);
       }
-      const profile = this.profile(body.profileId);
+      let profile: SandboxProfile;
+      if (isCodeRole(body.role)) {
+        // Like the browser profile, an analysis/node runtime is configuration: profileId names the role.
+        const plane = this.codePlane(body.role);
+        if (body.profileId !== body.role) throw new SupervisorError("invalid_body", `A ${body.role} attempt uses the ${body.role} runtime profile: profileId must be "${body.role}".`);
+        profile = codeProfile(plane);
+      } else {
+        profile = this.profile(body.profileId);
+      }
       const names = this.names(body.ref, body.role);
       const deadline = this.boundDeadline(body.absoluteDeadline, profile.caps);
       const authorizedUntil = body.authorizedUntil === undefined ? deadline : this.boundAuthorization(body.authorizedUntil, deadline);
@@ -637,7 +713,7 @@ export class Supervisor {
           throw new SupervisorError("revoked", `Attempt ${names.attemptId} was destroyed earlier and cannot be resurrected.`);
         }
         if (this.journal.getAttempt(names.attemptId)) throw new SupervisorError("operation_conflict", `Attempt ${names.attemptId} already exists.`);
-        this.checkTaskGeneration(body.ref);
+        this.checkTaskGeneration(body.ref, body.role);
         const now = new Date().toISOString();
         const record: AttemptRecord = {
           taskId: names.taskId,
@@ -706,9 +782,14 @@ export class Supervisor {
           throw new SupervisorError(code, message);
         };
         try {
-          const materialized = await this.materialize(names.container, profile.caps, signal);
-          if (materialized.result.status !== "succeeded") {
-            await fail("internal", `Materializing the pristine source tree failed (${materialized.result.status}): ${materialized.result.stderr.slice(0, 400)}`);
+          if (code) {
+            // inputs/ (root-owned: only the supervisor places inputs), code/ and outputs/ (uid 1000).
+            await this.api.putArchive(names.container, codeLayoutTar(), CODE_WORKSPACE, AbortSignal.timeout(this.writeTimeoutMs));
+          } else {
+            const materialized = await this.materialize(names.container, profile.caps, signal);
+            if (materialized.result.status !== "succeeded") {
+              await fail("internal", `Materializing the pristine source tree failed (${materialized.result.status}): ${materialized.result.stderr.slice(0, 400)}`);
+            }
           }
           const probe = await runProbe(this.api, names.container, "/workspace", workspaceBytesOf(profile.caps), signal);
           this.log.debug("isolation probe", { attemptId: names.attemptId, container: names.container, allBlocked: probe.allBlocked, metadataEndpoint: probe.metadataEndpoint, dns: probe.dns, outboundTcp: probe.outboundTcp, dockerSocket: probe.dockerSocket, hostMounts: probe.hostMounts });
@@ -749,14 +830,16 @@ export class Supervisor {
    * the task is live (not revoked, not destroyed) the create is refused; the caller revokes or
    * destroys it first. A generation older than one already recorded for the task is stale.
    */
-  private checkTaskGeneration(ref: AttemptRef): void {
+  private checkTaskGeneration(ref: AttemptRef, role: SandboxRole): void {
     for (const other of this.journal.listTaskAttempts(ref.taskId)) {
       if (other.attemptId === ref.attemptId) continue;
       if (ref.generation < other.generation) {
         throw new SupervisorError("stale_generation", `Generation ${ref.generation} is older than generation ${other.generation} already recorded for task ${ref.taskId}.`);
       }
-      if (other.status !== "destroyed" && !other.revoked) {
-        throw new SupervisorError("fenced", `Attempt ${other.attemptId} (generation ${other.generation}) of task ${ref.taskId} is still live; revoke or destroy it before creating ${ref.attemptId}.`);
+      // One live attempt per task and role family: a task may hold one browser session and one
+      // code sandbox at a time (the combined workflow), never two of the same family.
+      if (other.status !== "destroyed" && !other.revoked && roleFamily(other.role) === roleFamily(role)) {
+        throw new SupervisorError("fenced", `Attempt ${other.attemptId} (generation ${other.generation}, ${other.role}) of task ${ref.taskId} is still live; revoke or destroy it before creating ${ref.attemptId}.`);
       }
     }
   }
@@ -796,19 +879,121 @@ export class Supervisor {
   // Author tools
   // -------------------------------------------------------------------------------------------
 
-  async authorTool(ref: AttemptRef, operation: Operation, args: { kind: "read"; path: string } | { kind: "write"; path: string; content: string } | { kind: "exec"; command: string }): Promise<OperationResponse> {
+  /**
+   * POST /attempts/:id/tool. Author (repair) attempts: read/write within the profile's paths, exec in
+   * the source root; `put` is refused (400). Analysis/node attempts: `put` only under inputs/ (binary,
+   * quota-bound, root-owned 0444), `write` only under code/ (text), `read` of code/ or outputs/, `exec`
+   * in /workspace; a put/write/read elsewhere is refused (400).
+   */
+  async authorTool(ref: AttemptRef, operation: Operation, args: AuthorToolArgs): Promise<OperationResponse> {
     this.names(ref, "author");
     return this.withRefOperation(ref, operation, "authorTool", async () => {
       const record = this.journal.fence(ref);
-      if (record.role !== "author") throw new SupervisorError("fenced", `Attempt ${ref.attemptId} is a ${record.role} sandbox; author tools are not available.`);
+      const code = isCodeRole(record.role);
+      if (record.role !== "author" && !code) throw new SupervisorError("fenced", `Attempt ${ref.attemptId} is a ${record.role} sandbox; author tools are not available.`);
       if (record.status !== "running") throw new SupervisorError("fenced", `Attempt ${ref.attemptId} is ${record.status}; author tools need a running sandbox.`);
+      if (isCodeRole(record.role)) {
+        const plane = this.codePlane(record.role);
+        return { status: 200, body: await this.runCodeTool(record, plane, args) };
+      }
+      if (args.kind === "put") throw new SupervisorError("invalid_body", "Author tool kind \"put\" is available to analysis and node attempts only; repair attempts write source text with \"write\".");
       const profile = this.profile(record.profileId);
       const result = await this.runTool(record, profile, args);
       return { status: 200, body: result };
     });
   }
 
-  private async runTool(record: AttemptRecord, profile: ProfileManifest, args: { kind: "read"; path: string } | { kind: "write"; path: string; content: string } | { kind: "exec"; command: string }): Promise<AuthorToolResult> {
+  /** Deliver a tar into a running sandbox with the write semantics of runTool (fence, tracked, uncertain → quarantine). */
+  private async deliver(record: AttemptRecord, tar: Uint8Array, root: string, signal: AbortSignal, onDefiniteFailure?: () => void): Promise<void> {
+    this.journal.fence({ taskId: record.taskId, attemptId: record.attemptId, generation: record.generation });
+    if (signal.aborted) {
+      onDefiniteFailure?.();
+      throw new SupervisorError("revoked", `Attempt ${record.attemptId} is revoked; dispatch is closed.`);
+    }
+    try {
+      await this.tracked(record.attemptId, () =>
+        this.api.putArchive(record.container, tar, root, AbortSignal.timeout(this.writeTimeoutMs)).catch((error: unknown) => {
+          if (error instanceof SupervisorError && (error.code === "not_found" || error.code === "invalid_body")) onDefiniteFailure?.();
+          else this.uncertainWrites.add(record.attemptId);
+          throw error;
+        }),
+      );
+    } catch (error) {
+      if (this.uncertainWrites.has(record.attemptId)) await this.quarantine(record, `write lost control (${describe(error)})`);
+      throw error;
+    }
+  }
+
+  private async runCodeTool(record: AttemptRecord, plane: CodeRuntimeConfig, args: AuthorToolArgs): Promise<AuthorToolResult> {
+    const signal = this.revokeSignal(record.attemptId);
+    const caps = codeProfile(plane).caps;
+
+    if (args.kind === "put") {
+      const problem = codePathProblem(args.path, ["inputs"]);
+      if (problem) throw new SupervisorError("invalid_body", `put: ${problem}`);
+      const bytes = decodeBase64Strict(args.contentBase64);
+      if (!bytes) throw new SupervisorError("invalid_body", "put: contentBase64 is not strict (canonical, padded) base64.");
+      // Reserve synchronously: two concurrent puts cannot both fit into the last bytes of the quota.
+      const quota = this.inputQuota.reserve(record.attemptId, args.path, bytes.byteLength, { maxFileBytes: plane.maxInputFileBytes, maxTotalBytes: plane.maxInputTotalBytes });
+      if (quota) throw new SupervisorError("invalid_body", `put: ${quota}`);
+      const digest = sha256Hex(bytes);
+      // Root-owned, read-only for the sandbox user: files 0444, directories 0755 (only root may add).
+      const tar = createTar([
+        ...ancestorDirs([args.path]).map((dir) => ({ path: dir, kind: "dir" as const, uid: 0, gid: 0, mode: 0o755 })),
+        { path: args.path, kind: "file" as const, bytes, uid: 0, gid: 0, mode: 0o444 },
+      ]);
+      await this.deliver(record, tar, CODE_WORKSPACE, signal, () => this.inputQuota.release(record.attemptId, args.path));
+      this.log.debug("input placed", { attemptId: record.attemptId, path: args.path, bytes: bytes.byteLength, sha256: digest, attemptInputBytes: this.inputQuota.total(record.attemptId) });
+      return { kind: "put", byteLength: bytes.byteLength, sha256: digest };
+    }
+
+    if (args.kind === "write") {
+      const problem = codePathProblem(args.path, ["code"]);
+      if (problem) throw new SupervisorError("invalid_body", `write: ${problem}`);
+      const bytes = new TextEncoder().encode(args.content);
+      if (bytes.length > caps.maxFileBytes) throw new SupervisorError("invalid_body", `write: content is ${bytes.length} bytes; the limit is ${caps.maxFileBytes}.`);
+      const tar = createTar([
+        ...ancestorDirs([args.path]).map((dir) => ({ path: dir, kind: "dir" as const })),
+        { path: args.path, kind: "file" as const, bytes },
+      ]);
+      await this.deliver(record, tar, CODE_WORKSPACE, signal);
+      return { kind: "write", byteLength: bytes.length };
+    }
+
+    if (args.kind === "read") {
+      const problem = codePathProblem(args.path, ["code", "outputs"]);
+      if (problem) throw new SupervisorError("invalid_body", `read: ${problem}`);
+      this.journal.fence({ taskId: record.taskId, attemptId: record.attemptId, generation: record.generation });
+      const outcome = await this.tracked(record.attemptId, () =>
+        runExec(
+          this.api,
+          record.container,
+          { cmd: timedCommand(["/usr/bin/head", "-c", String(caps.maxFileBytes + 1), "--", `${CODE_WORKSPACE}/${args.path}`], 10), user: SANDBOX_USER, workingDir: CODE_WORKSPACE },
+          { timeoutMs: 10_000 + SUPERVISOR_GRACE_MS, outputBytes: caps.maxFileBytes + 1, signal },
+        ),
+      );
+      if (outcome.controlLost) await this.quarantine(record, "read tool lost control");
+      if (outcome.result.status !== "succeeded") return { kind: "refused", reason: `Could not read ${args.path}: ${outcome.result.stderr.trim().slice(0, 300) || outcome.result.status}` };
+      const bytes = new TextEncoder().encode(outcome.result.stdout);
+      const truncated = bytes.length > caps.maxFileBytes || outcome.result.truncated;
+      return { kind: "read", content: truncated ? new TextDecoder().decode(bytes.subarray(0, caps.maxFileBytes)) : outcome.result.stdout, truncated };
+    }
+
+    // exec: the model's command, cwd /workspace, bounded like author commands.
+    this.journal.fence({ taskId: record.taskId, attemptId: record.attemptId, generation: record.generation });
+    const outcome = await this.tracked(record.attemptId, () =>
+      runExec(
+        this.api,
+        record.container,
+        { cmd: authorCommand(args.command, caps.commandTimeoutMs / 1000), user: SANDBOX_USER, workingDir: CODE_WORKSPACE },
+        { timeoutMs: caps.commandTimeoutMs + SUPERVISOR_GRACE_MS, outputBytes: caps.outputBytes, signal },
+      ),
+    );
+    if (outcome.controlLost) await this.quarantine(record, `exec lost control (${outcome.result.status})`);
+    return { kind: "exec", result: outcome.result };
+  }
+
+  private async runTool(record: AttemptRecord, profile: ProfileManifest, args: Exclude<AuthorToolArgs, { kind: "put" }>): Promise<AuthorToolResult> {
     const caps = profile.caps;
     const signal = this.revokeSignal(record.attemptId);
     const refused = (reason: string): AuthorToolResult => ({ kind: "refused", reason });
@@ -960,41 +1145,130 @@ export class Supervisor {
         //    volume read-only BEFORE the author stops. The workspace is a tmpfs volume whose contents
         //    exist only while a container holds the mount; without the hold, stopping the author would
         //    discard the candidate before it could be collected.
-        const { held, envelope } = await this.collect(names, profile, async () => {
-          // 3. stop the container
-          await this.api.stopContainer(record.container, STOP_SECONDS);
-          const stoppedAt = new Date().toISOString();
-          // 4. settle outstanding execs and writes. If any did not settle (or a write's effect is
-          //    unknown) a late write could still land in the workspace: refuse to collect or seal.
-          const settled = await this.settle(record.attemptId);
-          if (!settled) {
-            this.journal.updateAttempt(record.attemptId, { status: "unknown" });
-            this.log.warn("freeze: outstanding operations did not settle; refusing to collect", { attemptId: record.attemptId, container: record.container, uncertainWrite: this.uncertainWrites.has(record.attemptId) });
-            throw new SupervisorError("fenced", `Outstanding operations on ${record.container} did not settle; the workspace is uncertain and will not be collected.`);
-          }
-          // 5. re-inspect stopped
-          const expected = this.expectedFor({
-            container: names.container,
-            volume: names.volume,
-            labels: attemptLabels(names),
-            profile,
-            mount: { target: "/workspace", readOnly: false },
-            workingDir: "/workspace",
-            createVolume: false,
-          });
-          const guest = current.inspection ? { uname: current.inspection.guestUname, hostname: current.inspection.guestHostname } : undefined;
-          const { detail } = await this.inspect(expected, { requireRunning: false, ...(guest ? { previousGuest: guest } : {}) });
-          if (detail.state.running) {
-            this.journal.updateAttempt(record.attemptId, { status: "unknown" });
-            throw new SupervisorError("fenced", `Container ${record.container} is still running after stop; refusing to collect.`);
-          }
-          this.journal.updateAttempt(record.attemptId, { status: "stopped" });
-          return { stoppedAt, settled };
-        });
+        const { held, envelope } = await this.collect(names, profile, this.sourceCollector(profile), () => this.stopSettleInspect(record, names, profile, current, "freeze"));
         // 6. collected in the fresh container with the volume read-only
         const result: FreezeResult = { stoppedAt: held.stoppedAt, stopConfirmed: true, outstandingOperationsSettled: held.settled, envelope };
         this.log.info("attempt frozen and collected", { attemptId: record.attemptId, container: record.container, collector: names.collector, stoppedAt: held.stoppedAt, settled: held.settled, files: envelope.files.length, rejected: envelope.rejected.length, bytes: envelope.files.reduce((n, f) => n + f.byteLength, 0) });
         return { status: 200, body: result };
+      }),
+    );
+  }
+
+  /**
+   * Steps 3–5 of freeze and collect-outputs, run while the collector holds the volume: stop the
+   * container, settle outstanding execs and writes (refuse when any did not settle or a write's effect
+   * is unknown: a late write could still land), re-inspect it stopped, record `stopped`.
+   */
+  private async stopSettleInspect(record: AttemptRecord, names: AttemptNames, profile: SandboxProfile, current: AttemptRecord, what: "freeze" | "collect-outputs"): Promise<{ stoppedAt: string; settled: boolean }> {
+    // 3. stop the container
+    await this.api.stopContainer(record.container, STOP_SECONDS);
+    const stoppedAt = new Date().toISOString();
+    // 4. settle outstanding execs and writes
+    const settled = await this.settle(record.attemptId);
+    if (!settled) {
+      this.journal.updateAttempt(record.attemptId, { status: "unknown" });
+      this.log.warn(`${what}: outstanding operations did not settle; refusing to collect`, { attemptId: record.attemptId, container: record.container, uncertainWrite: this.uncertainWrites.has(record.attemptId) });
+      throw new SupervisorError("fenced", `Outstanding operations on ${record.container} did not settle; the workspace is uncertain and will not be collected.`);
+    }
+    // 5. re-inspect stopped
+    const expected = this.expectedFor({
+      container: names.container,
+      volume: names.volume,
+      labels: attemptLabels(names),
+      profile,
+      mount: { target: "/workspace", readOnly: false },
+      workingDir: "/workspace",
+      createVolume: false,
+    });
+    const guest = current.inspection ? { uname: current.inspection.guestUname, hostname: current.inspection.guestHostname } : undefined;
+    const { detail } = await this.inspect(expected, { requireRunning: false, ...(guest ? { previousGuest: guest } : {}) });
+    if (detail.state.running) {
+      this.journal.updateAttempt(record.attemptId, { status: "unknown" });
+      throw new SupervisorError("fenced", `Container ${record.container} is still running after stop; refusing to collect.`);
+    }
+    this.journal.updateAttempt(record.attemptId, { status: "stopped" });
+    return { stoppedAt, settled };
+  }
+
+  /** The repair collector: runtime/python/collector.py over the profile's allowlist at /candidate/src. */
+  private sourceCollector(profile: SandboxProfile): CollectorRun<FileEnvelope> {
+    return {
+      argv: ["/usr/local/bin/python", "-I", "-S", COLLECTOR, "--root", "/candidate/src", "--profile", PROFILE_JSON],
+      outputBytes: Math.ceil(profile.caps.maxTotalBytes * 1.4) + 65_536 + profile.caps.maxFiles * 2048,
+      parse: (raw) => {
+        const parsed = FileEnvelope.safeParse(raw);
+        return parsed.success ? { ok: true, envelope: parsed.data } : { ok: false, reason: parsed.error.issues[0]?.message ?? "unknown" };
+      },
+    };
+  }
+
+  /** The output collector: runtime/outputs/collect_outputs.py over /candidate/outputs (analysis image). */
+  private outputsCollector(): CollectorRun<z.infer<typeof OutputEnvelopeSchema>> {
+    return {
+      argv: ["/usr/local/bin/python3", "-I", "-S", OUTPUTS_COLLECTOR, "--root", "/candidate"],
+      outputBytes: OUTPUTS_COLLECTOR_STDOUT_BYTES,
+      parse: validateOutputEnvelope,
+    };
+  }
+
+  /**
+   * POST /attempts/:id/collect-outputs (analysis and node attempts). The freeze ordering, with the
+   * output collector: admit the collector → revoke dispatch → a fresh analysis-image container
+   * mounts the workspace read-only (holding the tmpfs volume) → stop → settle (refuse when
+   * unsettled) → re-inspect stopped → collect_outputs.py → the supervisor re-validates the envelope.
+   * The attempt is left stopped; destroy removes it.
+   */
+  async collectOutputs(ref: AttemptRef, operation: Operation): Promise<OperationResponse> {
+    this.names(ref, "author");
+    return this.withRefOperation(ref, operation, "collectOutputs", () =>
+      this.withLock(ref.attemptId, async () => {
+        const record = this.journal.fenceLifecycle(ref);
+        if (!isCodeRole(record.role)) {
+          throw new SupervisorError("fenced", record.role === "author" ? `Attempt ${ref.attemptId} is a repair attempt; use freeze.` : `Only analysis and node attempts have outputs to collect; ${ref.attemptId} is ${record.role}.`);
+        }
+        if (authorityEndsAt(record) <= new Date().toISOString()) {
+          throw new SupervisorError("fenced", `Attempt ${ref.attemptId} is past its execution authorization; it will be stopped, not collected.`);
+        }
+        const current = this.journal.getAttempt(record.attemptId);
+        if (!current || current.status !== "running" || current.revoked) {
+          throw new SupervisorError("fenced", `Attempt ${record.attemptId} is ${current ? `${current.status}${current.revoked ? " (revoked)" : ""}` : "gone"}; only a live, unrevoked analysis/node attempt can be collected.`);
+        }
+        const profile = codeProfile(this.codePlane(record.role));
+        // Node outputs are collected with the analysis image (config refuses node without analysis).
+        const collectorProfile = outputsCollectorProfile(this.codePlane("analysis"), profile.caps);
+        const names = this.names(ref, record.role);
+        // 0. admit the collector first: a full host refuses (429) with the attempt still live.
+        this.admit(names.collector, collectorProfile, false);
+        try {
+          // 1. revoke dispatch
+          this.journal.revoke(record.attemptId, "revoked");
+          this.closeDispatch(record.attemptId);
+        } catch (error) {
+          this.capacity.release(names.collector);
+          throw error;
+        }
+        let stopped = false;
+        try {
+          // 2–6. hold (collector mounts the volume read-only), stop, settle, inspect stopped, collect.
+          const { held, envelope } = await this.collect(names, collectorProfile, this.outputsCollector(), async () => {
+            const result = await this.stopSettleInspect(record, names, profile, current, "collect-outputs");
+            stopped = true;
+            return result;
+          });
+          const result: CollectOutputsResult = { stoppedAt: held.stoppedAt, stopConfirmed: true, envelope };
+          this.log.info("attempt stopped and outputs collected", { attemptId: record.attemptId, role: record.role, container: record.container, collector: names.collector, stoppedAt: held.stoppedAt, files: envelope.files.length, rejected: envelope.rejected.length, bytes: envelope.files.reduce((n, f) => n + f.byteLength, 0) });
+          return { status: 200, body: result };
+        } catch (error) {
+          // Dispatch is already revoked. If the failure came before the stop (collector could not be
+          // provisioned), stop the sandbox now so a revoked container is never left running.
+          if (!stopped) {
+            const latest = this.journal.getAttempt(record.attemptId);
+            if (latest && (latest.status === "running" || latest.status === "revoked") && (await this.stopAndConfirm(latest, "collect-outputs failed"))) {
+              this.journal.updateAttempt(record.attemptId, { status: "stopped" });
+            }
+          }
+          throw error;
+        }
       }),
     );
   }
@@ -1018,7 +1292,7 @@ export class Supervisor {
    * confirms the author container, and only then does the collector run. The author workspace holds
    * the source tree at <volume>/src, so the collector root is /candidate/src.
    */
-  private async collect<T>(names: AttemptNames, profile: ProfileManifest, afterHold: () => Promise<T>): Promise<{ held: T; envelope: FileEnvelope }> {
+  private async collect<T, E>(names: AttemptNames, profile: SandboxProfile, run: CollectorRun<E>, afterHold: () => Promise<T>): Promise<{ held: T; envelope: E }> {
     const labels = attemptLabels(names, "collector");
     const deadline = new Date(Date.now() + profile.caps.commandTimeoutMs * 2 + 60_000).toISOString();
     try {
@@ -1033,16 +1307,11 @@ export class Supervisor {
         createVolume: false,
       });
       const held = await afterHold();
-      const outputBytes = Math.ceil(profile.caps.maxTotalBytes * 1.4) + 65_536 + profile.caps.maxFiles * 2048;
       const outcome = await runExec(
         this.api,
         names.collector,
-        {
-          cmd: timedCommand(["/usr/local/bin/python", "-I", "-S", COLLECTOR, "--root", "/candidate/src", "--profile", PROFILE_JSON], profile.caps.commandTimeoutMs / 1000),
-          user: SANDBOX_USER,
-          workingDir: "/",
-        },
-        { timeoutMs: profile.caps.commandTimeoutMs + SUPERVISOR_GRACE_MS, outputBytes },
+        { cmd: timedCommand(run.argv, profile.caps.commandTimeoutMs / 1000), user: SANDBOX_USER, workingDir: "/" },
+        { timeoutMs: profile.caps.commandTimeoutMs + SUPERVISOR_GRACE_MS, outputBytes: run.outputBytes },
       );
       if (outcome.result.status !== "succeeded") {
         throw new SupervisorError("internal", `Collector did not succeed (${outcome.result.status}, exit ${outcome.result.exitCode}): ${outcome.result.stderr.slice(0, 400)}`);
@@ -1054,9 +1323,9 @@ export class Supervisor {
       } catch {
         throw new SupervisorError("internal", "Collector printed something that is not a JSON envelope.");
       }
-      const parsed = FileEnvelope.safeParse(raw);
-      if (!parsed.success) throw new SupervisorError("internal", `Collector envelope does not validate: ${parsed.error.issues[0]?.message ?? "unknown"}`);
-      return { held, envelope: parsed.data };
+      const parsed = run.parse(raw);
+      if (!parsed.ok) throw new SupervisorError("internal", `Collector envelope does not validate: ${parsed.reason}`);
+      return { held, envelope: parsed.envelope };
     } finally {
       await this.removeResources(names.collector);
       this.journal.deleteEphemeral(names.collector);
@@ -1102,6 +1371,8 @@ export class Supervisor {
         this.journal.tombstone(record.attemptId, record.taskId, teardown.clean ? "destroyed" : "teardown incomplete");
         this.outstanding.delete(record.attemptId);
         this.uncertainWrites.delete(record.attemptId);
+        this.inputQuota.forget(record.attemptId);
+        this.uploadQuota.delete(record.attemptId);
         this.revokeSignals.delete(record.attemptId);
         this.browserGenerations.delete(record.attemptId);
         const egress = record.role === "browser" ? (this.journal.getBrowser(record.attemptId)?.egress as EgressEvidence | null) : null;
@@ -1197,7 +1468,7 @@ export class Supervisor {
         throw new SupervisorError("revoked", `Attempt ${names.attemptId} was destroyed earlier and cannot be resurrected.`);
       }
       if (this.journal.getAttempt(names.attemptId)) throw new SupervisorError("operation_conflict", `Attempt ${names.attemptId} already exists.`);
-      this.checkTaskGeneration(body.ref);
+      this.checkTaskGeneration(body.ref, "browser");
       const now = new Date().toISOString();
       const record: AttemptRecord = {
         taskId: names.taskId,
@@ -1421,7 +1692,7 @@ export class Supervisor {
   }
 
   /** One bounded runner call: `head -c <n> | node client.mjs` with the request on stdin. */
-  private async runnerCall(container: string, requestId: string, op: BrowserOp, signal: AbortSignal): Promise<ParsedReply> {
+  private async runnerCall(container: string, requestId: string, op: RunnerOp, signal: AbortSignal): Promise<ParsedReply> {
     const stdin = runnerRequest(requestId, op);
     if (stdin.byteLength > MAX_STDIN_BYTES) throw new SupervisorError("invalid_body", `Runner request is ${stdin.byteLength} bytes; the limit is ${MAX_STDIN_BYTES}.`);
     const timeouts = opTimeouts(op.op);
@@ -1441,7 +1712,7 @@ export class Supervisor {
    * the recorded result, never re-dispatches); serialized per attempt (one runner op at a time);
    * the fence is re-checked immediately before dispatch; a lost runner closes the attempt.
    */
-  async browserOp(ref: AttemptRef, operation: Operation, request: BrowserOp): Promise<OperationResponse> {
+  async browserOp(ref: AttemptRef, operation: Operation, request: SupervisorBrowserOp): Promise<OperationResponse> {
     this.names(ref, "browser");
     return this.withRefOperation(ref, operation, "browserOp", async () => {
       const accepted = this.journal.fence(ref);
@@ -1455,7 +1726,20 @@ export class Supervisor {
         if (signal.aborted) throw new SupervisorError("revoked", `Attempt ${record.attemptId} is revoked; dispatch is closed.`);
         const generationBefore = this.browserGenerations.get(record.attemptId) ?? null;
         const startedAt = Date.now();
-        const reply = await this.tracked(record.attemptId, () => this.runnerCall(record.container, operation.operationId, request, signal));
+        let reply: ParsedReply;
+        if (request.op === "download.read") {
+          reply = await this.readDownload(record, operation.operationId, request.args.downloadId, signal);
+        } else if (request.op === "upload") {
+          const placed = await this.placeUpload(record, operation.operationId, request.args, signal);
+          reply =
+            placed.kind === "failed"
+              ? placed.reply
+              : await this.tracked(record.attemptId, () =>
+                  this.runnerCall(record.container, operation.operationId, { op: "upload", args: { ref: request.args.ref, generation: request.args.generation, uploadId: placed.uploadId, filename: request.args.filename, sha256: placed.sha256 } }, signal),
+                );
+        } else {
+          reply = await this.tracked(record.attemptId, () => this.runnerCall(record.container, operation.operationId, request as RunnerOp, signal));
+        }
         const durationMs = Date.now() - startedAt;
         let result: BrowserOpResult;
         if (reply.kind === "interrupted") {
@@ -1473,6 +1757,113 @@ export class Supervisor {
         return { status: 200, body: result };
       });
     });
+  }
+
+  /**
+   * download.read: the file in bounded runner chunks (≤ 2 MiB each, so every reply stays under the
+   * 4 MiB response cap), each chunk checked for offset/size/metadata consistency, the whole re-verified
+   * here (size ≤ 10 MiB, sha256 equal to the runner's claim) and its media type re-sniffed here. A
+   * runner whose bytes do not match its own digest is treated as lost (interrupted), like a screenshot.
+   */
+  private async readDownload(record: AttemptRecord, operationId: string, id: string, signal: AbortSignal): Promise<ParsedReply> {
+    const ref = { taskId: record.taskId, attemptId: record.attemptId, generation: record.generation };
+    const parts: Buffer[] = [];
+    let first: DownloadChunkResult | undefined;
+    let offset = 0;
+    const maxCalls = Math.ceil(MAX_DOWNLOAD_BYTES / DOWNLOAD_CHUNK_BYTES) + 1;
+    for (let call = 0; call < maxCalls; call++) {
+      this.journal.fence(ref);
+      if (signal.aborted) throw new SupervisorError("revoked", `Attempt ${record.attemptId} is revoked; dispatch is closed.`);
+      const reply = await this.tracked(record.attemptId, () => this.runnerCall(record.container, operationId, { op: "download.read", args: { downloadId: id, offset } }, signal));
+      if (reply.kind !== "completed" || !reply.response.ok) return reply;
+      const chunk = reply.response.result as DownloadChunkResult;
+      const problem = chunkProblem(chunk, { downloadId: id, offset, ...(first ? { first } : {}) });
+      if (problem) return { kind: "interrupted", response: null, reason: `download chunk invalid: ${problem}` };
+      first ??= chunk;
+      parts.push(Buffer.from(chunk.chunkBase64, "base64"));
+      offset += chunk.chunkBytes;
+      if (chunk.eof) break;
+    }
+    if (!first || offset !== first.bytes) return { kind: "interrupted", response: null, reason: "download did not reach its end within the chunk budget" };
+    const bytes = Buffer.concat(parts);
+    if (bytes.length !== first.bytes || bytes.length > MAX_DOWNLOAD_BYTES) return { kind: "interrupted", response: null, reason: "download size does not match" };
+    if (sha256Of(bytes) !== first.sha256) return { kind: "interrupted", response: null, reason: "download bytes do not match their sha256" };
+    const result: DownloadReadResult = {
+      downloadId: id,
+      suggestedFilename: first.suggestedFilename,
+      url: first.url,
+      mediaType: sniffMediaType(bytes, first.suggestedFilename),
+      runnerMediaType: first.mediaType,
+      bytes: bytes.length,
+      sha256: first.sha256,
+      contentBase64: bytes.toString("base64"),
+      chunks: parts.length,
+    };
+    this.log.debug("browser download read", { attemptId: record.attemptId, downloadId: id, bytes: bytes.length, sha256: first.sha256, mediaType: result.mediaType, chunks: parts.length });
+    return { kind: "completed", response: { schemaVersion: 1, id: operationId, op: "download.read", ok: true, result }, generation: null };
+  }
+
+  /**
+   * upload, step 1: the control plane's bytes are checked against artifactSha256 and the per-attempt
+   * quota BEFORE anything is placed (a mismatch is a 400 and nothing reaches the container); then
+   * they are streamed through the bounded stdin path (≤ 256 KiB per exec) into
+   * /tmp/uploads/<uploadId>/.part as the runner user, re-verified there (size + sha256) and renamed
+   * to the plain file name. The runner never receives a path, only the derived uploadId and name.
+   */
+  private async placeUpload(
+    record: AttemptRecord,
+    operationId: string,
+    args: { filename: string; artifactSha256: string; contentBase64: string },
+    signal: AbortSignal,
+  ): Promise<{ kind: "placed"; uploadId: string; sha256: string } | { kind: "failed"; reply: ParsedReply }> {
+    const bytes = decodeBase64Strict(args.contentBase64);
+    if (!bytes) throw new SupervisorError("invalid_body", "upload: contentBase64 is not strict (canonical, padded) base64.");
+    if (bytes.byteLength === 0) throw new SupervisorError("invalid_body", "upload: the file is empty.");
+    if (bytes.byteLength > MAX_UPLOAD_BYTES) throw new SupervisorError("invalid_body", `upload: ${bytes.byteLength} bytes; the limit is ${MAX_UPLOAD_BYTES}.`);
+    const digest = sha256Hex(bytes);
+    if (digest !== args.artifactSha256) {
+      throw new SupervisorError("invalid_body", `upload: the bytes hash to ${digest}, not artifactSha256 ${args.artifactSha256}; nothing was placed.`);
+    }
+    const used = this.uploadQuota.get(record.attemptId) ?? { count: 0, bytes: 0 };
+    if (used.count + 1 > MAX_UPLOADS || used.bytes + bytes.byteLength > MAX_UPLOAD_TOTAL_BYTES) {
+      throw new SupervisorError("invalid_body", `upload: this attempt has placed ${used.count} uploads (${used.bytes} bytes); the limits are ${MAX_UPLOADS} uploads and ${MAX_UPLOAD_TOTAL_BYTES} bytes.`);
+    }
+    // Counted from the first byte placed; a failed placement keeps its share (the bytes may be there).
+    this.uploadQuota.set(record.attemptId, { count: used.count + 1, bytes: used.bytes + bytes.byteLength });
+    const uploadId = uploadIdFor(operationId);
+    const ref = { taskId: record.taskId, attemptId: record.attemptId, generation: record.generation };
+    const run = async (script: string, positional: string[], stdin?: Uint8Array) => {
+      this.journal.fence(ref);
+      if (signal.aborted) throw new SupervisorError("revoked", `Attempt ${record.attemptId} is revoked; dispatch is closed.`);
+      return this.tracked(record.attemptId, () =>
+        runExec(
+          this.api,
+          record.container,
+          { cmd: timedCommand(["/bin/sh", "-c", script, "airlock-upload", ...positional], 15), user: BROWSER_USER, workingDir: BROWSER_WORKDIR, ...(stdin ? { stdin } : {}) },
+          { timeoutMs: 15_000 + SUPERVISOR_GRACE_MS, outputBytes: 4096, signal },
+        ),
+      );
+    };
+    const failed = async (step: string, outcome: Awaited<ReturnType<typeof run>>): Promise<{ kind: "failed"; reply: ParsedReply }> => {
+      const reason = `upload placement ${step} ${outcome.result.status} (exit ${outcome.result.exitCode}): ${outcome.result.stderr.trim().slice(0, 200)}`;
+      if (outcome.controlLost) {
+        await this.quarantine(record, reason);
+        return { kind: "failed", reply: { kind: "interrupted", response: null, reason } };
+      }
+      return { kind: "failed", reply: { kind: "refused", response: { schemaVersion: 1, id: operationId, op: "upload", ok: false, error: "action_failed", message: reason.slice(0, 512) } } };
+    };
+    for (let offset = 0; offset < bytes.byteLength; offset += UPLOAD_CHUNK_BYTES) {
+      const chunk = bytes.subarray(offset, Math.min(offset + UPLOAD_CHUNK_BYTES, bytes.byteLength));
+      const outcome = await run(offset === 0 ? UPLOAD_FIRST_CHUNK : UPLOAD_NEXT_CHUNK, [String(chunk.byteLength), uploadId], chunk);
+      if (outcome.result.status !== "succeeded" || outcome.controlLost) return failed(`chunk at ${offset}`, outcome);
+    }
+    const finalized = await run(UPLOAD_FINALIZE, [uploadId, String(bytes.byteLength), digest, args.filename]);
+    if (finalized.result.status !== "succeeded" || finalized.controlLost) return failed("finalize", finalized);
+    if (finalized.result.stdout.trim() !== `${bytes.byteLength} ${digest}`) {
+      return { kind: "failed", reply: { kind: "interrupted", response: null, reason: "placed upload does not match its size and sha256 inside the container" } };
+    }
+    this.log.debug("browser upload placed", { attemptId: record.attemptId, uploadId, bytes: bytes.byteLength, sha256: digest, execs: Math.ceil(bytes.byteLength / UPLOAD_CHUNK_BYTES) + 1 });
+    return { kind: "placed", uploadId, sha256: digest };
   }
 
   /** GET /attempts/:id/browser: the evidence taken at create (sandbox status, inspections, probe, networks). */
@@ -1624,4 +2015,25 @@ function probeSummary(probe: IsolationProbe): string {
     .filter((k) => probe[k] !== "BLOCKED")
     .map((k) => `${k}=${probe[k]}`)
     .join(", ");
+}
+
+/** A fixed collector program run in the fresh read-only collector container, and how its stdout is validated. */
+interface CollectorRun<E> {
+  argv: string[];
+  outputBytes: number;
+  parse: (raw: unknown) => { ok: true; envelope: E } | { ok: false; reason: string };
+}
+
+/** analysis/node workspace layout: inputs/ root-owned 0755 (supervisor-only), code/ and outputs/ owned by the sandbox user. */
+export function codeLayoutTar(): Uint8Array {
+  return createTar([
+    { path: "inputs", kind: "dir", uid: 0, gid: 0, mode: 0o755 },
+    { path: "code", kind: "dir" },
+    { path: "outputs", kind: "dir" },
+  ]);
+}
+
+/** Browser sessions and code sandboxes are separate families; a task may hold one live attempt of each. */
+export function roleFamily(role: string): "browser" | "code" {
+  return role === "browser" ? "browser" : "code";
 }

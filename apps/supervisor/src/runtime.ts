@@ -75,6 +75,16 @@ export interface SandboxSpec {
   dockerRuntime: string;
   mount: { volume: string; target: "/workspace" | "/candidate"; readOnly: boolean };
   workingDir: "/workspace" | "/";
+  /**
+   * Code runtimes (analysis/node) bring their own image and therefore their own pin: when present,
+   * `imagePin.imageId` replaces the repository runtime pin (AIRLOCK_RUNTIME_IMAGE_ID) at inspection.
+   * `imageId` undefined = no pin (dev-unsafe only; config refuses it otherwise).
+   */
+  imagePin?: { imageId: string | undefined };
+  /** The fixed readiness exec for this image (default READINESS_ARGV: python3 -I -S). */
+  readinessArgv?: string[];
+  /** Env prefixes the image itself is known to set, on top of ENV_ALLOWED_PREFIXES. */
+  extraEnvPrefixes?: string[];
 }
 
 export function sandboxCreateSpec(spec: SandboxSpec): ContainerCreateSpec {
@@ -204,7 +214,7 @@ export function checkEffective(detail: ContainerDetail, expected: ExpectedSandbo
     check("tmpfs", Object.keys(tmpfs).length === 1 && tmpfs["/tmp"] === TMPFS_TMP) &&
     check(
       "env",
-      c.env.every((entry) => ENV_ALLOWED_PREFIXES.some((prefix) => entry.startsWith(prefix))),
+      c.env.every((entry) => [...ENV_ALLOWED_PREFIXES, ...(expected.extraEnvPrefixes ?? [])].some((prefix) => entry.startsWith(prefix))),
     );
 
   const allPassed = Object.values(checks).every(Boolean) && runtimeMatches && identityMatches;
@@ -242,8 +252,11 @@ export interface InspectContext {
  */
 export const READINESS_ARGV = ["/usr/local/bin/python3", "-I", "-S", "-c", "import sys; sys.stdout.write('ready\\n')"];
 
-export async function runnerReady(api: DockerApi, container: string, workingDir: string): Promise<boolean> {
-  const outcome = await runExec(api, container, { cmd: timedCommand(READINESS_ARGV, 4), user: SANDBOX_USER, workingDir }, { timeoutMs: 5_000, outputBytes: 64 });
+/** The node image's readiness exec: the interpreter starts with an empty environment and prints `ready`. */
+export const NODE_READINESS_ARGV = ["/usr/bin/env", "-i", "/usr/local/bin/node", "-e", "process.stdout.write('ready\\n')"];
+
+export async function runnerReady(api: DockerApi, container: string, workingDir: string, argv: string[] = READINESS_ARGV): Promise<boolean> {
+  const outcome = await runExec(api, container, { cmd: timedCommand(argv, 4), user: SANDBOX_USER, workingDir }, { timeoutMs: 5_000, outputBytes: 64 });
   return outcome.result.status === "succeeded" && outcome.result.exitCode === 0 && outcome.result.stdout === "ready\n" && !outcome.controlLost;
 }
 
@@ -266,7 +279,8 @@ export async function inspectSandbox(
   const effective = checkEffective(detail, expected, context.namespace);
   // D2: the container's effective image ID must be the pinned runtime image. A retagged tag (same
   // name, other bytes) produces a different ID and fails closed here, on every inspection.
-  if (context.runtimeImageId !== undefined && detail.image !== context.runtimeImageId) {
+  const pinned = expected.imagePin ? expected.imagePin.imageId : context.runtimeImageId;
+  if (pinned !== undefined && detail.image !== pinned) {
     effective.failures.push("imageId");
     effective.identityMatches = false;
     effective.allPassed = false;
@@ -278,7 +292,7 @@ export async function inspectSandbox(
 
   let guestUname = options.previousGuest?.uname ?? "";
   let guestHostname = options.previousGuest?.hostname ?? "";
-  if (detail.state.running && effective.allPassed && !(await runnerReady(api, expected.name, expected.workingDir))) {
+  if (detail.state.running && effective.allPassed && !(await runnerReady(api, expected.name, expected.workingDir, expected.readinessArgv))) {
     effective.failures.push("readiness");
     effective.allPassed = false;
   }

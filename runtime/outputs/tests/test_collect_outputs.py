@@ -357,7 +357,7 @@ def test_json_must_parse(root: Path) -> None:
     _, env, _ = run(root)
     r = reasons(env)
     assert paths(env) == ["ok.json"]
-    assert r["bad.json"] == "not valid JSON" and r["deep.json"] == "not valid JSON"
+    assert r["bad.json"] == "not valid JSON" and r["deep.json"] == "JSON nested deeper than 64"
 
 
 def test_grows_while_reading_rejected(root: Path) -> None:

@@ -11,6 +11,17 @@ export const MAX_MESSAGE = 512;
 export const MAX_TABS = 5;
 export const VIEWPORT = Object.freeze({ width: 1280, height: 800 });
 
+// Downloads (C16) and uploads (C17). Downloads land in a per-container tmpfs directory; the limits
+// are enforced while bytes arrive (in-progress abort), on completion, and again by the supervisor.
+export const MAX_DOWNLOAD_BYTES = 10 * 1024 * 1024;
+export const MAX_DOWNLOADS = 10;
+export const MAX_DOWNLOAD_TOTAL_BYTES = 30 * 1024 * 1024;
+/** download.read returns at most this many raw bytes per call (base64 stays well under 4 MiB). */
+export const DOWNLOAD_CHUNK_BYTES = 2 * 1024 * 1024;
+export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+/** Where the supervisor places upload bytes (never an arbitrary host path; tmpfs inside this container). */
+export const UPLOAD_DIR = "/tmp/uploads";
+
 export const ALLOWED_KEYS = Object.freeze([
   "Enter", "Tab", "Escape", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
   "PageUp", "PageDown", "Home", "End", "Backspace",
@@ -25,6 +36,10 @@ export const ERROR_CODES = Object.freeze([
 const REF = /^[a-z0-9]{1,16}$/i;
 const TAB_ID = /^tab-[0-9]{1,6}$/;
 const REQUEST_ID = /^[A-Za-z0-9._:-]{1,64}$/;
+export const DOWNLOAD_ID = /^dl-[0-9]{1,6}$/;
+export const UPLOAD_ID = /^up-[a-f0-9]{16}$/;
+export const UPLOAD_FILENAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const SHA256 = /^[a-f0-9]{64}$/;
 
 class Invalid extends Error {}
 const isObject = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -72,10 +87,25 @@ const OPS = {
   "tabs.list": (a) => (only(a, []), {}),
   "tabs.switch": (a) => (only(a, ["tabId"], ["tabId"]), { tabId: tabId(a.tabId) }),
   "tabs.close": (a) => (only(a, ["tabId"], ["tabId"]), { tabId: tabId(a.tabId) }),
+  "download.list": (a) => (only(a, []), {}),
+  "download.read": (a) => {
+    only(a, ["downloadId", "offset"], ["downloadId"]);
+    if (typeof a.downloadId !== "string" || !DOWNLOAD_ID.test(a.downloadId)) fail("downloadId must look like dl-<n>");
+    const offset = a.offset === undefined ? 0 : a.offset;
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset > MAX_DOWNLOAD_BYTES) fail(`offset must be an integer in [0, ${MAX_DOWNLOAD_BYTES}]`);
+    return { downloadId: a.downloadId, offset };
+  },
+  upload: (a) => {
+    only(a, ["ref", "generation", "uploadId", "filename", "sha256"], ["ref", "generation", "uploadId", "filename", "sha256"]);
+    if (typeof a.uploadId !== "string" || !UPLOAD_ID.test(a.uploadId)) fail("uploadId must look like up-<16 hex>");
+    if (typeof a.filename !== "string" || !UPLOAD_FILENAME.test(a.filename)) fail("filename must match /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/");
+    if (typeof a.sha256 !== "string" || !SHA256.test(a.sha256)) fail("sha256 must be 64 lowercase hex");
+    return { ref: ref(a.ref), generation: generation(a.generation), uploadId: a.uploadId, filename: a.filename, sha256: a.sha256 };
+  },
 };
 export const OP_NAMES = Object.freeze(Object.keys(OPS));
 /** Operations that can change page state; refused while a dismissed dialog awaits review. */
-export const MUTATING_OPS = Object.freeze(new Set(["navigate", "click", "type", "key", "scroll", "tabs.switch", "tabs.close"]));
+export const MUTATING_OPS = Object.freeze(new Set(["navigate", "click", "type", "key", "scroll", "tabs.switch", "tabs.close", "upload"]));
 
 /** Parse and validate one raw request line. Returns { ok, request } or { ok:false, response }. */
 export function parseRequest(line) {
@@ -140,4 +170,40 @@ export function cutUtf8(text, maxBytes = MAX_TEXT_BYTES) {
 export function pngSize(buffer) {
   if (buffer.length < 24 || buffer.readUInt32BE(0) !== 0x89504e47 || buffer.toString("latin1", 12, 16) !== "IHDR") return null;
   return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
+}
+
+/**
+ * Media type from the bytes (never from a server header or the page): a few binary signatures, then
+ * UTF-8 text (JSON if it parses as an object/array, CSV/TSV by extension or by a consistent delimiter),
+ * else application/octet-stream. Keep in step with apps/supervisor/src/browser-files.ts.
+ */
+export function sniffMediaType(buffer, filename = "") {
+  const b = buffer;
+  const starts = (sig) => b.length >= sig.length && sig.every((v, i) => b[i] === v);
+  if (starts([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return "image/png";
+  if (starts([0xff, 0xd8, 0xff])) return "image/jpeg";
+  if (starts([0x47, 0x49, 0x46, 0x38])) return "image/gif";
+  if (starts([0x25, 0x50, 0x44, 0x46, 0x2d])) return "application/pdf";
+  if (starts([0x50, 0x4b, 0x03, 0x04]) || starts([0x50, 0x4b, 0x05, 0x06])) return "application/zip";
+  if (starts([0x1f, 0x8b])) return "application/gzip";
+  if (b.includes(0)) return "application/octet-stream";
+  let text;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(b);
+  } catch {
+    return "application/octet-stream";
+  }
+  const trimmed = text.trim();
+  if (/^[\[{]/.test(trimmed)) {
+    try { JSON.parse(trimmed); return "application/json"; } catch {}
+  }
+  const ext = String(filename).toLowerCase().match(/\.([a-z0-9]{1,8})$/)?.[1] ?? "";
+  if (ext === "csv") return "text/csv";
+  if (ext === "tsv") return "text/tab-separated-values";
+  const lines = trimmed.split(/\r?\n/).slice(0, 20).filter((l) => l.length > 0);
+  for (const [delimiter, type] of [[",", "text/csv"], ["\t", "text/tab-separated-values"]]) {
+    const counts = lines.map((l) => l.split(delimiter).length - 1);
+    if (lines.length >= 2 && counts[0] > 0 && counts.every((c) => c === counts[0])) return type;
+  }
+  return "text/plain";
 }

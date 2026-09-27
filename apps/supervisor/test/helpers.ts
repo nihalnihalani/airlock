@@ -62,6 +62,7 @@ export function testConfig(dir: string): SupervisorConfig {
     instanceId: undefined,
     capacity: { memoryBytes: 64 * 1024 ** 3, pids: 4096, scratchBytes: 64 * 1024 ** 3, maxSandboxes: 64, vmOverheadBytes: 0 },
     browser: undefined,
+    code: { analysis: undefined, node: undefined },
   };
 }
 

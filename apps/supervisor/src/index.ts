@@ -27,8 +27,9 @@ import type { z } from "zod";
 import {
   AuthorToolRequest,
   BrowserEvidence,
-  BrowserOpRequest,
   BrowserOpResult,
+  CollectOutputsRequest,
+  CollectOutputsResult,
   DestroyResult,
   EgressLog,
   HostListing,
@@ -41,6 +42,7 @@ import {
   RevokeRequest,
   requestDigestOf,
 } from "@airlock/contracts";
+import { SupervisorBrowserOpRequest } from "./browser-files";
 import { loadConfig } from "./config";
 import { SupervisorError, describe } from "./errors";
 import { checkHost } from "./host";
@@ -198,8 +200,7 @@ export function createApp(deps: AppDeps): Hono {
     const attemptId = attemptParam(c);
     const request = await body(c, AuthorToolRequest);
     if (request.ref.attemptId !== attemptId) throw new SupervisorError("invalid_body", "ref.attemptId does not match the path.");
-    // Milestone 4 widens the author tool vocabulary; binary `put` is not supported by this supervisor yet.
-    if (request.args.kind === "put") throw new SupervisorError("invalid_body", "Author tool kind \"put\" is not supported yet.");
+    // put: analysis/node attempts only (inputs/); refused for repair attempts inside the operation.
     const response = await core.authorTool(request.ref, request.operation, request.args);
     return c.json(response.body as object, response.status as 200);
   });
@@ -211,7 +212,8 @@ export function createApp(deps: AppDeps): Hono {
    */
   app.post("/attempts/:attemptId/browser", async (c) => {
     const attemptId = attemptParam(c);
-    const request = await body(c, BrowserOpRequest);
+    // contracts BrowserOp plus the file operations (download.list, download.read, upload; browser-files.ts).
+    const request = await body(c, SupervisorBrowserOpRequest);
     if (request.ref.attemptId !== attemptId) throw new SupervisorError("invalid_body", "ref.attemptId does not match the path.");
     const response = await core.browserOp(request.ref, request.operation, request.request);
     return c.json(response.status === 200 ? typed(BrowserOpResult, response.body, "BrowserOpResult") : (response.body as object), response.status as 200);
@@ -245,6 +247,18 @@ export function createApp(deps: AppDeps): Hono {
     if (request.ref.attemptId !== attemptId) throw new SupervisorError("invalid_body", "ref.attemptId does not match the path.");
     const response = await core.freeze(request.ref, request.operation);
     return c.json(response.body as object, response.status as 200);
+  });
+
+  /**
+   * Analysis/node attempts: revoke → hold the volume read-only → stop → settle → inspect stopped →
+   * runtime/outputs/collect_outputs.py (contracts CollectOutputsRequest → CollectOutputsResult).
+   */
+  app.post("/attempts/:attemptId/collect-outputs", async (c) => {
+    const attemptId = attemptParam(c);
+    const request = await body(c, CollectOutputsRequest);
+    if (request.ref.attemptId !== attemptId) throw new SupervisorError("invalid_body", "ref.attemptId does not match the path.");
+    const response = await core.collectOutputs(request.ref, request.operation);
+    return c.json(response.status === 200 ? typed(CollectOutputsResult, response.body, "CollectOutputsResult") : (response.body as object), response.status as 200);
   });
 
   app.post("/attempts/:attemptId/revoke", async (c) => {
@@ -335,6 +349,17 @@ async function main(): Promise<void> {
       }
     }
     log.info("browser plane enabled", { image: config.browser.image, egressImage: config.browser.egressImage, seccomp: config.browser.seccompPath, memoryBytes: config.browser.memoryBytes, pidsLimit: config.browser.pidsLimit, shmBytes: config.browser.shmBytes, tmpBytes: config.browser.tmpBytes });
+  }
+  for (const plane of [config.code.analysis, config.code.node]) {
+    if (!plane) continue;
+    // Code sandbox images must exist now and, when pinned, resolve to the pinned IDs; every
+    // inspection of an analysis/node/collector container checks the image ID again.
+    const image = await api.inspectImage(plane.image);
+    if (!image || (plane.imageId !== undefined && image.id !== plane.imageId)) {
+      log.error("code sandbox image missing or not the pinned ID; refusing to start", { role: plane.role, image: plane.image, observed: image?.id ?? null, pinned: plane.imageId ?? null, variable: `AIRLOCK_${plane.role.toUpperCase()}_IMAGE_ID` });
+      process.exit(1);
+    }
+    log.info("code sandbox enabled", { role: plane.role, image: plane.image, imageId: image.id, cpus: plane.cpus, memoryBytes: plane.memoryBytes, pidsLimit: plane.pidsLimit, commandTimeoutMs: plane.commandTimeoutMs, workspaceBytes: plane.workspaceBytes });
   }
   if (config.devUnsafe) {
     log.warn("AIRLOCK_DEV_UNSAFE=1 with runtime runc: every record is labelled dev-unsafe. This is never a deployment configuration.");
