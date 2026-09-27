@@ -2,6 +2,11 @@
 
 **Status of the required demo:** the Vultr deployment recording is **done**: [`vultr-demo.mp4`](vultr-demo.mp4), described in the next section. The older **local** recording (`local-demo.mp4`, dev-unsafe runc, scripted drivers) is kept below for reference; it does not replace the Vultr recording.
 
+## Intro video (`airlock-intro.mp4`)
+
+- 1920x1080 H.264 with AAC audio, **1:40**, 51 MB. A motion-graphics opener (problem, reveal, how it works, containment, the browser plane, the five checkpoints, architecture) meant to play before the live walkthrough. Poster frame: [`../assets/airlock-intro-poster.jpg`](../assets/airlock-intro-poster.jpg).
+- Product scenes are **illustrations built from real screenshots and run data**, not a recording of a live session; UI captures marked "local capture · dev-unsafe · scripted" come from the local labelled run. The Vultr recording below is the evidence of the deployment.
+
 ## Vultr deployment recording (`vultr-demo.mp4`)
 
 - 1920x1080 H.264, 30 fps, **2:20**, 5.9 MB. A slideshow of real screenshots of the live UI, 3–6 s per frame (38 frames). It is not a screencast.

@@ -24,6 +24,13 @@
 <br />
 <br />
 
+<a href="docs/demo/airlock-intro.mp4"><img src="docs/assets/airlock-intro-poster.jpg" alt="Airlock intro video: sealed sandboxes on Vultr (1:40, click to play)" width="900" /></a>
+
+<sub><b>▶ <a href="docs/demo/airlock-intro.mp4">Watch the intro (1:40)</a></b> · <a href="docs/demo/vultr-demo.mp4">Live walkthrough on the Vultr deployment (2:20)</a>: host check, the hero task, a live repair, Kata containment and teardown. Details in <a href="docs/demo/README.md">docs/demo</a>.</sub>
+
+<br />
+<br />
+
 <img src="docs/assets/ui-task.png" alt="Airlock task page on the Vultr deployment: a live glm-5.3 repair under Kata as a conversation with model turns, tool calls, checkpoints and the Passed these checks result, with the five checkpoints in the details pane" width="900" />
 
 <sub>A live-gate run on the deployment (glm-5.3 via Vultr Serverless Inference, sandboxes under Kata on the VX1 host), captured signed out before task data required a session.</sub>
