@@ -1,7 +1,10 @@
+import { IconDownload, IconKey } from "@tabler/icons-react";
 import { useState } from "react";
 import { createExport, describeError, exportUrl, type ExportResponse } from "../lib/api";
 import { formatDateTime } from "../lib/format";
-import { Digest, ErrorBox, KeyValue, Mono, Section } from "./ui";
+import { hrefFor } from "../lib/router";
+import { Digest, ErrorBox, KeyValue, Mono } from "./common";
+import { Button } from "./ui/button";
 
 export function ExportPanel({
   taskId,
@@ -34,43 +37,51 @@ export function ExportPanel({
   const href = grant ? exportUrl(grant.grantId) : null;
 
   return (
-    <Section title="Download">
+    <div className="flex flex-col gap-3">
       <KeyValue
+        className="text-xs"
         rows={[
           { key: "candidate digest", value: <Digest value={candidateDigest} /> },
-          { key: "verification record", value: <Mono>{verificationRecordId}</Mono> },
+          { key: "verification record", value: <Mono wrap>{verificationRecordId}</Mono> },
         ]}
       />
-      <p className="muted">
-        The bundle contains patch.diff, manifest.json, verification.json, baseline.json, task.json (the task record
-        with lease fields removed, including the pasted issue text), events.jsonl (the complete run event log, including
-        every model turn and every command run), reproduction/ and README.txt for exactly this candidate digest and
-        verification record.
+      <p className="text-xs text-muted-foreground">
+        The bundle contains patch.diff, manifest.json, verification.json, baseline.json, task.json (the task record with lease
+        fields removed, including the pasted issue text), events.jsonl (the complete run event log, including every model turn
+        and every command run), reproduction/ and README.txt for exactly this candidate digest and verification record.
       </p>
       {canExport ? (
-        <div className="btn-row">
-          <button type="button" className="btn btn-primary" onClick={() => void request()} disabled={busy}>
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" variant={grant ? "outline" : "default"} onClick={() => void request()} disabled={busy}>
+            <IconKey />
             {busy ? "Requesting grant…" : grant ? "Request a new grant" : "Request download"}
-          </button>
+          </Button>
+          {grant && href ? (
+            <Button size="sm" render={<a href={href} download />}>
+              <IconDownload />
+              Download bundle (zip)
+            </Button>
+          ) : null}
         </div>
       ) : (
-        <p className="muted">Sign in as operator or judge to request an export grant.</p>
+        <p className="text-xs text-muted-foreground">
+          <a className="underline underline-offset-4 hover:text-foreground" href={hrefFor({ name: "login" })}>
+            Sign in
+          </a>{" "}
+          as operator or judge to request an export grant.
+        </p>
       )}
       {error ? <ErrorBox message={error} /> : null}
       {grant && href ? (
-        <div className="export-grant">
-          <a className="btn btn-primary" href={href} download>
-            Download bundle (zip)
-          </a>
-          <KeyValue
-            rows={[
-              { key: "grant", value: <Mono>{grant.grantId}</Mono> },
-              { key: "expires", value: formatDateTime(grant.expiresAt) },
-              { key: "route", value: <Mono>{href}</Mono> },
-            ]}
-          />
-        </div>
+        <KeyValue
+          className="text-xs"
+          rows={[
+            { key: "grant", value: <Mono wrap>{grant.grantId}</Mono> },
+            { key: "expires", value: formatDateTime(grant.expiresAt) },
+            { key: "route", value: <Mono wrap>{href}</Mono> },
+          ]}
+        />
       ) : null}
-    </Section>
+    </div>
   );
 }

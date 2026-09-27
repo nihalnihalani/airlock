@@ -1,47 +1,37 @@
+import { IconAlertTriangle } from "@tabler/icons-react";
 import { Phase, type Outcome, type Task } from "@airlock/contracts";
-import { OUTCOME_HINT, OUTCOME_LABEL, PHASE_LABEL, STATUS_LABEL } from "../lib/format";
+import { isTerminalStatus, OUTCOME_HINT, OUTCOME_LABEL, outcomeTone, PHASE_LABEL, STATUS_LABEL, statusTone } from "../lib/format";
 import type { RuntimeTier } from "../lib/eventViews";
-import { Badge, type Tone } from "./ui";
+import { cn } from "../lib/utils";
+import { Badge, type Tone } from "./common";
 
 const PHASES = Phase.options;
 
 export function OutcomeBadge({ outcome }: { outcome: Outcome }) {
-  const tone: Tone =
-    outcome === "CANDIDATE_PASSED_CHECKS"
-      ? "ok"
-      : outcome === "INCONCLUSIVE" || outcome === "STOPPED_LIMIT" || outcome === "NOT_REPRODUCED"
-        ? "warn"
-        : "bad";
   return (
-    <Badge tone={tone} title={OUTCOME_HINT[outcome]}>
+    <Badge tone={outcomeTone(outcome)} title={OUTCOME_HINT[outcome]}>
       {OUTCOME_LABEL[outcome]}
     </Badge>
   );
 }
 
 export function StatusBadge({ status }: { status: Task["status"] }) {
-  const tone: Tone =
-    status === "running" || status === "queued"
-      ? "info"
-      : status === "done"
-        ? "neutral"
-        : status === "cancelling"
-          ? "warn"
-          : "bad";
-  return <Badge tone={tone}>{STATUS_LABEL[status]}</Badge>;
+  return <Badge tone={statusTone(status)}>{STATUS_LABEL[status]}</Badge>;
 }
 
+/** The runtime tier exactly as inspected (or as the host check selected it before any inspection). */
 export function RuntimeChip({ tier }: { tier: RuntimeTier }) {
   if (!tier.runtime) return <Badge tone="neutral">runtime: {tier.source}</Badge>;
   const tone: Tone = tier.runtime === "kata" ? "ok" : tier.runtime === "runsc" ? "info" : "bad";
   const label = tier.runtime === "kata" ? "Kata" : tier.runtime === "runsc" ? "gVisor (runsc)" : "runc";
   return (
-    <span className="runtime-chip">
+    <span className="inline-flex items-center gap-1">
       <Badge tone={tone} title={`Runtime tier as ${tier.source}`}>
         {label}
       </Badge>
       {tier.devUnsafe || tier.runtime === "runc" ? (
         <Badge tone="bad" title="Plain runc without a guest kernel: local development only, never a deployment.">
+          <IconAlertTriangle />
           dev-unsafe
         </Badge>
       ) : null}
@@ -49,19 +39,26 @@ export function RuntimeChip({ tier }: { tier: RuntimeTier }) {
   );
 }
 
-export function PhaseRail({ task }: { task: Task }) {
+/** Seven phases as a compact stepper: done, current (live or terminal), to come. */
+export function PhaseRail({ task, className }: { task: Task; className?: string }) {
   const currentIndex = PHASES.indexOf(task.phase);
-  const terminal = task.status === "done" || task.status === "failed" || task.status === "cancelled";
+  const terminal = isTerminalStatus(task.status);
   return (
-    <ol className="phase-rail" aria-label="Phases">
+    <ol className={cn("flex min-w-0 items-center gap-1", className)} aria-label="Phases">
       {PHASES.map((phase, i) => {
-        let cls = "phase";
-        if (i < currentIndex) cls += " phase-done";
-        else if (i === currentIndex) cls += terminal ? " phase-done phase-current" : " phase-current";
+        const done = i < currentIndex || (i === currentIndex && terminal);
+        const current = i === currentIndex;
         return (
-          <li className={cls} key={phase} aria-current={i === currentIndex ? "step" : undefined}>
-            <span className="phase-dot" />
-            <span className="phase-label">{PHASE_LABEL[phase]}</span>
+          <li key={phase} className="flex min-w-0 flex-1 flex-col gap-1" aria-current={current ? "step" : undefined} title={PHASE_LABEL[phase]}>
+            <span
+              className={cn(
+                "h-1 rounded-full transition-colors duration-300",
+                done ? "bg-foreground/70" : current ? "bg-blue-500 animate-pulse motion-reduce:animate-none" : "bg-muted-foreground/20",
+              )}
+            />
+            <span className={cn("hidden truncate text-[10px] sm:block", current ? "font-medium text-foreground" : "text-muted-foreground")}>
+              {PHASE_LABEL[phase]}
+            </span>
           </li>
         );
       })}

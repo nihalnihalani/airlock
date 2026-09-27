@@ -1,6 +1,6 @@
 import type { Expectation, Observation, VerificationRecord } from "@airlock/contracts";
 import { formatDateTime } from "../lib/format";
-import { Badge, Chip, Digest, KeyValue, Mono, Section } from "./ui";
+import { Badge, Chip, Digest, KeyValue, Mono } from "./common";
 
 function describeExpectation(e: Expectation): string {
   if (e.kind === "raises") return `raises ${e.exceptionType}${e.messageIncludes ? ` containing "${e.messageIncludes}"` : ""}`;
@@ -57,9 +57,12 @@ function join(baseline: VerificationRecord | undefined, candidate: VerificationR
 
 function RecordSummary({ label, record }: { label: string; record: VerificationRecord }) {
   return (
-    <div className="record-summary">
-      <div className="list-head">
-        <strong>{label}</strong>
+    <details className="tool-line rounded-lg border border-border bg-card dark:border-transparent">
+      <summary className="flex cursor-pointer list-none flex-wrap items-center gap-1.5 px-3 py-2 [&::-webkit-details-marker]:hidden">
+        <span aria-hidden className="tool-line-chevron text-xs text-muted-foreground transition-transform">
+          ▸
+        </span>
+        <span className="text-sm font-medium">{label}</span>
         <Badge tone={record.passed ? "ok" : "bad"}>
           {record.role === "baseline"
             ? record.passed
@@ -70,22 +73,45 @@ function RecordSummary({ label, record }: { label: string; record: VerificationR
               : "not all cases passed"}
         </Badge>
         <Chip>
-          {record.completedCases}/{record.requiredCases} cases completed
+          {record.completedCases}/{record.requiredCases} completed
         </Chip>
         <Chip>exec {record.exec.status}</Chip>
         {record.exec.truncated ? <Badge tone="warn">output truncated</Badge> : null}
+      </summary>
+      <div className="border-t border-border px-3 py-2.5 dark:border-foreground/5">
+        <KeyValue
+          className="text-xs"
+          rows={[
+            { key: "record id", value: <Mono wrap>{record.id}</Mono> },
+            { key: "candidate digest", value: <Digest value={record.candidateDigest} /> },
+            { key: "contract digest", value: <Digest value={record.contractDigest} /> },
+            { key: "adapter digest", value: <Digest value={record.adapterDigest} /> },
+            { key: "runtime image", value: <Mono wrap>{record.runtimeImageDigest}</Mono> },
+            { key: "comparator", value: record.comparatorVersion },
+            { key: "created", value: formatDateTime(record.createdAt) },
+          ]}
+        />
       </div>
-      <KeyValue
-        rows={[
-          { key: "record id", value: <Mono>{record.id}</Mono> },
-          { key: "candidate digest", value: <Digest value={record.candidateDigest} /> },
-          { key: "contract digest", value: <Digest value={record.contractDigest} /> },
-          { key: "adapter digest", value: <Digest value={record.adapterDigest} /> },
-          { key: "runtime image", value: <Mono wrap>{record.runtimeImageDigest}</Mono> },
-          { key: "comparator", value: record.comparatorVersion },
-          { key: "created", value: formatDateTime(record.createdAt) },
-        ]}
-      />
+    </details>
+  );
+}
+
+function Side({ label, verdict }: { label: string; verdict: VerificationRecord["cases"][number] | undefined }) {
+  return (
+    <div className="flex min-w-0 flex-col gap-1 rounded-md bg-muted/50 px-2.5 py-2 dark:bg-background/50">
+      <div className="flex items-center gap-1.5">
+        <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">{label}</span>
+        {verdict ? <Badge tone={verdict.passed ? "ok" : "bad"}>{verdict.passed ? "pass" : "fail"}</Badge> : null}
+      </div>
+      {verdict ? (
+        <>
+          <span className="text-[11px] break-words text-muted-foreground">expected {describeExpectation(verdict.expected)}</span>
+          <span className="text-xs break-words">{describeObservation(verdict.observed)}</span>
+          {verdict.reason ? <span className="text-[11px] break-words text-muted-foreground">{verdict.reason}</span> : null}
+        </>
+      ) : (
+        <span className="text-xs text-muted-foreground">not run</span>
+      )}
     </div>
   );
 }
@@ -101,67 +127,31 @@ export function CaseTable({
   titles: Map<string, string>;
 }) {
   const rows = join(baseline, verification, titles);
+  if (!baseline && !verification) {
+    return <p className="text-xs text-muted-foreground">No verification records yet. Records appear after the baseline run and after freeze + verify.</p>;
+  }
   return (
-    <Section title="Baseline vs candidate">
-      {!baseline && !verification ? (
-        <p className="muted">No verification records yet. Records appear after the baseline run and after freeze + verify.</p>
-      ) : (
-        <>
-          <div className="record-summaries">
-            {baseline ? <RecordSummary label="Baseline (pristine tree)" record={baseline} /> : null}
-            {verification ? <RecordSummary label="Candidate (sealed bundle)" record={verification} /> : null}
-          </div>
-          <div className="table-wrap">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Case</th>
-                  <th>Baseline expected</th>
-                  <th>Baseline observed</th>
-                  <th>Candidate expected</th>
-                  <th>Candidate observed</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row) => (
-                  <tr key={row.caseId}>
-                    <td>
-                      <div>{row.title}</div>
-                      <div className="muted mono-small">
-                        {row.caseId} · {row.kind}
-                      </div>
-                    </td>
-                    <td>{row.baseline ? describeExpectation(row.baseline.expected) : <span className="muted">—</span>}</td>
-                    <td>
-                      {row.baseline ? (
-                        <>
-                          <Badge tone={row.baseline.passed ? "ok" : "bad"}>{row.baseline.passed ? "pass" : "fail"}</Badge>{" "}
-                          {describeObservation(row.baseline.observed)}
-                          <div className="muted">{row.baseline.reason}</div>
-                        </>
-                      ) : (
-                        <span className="muted">—</span>
-                      )}
-                    </td>
-                    <td>{row.candidate ? describeExpectation(row.candidate.expected) : <span className="muted">—</span>}</td>
-                    <td>
-                      {row.candidate ? (
-                        <>
-                          <Badge tone={row.candidate.passed ? "ok" : "bad"}>{row.candidate.passed ? "pass" : "fail"}</Badge>{" "}
-                          {describeObservation(row.candidate.observed)}
-                          <div className="muted">{row.candidate.reason}</div>
-                        </>
-                      ) : (
-                        <span className="muted">—</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </>
-      )}
-    </Section>
+    <div className="flex flex-col gap-2">
+      {baseline ? <RecordSummary label="Baseline (pristine tree)" record={baseline} /> : null}
+      {verification ? <RecordSummary label="Candidate (sealed bundle)" record={verification} /> : null}
+      <ul className="flex flex-col gap-2">
+        {rows.map((row) => {
+          return (
+            <li key={row.caseId} className="rounded-lg border border-border bg-card p-3 dark:border-transparent">
+              <div className="text-sm font-medium">{row.title}</div>
+              <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+                <Mono>{row.caseId}</Mono>
+                <span>·</span>
+                <span>{row.kind}</span>
+              </div>
+              <div className="mt-2 grid grid-cols-2 gap-1.5">
+                <Side label="Baseline" verdict={row.baseline} />
+                <Side label="Candidate" verdict={row.candidate} />
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }

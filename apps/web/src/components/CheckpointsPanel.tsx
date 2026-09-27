@@ -1,7 +1,8 @@
 import type { IsolationProbe, RuntimeInspection, TeardownRecord } from "@airlock/contracts";
+import type { ReactNode } from "react";
 import type { Checkpoints } from "../lib/eventViews";
 import { formatDateTime } from "../lib/format";
-import { Badge, BoolChip, Chip, KeyValue, Mono, Section, type Tone } from "./ui";
+import { Badge, BoolChip, Chip, KeyValue, Mono, type Tone } from "./common";
 
 const PROBE_KEYS: { key: keyof Omit<IsolationProbe, "probedAt" | "allBlocked">; label: string }[] = [
   { key: "metadataEndpoint", label: "metadata 169.254.169.254" },
@@ -13,19 +14,6 @@ const PROBE_KEYS: { key: keyof Omit<IsolationProbe, "probedAt" | "allBlocked">; 
 
 function probeTone(result: IsolationProbe[keyof IsolationProbe]): Tone {
   return result === "BLOCKED" ? "ok" : result === "REACHED" ? "bad" : "warn";
-}
-
-function ProbeChips({ probe }: { probe: IsolationProbe }) {
-  return (
-    <span className="chips">
-      {PROBE_KEYS.map(({ key, label }) => (
-        <Chip tone={probeTone(probe[key])} key={key}>
-          {label}: {probe[key]}
-        </Chip>
-      ))}
-      <Badge tone={probe.allBlocked ? "ok" : "bad"}>{probe.allBlocked ? "all blocked" : "NOT fully blocked"}</Badge>
-    </span>
-  );
 }
 
 const CHECK_LABELS: { key: keyof RuntimeInspection["checks"]; label: string }[] = [
@@ -44,48 +32,80 @@ const CHECK_LABELS: { key: keyof RuntimeInspection["checks"]; label: string }[] 
   { key: "ownedLabels", label: "owned labels" },
 ];
 
+function Checkpoint({ n, title, status, children }: { n: number; title: string; status?: ReactNode; children: ReactNode }) {
+  return (
+    <li className="rounded-lg border border-border bg-card p-3 dark:border-transparent">
+      <div className="mb-2 flex items-center gap-2">
+        <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-[11px] font-medium tabular-nums text-muted-foreground">{n}</span>
+        <span className="min-w-0 flex-1 truncate text-sm font-medium">{title}</span>
+        {status}
+      </div>
+      <div className="flex flex-col gap-2 text-sm">{children}</div>
+    </li>
+  );
+}
+
+function Pending({ children }: { children: ReactNode }) {
+  return <p className="text-xs text-muted-foreground">{children}</p>;
+}
+
+function EntryHead({ label, children }: { label: string; children?: ReactNode }) {
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="text-xs font-medium text-foreground/80">{label}</span>
+      {children}
+    </div>
+  );
+}
+
 function InspectionView({ label, inspection }: { label: string; inspection: RuntimeInspection }) {
   return (
-    <div className="checkpoint-entry">
-      <div className="list-head">
-        <strong>{label}</strong>
-        <Chip>{inspection.runtime}</Chip>
+    <div className="flex flex-col gap-1.5">
+      <EntryHead label={label}>
+        <Chip tone={inspection.runtime === "runc" ? "bad" : "ok"}>{inspection.runtime}</Chip>
         {inspection.devUnsafe ? <Badge tone="bad">dev-unsafe</Badge> : null}
         <Badge tone={inspection.allPassed ? "ok" : "bad"}>{inspection.allPassed ? "all checks passed" : "checks FAILED"}</Badge>
-      </div>
+      </EntryHead>
       <KeyValue
+        className="text-xs"
         rows={[
-          { key: "container", value: <Mono>{inspection.container}</Mono> },
           { key: "hostname", value: <Mono>{inspection.guestHostname || "(empty)"}</Mono> },
           { key: "uname", value: <Mono wrap>{inspection.guestUname || "(empty)"}</Mono> },
+          { key: "container", value: <Mono wrap>{inspection.container}</Mono> },
           { key: "image digest", value: <Mono wrap>{inspection.imageDigest}</Mono> },
-          { key: "inspected at", value: formatDateTime(inspection.inspectedAt) },
+          { key: "inspected", value: formatDateTime(inspection.inspectedAt) },
         ]}
       />
-      <span className="chips">
-        {CHECK_LABELS.map(({ key, label: l }) => (
-          <Chip tone={inspection.checks[key] ? "ok" : "bad"} key={key}>
-            {l}
-          </Chip>
-        ))}
-      </span>
+      <details className="tool-line text-xs" open={!inspection.allPassed}>
+        <summary className="flex cursor-pointer list-none items-center gap-1.5 text-muted-foreground [&::-webkit-details-marker]:hidden">
+          <span aria-hidden className="tool-line-chevron transition-transform">
+            ▸
+          </span>
+          {CHECK_LABELS.filter(({ key }) => inspection.checks[key]).length}/{CHECK_LABELS.length} container checks
+        </summary>
+        <div className="mt-1.5 flex flex-wrap gap-1">
+          {CHECK_LABELS.map(({ key, label: l }) => (
+            <Badge tone={inspection.checks[key] ? "ok" : "bad"} key={key}>
+              {l}
+            </Badge>
+          ))}
+        </div>
+      </details>
     </div>
   );
 }
 
 function TeardownView({ label, teardown }: { label: string; teardown: TeardownRecord }) {
   const remaining = teardown.containersRemaining.length + teardown.volumesRemaining.length;
+  const clean = teardown.clean && remaining === 0;
   return (
-    <div className="checkpoint-entry">
-      <div className="list-head">
-        <strong>{label}</strong>
-        <Badge tone={teardown.clean && remaining === 0 ? "ok" : "bad"}>
-          {teardown.clean && remaining === 0 ? "(no sandboxes)" : "teardown incomplete"}
-        </Badge>
-        <span className="muted">{formatDateTime(teardown.destroyedAt)}</span>
-      </div>
+    <div className="flex flex-col gap-1">
+      <EntryHead label={label}>
+        <Badge tone={clean ? "ok" : "bad"}>{clean ? "(no sandboxes)" : "teardown incomplete"}</Badge>
+        <span className="text-[11px] text-muted-foreground">{formatDateTime(teardown.destroyedAt)}</span>
+      </EntryHead>
       {remaining > 0 ? (
-        <ul className="plain-list">
+        <ul className="flex flex-col gap-0.5 text-xs">
           {teardown.containersRemaining.map((c) => (
             <li key={`c-${c}`}>
               container <Mono>{c}</Mono>
@@ -103,84 +123,90 @@ function TeardownView({ label, teardown }: { label: string; teardown: TeardownRe
 }
 
 export function CheckpointsPanel({ cp }: { cp: Checkpoints }) {
+  const probesBlocked = cp.probes.length > 0 && cp.probes.every((p) => p.probe.allBlocked);
+  const teardownsClean = cp.teardowns.length > 0 && cp.teardowns.every((t) => t.teardown.clean && t.teardown.containersRemaining.length + t.teardown.volumesRemaining.length === 0);
   return (
-    <Section title="Five checkpoints">
-      <div className="checkpoints">
-        <div className="checkpoint">
-          <h3>1 · Host check</h3>
-          {cp.host ? (
-            <>
-              <KeyValue
-                rows={[
-                  { key: "docker", value: cp.host.dockerVersion },
-                  { key: "cpu virtualization", value: <BoolChip value={cp.host.cpuVirtualization} /> },
-                  { key: "/dev/kvm", value: <BoolChip value={cp.host.kvmPresent} yes="present" no="absent" /> },
-                  { key: "kvm rw", value: <BoolChip value={cp.host.kvmReadWrite} /> },
-                  {
-                    key: "runtimes",
-                    value: (
-                      <span className="chips">
-                        {cp.host.availableRuntimes.map((r) => (
-                          <Chip key={r}>{r}</Chip>
-                        ))}
-                        {cp.host.availableRuntimes.length === 0 ? <span className="muted">none reported</span> : null}
-                      </span>
-                    ),
-                  },
-                  { key: "selected", value: <Chip tone={cp.host.selectedRuntime === "runc" ? "bad" : "ok"}>{cp.host.selectedRuntime}</Chip> },
-                  { key: "dev-unsafe", value: <BoolChip value={cp.host.devUnsafe} invert /> },
-                  { key: "checked", value: `${formatDateTime(cp.host.checkedAt)} (${cp.hostSource})` },
-                ]}
-              />
-            </>
-          ) : (
-            <p className="muted">Not recorded yet.</p>
-          )}
-        </div>
+    <ol className="flex flex-col gap-2">
+      <Checkpoint n={1} title="Host check" status={cp.host ? <Chip tone={cp.host.selectedRuntime === "runc" ? "bad" : "ok"}>{cp.host.selectedRuntime}</Chip> : null}>
+        {cp.host ? (
+          <KeyValue
+            className="text-xs"
+            rows={[
+              { key: "docker", value: cp.host.dockerVersion },
+              { key: "CPU virtualization", value: <BoolChip value={cp.host.cpuVirtualization} /> },
+              { key: "/dev/kvm", value: <BoolChip value={cp.host.kvmPresent} yes="present" no="absent" /> },
+              { key: "kvm read/write", value: <BoolChip value={cp.host.kvmReadWrite} /> },
+              {
+                key: "runtimes",
+                value: (
+                  <span className="flex flex-wrap gap-1">
+                    {cp.host.availableRuntimes.map((r) => (
+                      <Chip key={r}>{r}</Chip>
+                    ))}
+                    {cp.host.availableRuntimes.length === 0 ? <span className="text-muted-foreground">none reported</span> : null}
+                  </span>
+                ),
+              },
+              { key: "dev-unsafe", value: <BoolChip value={cp.host.devUnsafe} invert /> },
+              { key: "checked", value: `${formatDateTime(cp.host.checkedAt)} (${cp.hostSource})` },
+            ]}
+          />
+        ) : (
+          <Pending>Not recorded yet.</Pending>
+        )}
+      </Checkpoint>
 
-        <div className="checkpoint">
-          <h3>2 · Execution log</h3>
-          <p>
-            {cp.execCount} executions with exit codes recorded, {cp.execFailures} not succeeded. See the tool / exec
-            log for each command.
-          </p>
-        </div>
+      <Checkpoint n={2} title="Execution log" status={<Chip>{cp.execCount} runs</Chip>}>
+        <p className="text-xs text-muted-foreground">
+          {cp.execCount} executions with exit codes recorded, {cp.execFailures} not succeeded. Each is a tool card in the thread,
+          with its command, exit code, duration and bounded output.
+        </p>
+      </Checkpoint>
 
-        <div className="checkpoint">
-          <h3>3 · In-sandbox uname / hostname</h3>
-          {cp.inspections.length === 0 ? (
-            <p className="muted">No inspection recorded yet.</p>
-          ) : (
-            cp.inspections.map((i, idx) => <InspectionView key={`${i.inspection.container}-${idx}`} {...i} />)
-          )}
-        </div>
+      <Checkpoint n={3} title="In-sandbox uname / hostname" status={cp.inspections.length > 0 ? <Chip>{cp.inspections.length}</Chip> : null}>
+        {cp.inspections.length === 0 ? (
+          <Pending>No inspection recorded yet.</Pending>
+        ) : (
+          cp.inspections.map((i, idx) => <InspectionView key={`${i.inspection.container}-${idx}`} {...i} />)
+        )}
+      </Checkpoint>
 
-        <div className="checkpoint">
-          <h3>4 · Isolation probe</h3>
-          {cp.probes.length === 0 ? (
-            <p className="muted">No probe recorded yet. An author sandbox is refused unless every probe is BLOCKED.</p>
-          ) : (
-            cp.probes.map((p, idx) => (
-              <div className="checkpoint-entry" key={`${p.probe.probedAt}-${idx}`}>
-                <div className="list-head">
-                  <strong>{p.label}</strong>
-                  <span className="muted">{formatDateTime(p.probe.probedAt)}</span>
-                </div>
-                <ProbeChips probe={p.probe} />
+      <Checkpoint
+        n={4}
+        title="Isolation probe"
+        status={cp.probes.length > 0 ? <Badge tone={probesBlocked ? "ok" : "bad"}>{probesBlocked ? "all BLOCKED" : "NOT fully blocked"}</Badge> : null}
+      >
+        {cp.probes.length === 0 ? (
+          <Pending>No probe recorded yet. An author sandbox is refused unless every probe is BLOCKED.</Pending>
+        ) : (
+          cp.probes.map((p, idx) => (
+            <div className="flex flex-col gap-1" key={`${p.probe.probedAt}-${idx}`}>
+              <EntryHead label={p.label}>
+                <span className="text-[11px] text-muted-foreground">{formatDateTime(p.probe.probedAt)}</span>
+              </EntryHead>
+              <div className="flex flex-wrap gap-1">
+                {PROBE_KEYS.map(({ key, label }) => (
+                  <Badge tone={probeTone(p.probe[key])} key={key}>
+                    {label}: {p.probe[key]}
+                  </Badge>
+                ))}
               </div>
-            ))
-          )}
-        </div>
+            </div>
+          ))
+        )}
+      </Checkpoint>
 
-        <div className="checkpoint">
-          <h3>5 · Teardown</h3>
-          {cp.teardowns.length === 0 ? (
-            <p className="muted">No teardown recorded yet.</p>
-          ) : (
-            cp.teardowns.map((t, idx) => <TeardownView key={`${t.teardown.destroyedAt}-${idx}`} {...t} />)
-          )}
-        </div>
-      </div>
-    </Section>
+      <Checkpoint
+        n={5}
+        title="Teardown"
+        status={cp.teardowns.length > 0 ? <Badge tone={teardownsClean ? "ok" : "bad"}>{teardownsClean ? "(no sandboxes)" : "incomplete"}</Badge> : null}
+      >
+        {cp.teardowns.length === 0 ? (
+          <Pending>No teardown recorded yet.</Pending>
+        ) : (
+          cp.teardowns.map((t, idx) => <TeardownView key={`${t.teardown.destroyedAt}-${idx}`} {...t} />)
+        )}
+      </Checkpoint>
+    </ol>
   );
 }

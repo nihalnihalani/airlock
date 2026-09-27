@@ -1,3 +1,4 @@
+import { IconPlayerPlay } from "@tabler/icons-react";
 import { useState } from "react";
 import type { PreviewResult } from "../lib/types";
 import { describeError, previewTask } from "../lib/api";
@@ -9,7 +10,14 @@ import {
   type PreviewFormState,
   type PreviewMode,
 } from "../lib/preview";
-import { Badge, Chip, Digest, ErrorBox, Mono, Pre, Section } from "./ui";
+import { cn } from "../lib/utils";
+import { Badge, Chip, Digest, ErrorBox, Mono, Pre } from "./common";
+import { Button } from "./ui/button";
+import { Input } from "./ui/input";
+
+function Legend({ children }: { children: string }) {
+  return <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">{children}</span>;
+}
 
 export function PreviewForm({ taskId, candidateDigest }: { taskId: string; candidateDigest: string }) {
   const [form, setForm] = useState<PreviewFormState>(defaultPreviewForm);
@@ -56,144 +64,168 @@ export function PreviewForm({ taskId, candidateDigest }: { taskId: string; candi
   };
 
   const rendered = result ? previewText(result.value) : null;
+  const cellClass = "h-8 min-w-0 px-2 text-xs md:text-xs";
 
   return (
-    <Section title="Report Export preview" aside={<Digest label="candidate" value={candidateDigest} />}>
-      <p className="muted">
-        A trusted form that calls the real <Mono>tabulate.tabulate</Mono> inside a fresh preview sandbox built from the
-        sealed candidate. The result is shown as plain text.
+    <div className="flex flex-col gap-3">
+      <p className="text-xs text-muted-foreground">
+        A trusted form that calls the real <Mono>tabulate.tabulate</Mono> inside a fresh preview sandbox built from the sealed
+        candidate <Digest value={candidateDigest} />. The result is shown as plain text.
       </p>
-      <div className="form-grid">
-        <fieldset className="fieldset">
-          <legend>Table data</legend>
-          <label className="radio">
-            <input type="radio" name="mode" checked={form.mode === "empty"} onChange={() => setMode("empty")} />
-            Empty table (the reported case)
-          </label>
-          <label className="radio">
-            <input type="radio" name="mode" checked={form.mode === "rows"} onChange={() => setMode("rows")} />
-            Small table ({PREVIEW_LIMITS.minRows}–{PREVIEW_LIMITS.maxRows} rows)
-          </label>
-        </fieldset>
 
-        <fieldset className="fieldset">
-          <legend>Headers ({form.headers.length}/{PREVIEW_LIMITS.maxColumns})</legend>
-          <div className="row-inputs">
-            {form.headers.map((h, i) => (
-              <input
-                key={i}
-                type="text"
-                value={h}
-                maxLength={PREVIEW_LIMITS.maxHeaderChars}
-                aria-label={`Header ${i + 1}`}
-                onChange={(e) => setHeader(i, e.target.value)}
-              />
-            ))}
-          </div>
-          <div className="btn-row">
-            <button type="button" className="btn btn-small" onClick={addColumn} disabled={form.headers.length >= PREVIEW_LIMITS.maxColumns}>
-              + column
+      <div className="flex flex-col gap-1.5">
+        <Legend>Table data</Legend>
+        <div className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1" role="radiogroup" aria-label="Table data">
+          {(
+            [
+              ["empty", "Empty table (reported)"],
+              ["rows", `${PREVIEW_LIMITS.minRows}–${PREVIEW_LIMITS.maxRows} rows`],
+            ] as const
+          ).map(([mode, label]) => (
+            <button
+              key={mode}
+              type="button"
+              role="radio"
+              aria-checked={form.mode === mode}
+              onClick={() => setMode(mode)}
+              className={cn(
+                "h-7 rounded-md px-2 text-xs font-medium transition-colors",
+                form.mode === mode ? "bg-background text-foreground shadow-sm dark:bg-input/60" : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {label}
             </button>
-            <button type="button" className="btn btn-small" onClick={removeColumn} disabled={form.headers.length <= 1}>
-              − column
-            </button>
-          </div>
-        </fieldset>
-
-        {form.mode === "rows" ? (
-          <fieldset className="fieldset">
-            <legend>Rows ({form.rows.length}/{PREVIEW_LIMITS.maxRows})</legend>
-            {form.rows.map((row, r) => (
-              <div className="row-inputs" key={r}>
-                {row.map((cell, c) => (
-                  <input
-                    key={c}
-                    type="text"
-                    value={cell}
-                    maxLength={PREVIEW_LIMITS.maxCellChars}
-                    aria-label={`Row ${r + 1} cell ${c + 1}`}
-                    onChange={(e) => setCell(r, c, e.target.value)}
-                  />
-                ))}
-              </div>
-            ))}
-            <div className="btn-row">
-              <button type="button" className="btn btn-small" onClick={addRow} disabled={form.rows.length >= PREVIEW_LIMITS.maxRows}>
-                + row
-              </button>
-              <button type="button" className="btn btn-small" onClick={removeRow} disabled={form.rows.length <= PREVIEW_LIMITS.minRows}>
-                − row
-              </button>
-            </div>
-            <p className="muted">Whole and decimal numbers are passed as numbers; everything else as text.</p>
-          </fieldset>
-        ) : null}
-
-        <fieldset className="fieldset">
-          <legend>maxheadercolwidths</legend>
-          <input
-            type="text"
-            inputMode="numeric"
-            value={form.maxHeaderColWidth}
-            maxLength={3}
-            aria-label="Header width"
-            placeholder="leave empty to omit"
-            onChange={(e) => setForm((f) => ({ ...f, maxHeaderColWidth: e.target.value }))}
-          />
-          <p className="muted">1–{PREVIEW_LIMITS.maxHeaderWidth}; empty omits the keyword argument.</p>
-        </fieldset>
+          ))}
+        </div>
       </div>
 
-      <div className="btn-row">
-        <button type="button" className="btn btn-primary" onClick={() => void submit()} disabled={busy || !build.ok}>
+      <div className="flex flex-col gap-1.5">
+        <div className="flex items-center justify-between">
+          <Legend>{`Headers (${form.headers.length}/${PREVIEW_LIMITS.maxColumns})`}</Legend>
+          <div className="flex gap-1">
+            <Button size="xs" variant="ghost" onClick={removeColumn} disabled={form.headers.length <= 1}>
+              − column
+            </Button>
+            <Button size="xs" variant="ghost" onClick={addColumn} disabled={form.headers.length >= PREVIEW_LIMITS.maxColumns}>
+              + column
+            </Button>
+          </div>
+        </div>
+        <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${Math.min(form.headers.length, 4)}, minmax(0, 1fr))` }}>
+          {form.headers.map((h, i) => (
+            <Input
+              key={i}
+              className={cellClass}
+              value={h}
+              maxLength={PREVIEW_LIMITS.maxHeaderChars}
+              aria-label={`Header ${i + 1}`}
+              onChange={(e) => setHeader(i, e.target.value)}
+            />
+          ))}
+        </div>
+      </div>
+
+      {form.mode === "rows" ? (
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center justify-between">
+            <Legend>{`Rows (${form.rows.length}/${PREVIEW_LIMITS.maxRows})`}</Legend>
+            <div className="flex gap-1">
+              <Button size="xs" variant="ghost" onClick={removeRow} disabled={form.rows.length <= PREVIEW_LIMITS.minRows}>
+                − row
+              </Button>
+              <Button size="xs" variant="ghost" onClick={addRow} disabled={form.rows.length >= PREVIEW_LIMITS.maxRows}>
+                + row
+              </Button>
+            </div>
+          </div>
+          {form.rows.map((row, r) => (
+            <div key={r} className="grid gap-1" style={{ gridTemplateColumns: `repeat(${Math.min(row.length, 4)}, minmax(0, 1fr))` }}>
+              {row.map((cell, c) => (
+                <Input
+                  key={c}
+                  className={cellClass}
+                  value={cell}
+                  maxLength={PREVIEW_LIMITS.maxCellChars}
+                  aria-label={`Row ${r + 1} cell ${c + 1}`}
+                  onChange={(e) => setCell(r, c, e.target.value)}
+                />
+              ))}
+            </div>
+          ))}
+          <p className="text-[11px] text-muted-foreground">Whole and decimal numbers are passed as numbers; everything else as text.</p>
+        </div>
+      ) : null}
+
+      <div className="flex flex-col gap-1.5">
+        <Legend>maxheadercolwidths</Legend>
+        <Input
+          className={cn(cellClass, "w-28")}
+          inputMode="numeric"
+          value={form.maxHeaderColWidth}
+          maxLength={3}
+          aria-label="Header width"
+          placeholder="omit"
+          onChange={(e) => setForm((f) => ({ ...f, maxHeaderColWidth: e.target.value }))}
+        />
+        <p className="text-[11px] text-muted-foreground">1–{PREVIEW_LIMITS.maxHeaderWidth}; empty omits the keyword argument.</p>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <Button size="sm" onClick={() => void submit()} disabled={busy || !build.ok}>
+          <IconPlayerPlay />
           {busy ? "Running preview…" : "Run preview"}
-        </button>
-        {!build.ok ? <span className="field-error">{build.error}</span> : null}
+        </Button>
+        {!build.ok ? <span className="text-xs text-destructive">{build.error}</span> : null}
       </div>
       {build.ok ? (
-        <details className="details">
-          <summary>Request input (tabulate kwargs)</summary>
-          <Pre className="pre-small">{JSON.stringify(build.input, null, 2)}</Pre>
+        <details className="tool-line text-xs">
+          <summary className="flex cursor-pointer list-none items-center gap-1.5 text-muted-foreground [&::-webkit-details-marker]:hidden">
+            <span aria-hidden className="tool-line-chevron transition-transform">
+              ▸
+            </span>
+            Request input (tabulate kwargs)
+          </summary>
+          <Pre className="mt-1.5">{JSON.stringify(build.input, null, 2)}</Pre>
         </details>
       ) : null}
 
       {error ? <ErrorBox message={error} /> : null}
 
       {result && rendered ? (
-        <div className="preview-result">
-          <div className="list-head">
-            <strong>Result</strong>
-            <Digest label="ran against" value={result.digest} />
+        <div className="flex flex-col gap-2 rounded-lg border border-border bg-card p-3 dark:border-transparent">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-sm font-medium">Result</span>
+            <Chip>
+              <Digest label="ran against" value={result.digest} />
+            </Chip>
             <Chip>{result.value.inspection.runtime}</Chip>
             <Chip>exec {result.value.exec.status}</Chip>
             {result.value.exec.exitCode !== null ? <Chip>exit {result.value.exec.exitCode}</Chip> : null}
-            {result.value.candidateDigest !== result.digest ? (
-              <Badge tone="bad">API reported a different digest</Badge>
-            ) : null}
+            {result.value.candidateDigest !== result.digest ? <Badge tone="bad">API reported a different digest</Badge> : null}
           </div>
-          {rendered.kind === "text" ? <Pre className="pre-output">{rendered.text}</Pre> : null}
+          {rendered.kind === "text" ? <Pre className="bg-background">{rendered.text}</Pre> : null}
           {rendered.kind === "value" ? (
             <>
-              <p className="muted">The call returned a non-string value:</p>
-              <Pre className="pre-output">{rendered.text}</Pre>
+              <p className="text-xs text-muted-foreground">The call returned a non-string value:</p>
+              <Pre>{rendered.text}</Pre>
             </>
           ) : null}
           {rendered.kind === "error" ? (
             <>
               <Badge tone="bad">{rendered.exceptionType}</Badge>
-              {rendered.message ? <Pre className="pre-small">{rendered.message}</Pre> : null}
-              {rendered.tracebackTail ? <Pre className="pre-small">{rendered.tracebackTail}</Pre> : null}
+              {rendered.message ? <Pre>{rendered.message}</Pre> : null}
+              {rendered.tracebackTail ? <Pre>{rendered.tracebackTail}</Pre> : null}
             </>
           ) : null}
-          {rendered.kind === "none" ? <p className="field-error">No output: {rendered.reason}.</p> : null}
+          {rendered.kind === "none" ? <p className="text-xs text-destructive">No output: {rendered.reason}.</p> : null}
           {result.value.exec.stderr.length > 0 && rendered.kind !== "error" ? (
-            <details className="details">
-              <summary>stderr</summary>
-              <Pre className="pre-small">{result.value.exec.stderr.slice(-4000)}</Pre>
+            <details className="text-xs">
+              <summary className="cursor-pointer text-muted-foreground">stderr</summary>
+              <Pre className="mt-1.5">{result.value.exec.stderr.slice(-4000)}</Pre>
             </details>
           ) : null}
         </div>
       ) : null}
-    </Section>
+    </div>
   );
 }
