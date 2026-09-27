@@ -1,0 +1,9 @@
+{ "_comment": "ACCEPTANCE diagnostic (verifier_tester, C41): download a 9,000,000-byte public file (speed.cloudflare.com) in the browser, wait on a slow page so it completes, then browser_download_save it; the control plane is killed while download.read is in flight.",
+  "turns": [
+    { "text": "Starting the download.", "toolCalls": [{ "name": "browser_navigate", "args": { "url": "https://speed.cloudflare.com/__down?bytes=9000000" } }] },
+    { "text": "Waiting on a slow page.", "toolCalls": [{ "name": "browser_navigate", "args": { "url": "https://httpbin.org/delay/4" } }] },
+    { "text": "Listing downloads.", "toolCalls": [{ "name": "browser_download_list", "args": {} }] },
+    { "text": "Saving it.", "toolCalls": [{ "name": "browser_download_save", "args": { "downloadId": "dl-1", "name": "big.txt" } }] },
+    { "text": "Screenshot.", "toolCalls": [{ "name": "browser_screenshot", "args": {} }] },
+    { "text": "Submitting.", "toolCalls": [{ "name": "submit_result", "args": { "summary": "Acceptance diagnostic (C41): a large download was saved.", "sources": ["https://httpbin.org/delay/4"] } }] }
+  ] }

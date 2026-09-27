@@ -1,0 +1,16 @@
+{ "_comment": "ACCEPTANCE diagnostic (verifier_tester, C41): a medium browser run (13 turns, so a replay after one recovery stays inside the 30 model-call budget) for a takeover followed by a control-plane kill.",
+  "turns": [
+    { "text": "Opening example.com.", "toolCalls": [{ "name": "browser_navigate", "args": { "url": "https://example.com/" } }] },
+    { "text": "Observing.", "toolCalls": [{ "name": "browser_observe", "args": {} }] },
+    { "text": "Scroll 0.", "toolCalls": [{ "name": "browser_scroll", "args": { "dy": 50 } }] },
+    { "text": "Scroll 1.", "toolCalls": [{ "name": "browser_scroll", "args": { "dy": -50 } }] },
+    { "text": "Scroll 2.", "toolCalls": [{ "name": "browser_scroll", "args": { "dy": 50 } }] },
+    { "text": "Scroll 3.", "toolCalls": [{ "name": "browser_scroll", "args": { "dy": -50 } }] },
+    { "text": "Scroll 4.", "toolCalls": [{ "name": "browser_scroll", "args": { "dy": 50 } }] },
+    { "text": "Scroll 5.", "toolCalls": [{ "name": "browser_scroll", "args": { "dy": -50 } }] },
+    { "text": "Scroll 6.", "toolCalls": [{ "name": "browser_scroll", "args": { "dy": 50 } }] },
+    { "text": "Scroll 7.", "toolCalls": [{ "name": "browser_scroll", "args": { "dy": -50 } }] },
+    { "text": "Observe again.", "toolCalls": [{ "name": "browser_observe", "args": {} }] },
+    { "text": "Screenshot.", "toolCalls": [{ "name": "browser_screenshot", "args": {} }] },
+    { "text": "Submitting.", "toolCalls": [{ "name": "submit_result", "args": { "summary": "Acceptance diagnostic (C41): takeover run.", "sources": ["https://example.com/"] } }] }
+  ] }

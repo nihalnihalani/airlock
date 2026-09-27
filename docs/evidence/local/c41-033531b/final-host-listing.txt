@@ -1,0 +1,16 @@
+## 2026-09-27T13:49:34Z final host checks (before dev-down)
+$ curl /listing
+{"listedAt":"2026-09-27T13:49:34.613Z","scope":"host","containers":[],"volumes":[],"networks":[]}
+$ docker ps -a --filter label=airlock.supervisor=true
+(end; empty = no sandboxes)
+$ docker network ls --filter label=airlock.supervisor=true
+(end)
+$ docker volume ls --filter label=airlock.supervisor=true
+(end)
+## 2026-09-27T13:49:36Z after scripts/dev-down.sh
+$ docker ps -a --filter label=airlock.supervisor=true
+(end)
+$ docker network ls --filter label=airlock.supervisor=true
+(end)
+$ listeners on 3000/3100/4300
+(none)

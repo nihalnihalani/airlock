@@ -181,3 +181,45 @@ All suites ran from the fresh export (`unit/at-c39340c/`):
 | F1 | resolved | fresh-export fixtures suite passes and the fixtures service starts |
 | F2 | resolved | supervisor suite 207/207 |
 | F3 | resolved | A26 |
+
+## C41 crash/restart at `033531b`: 2026-09-27, verifier_tester
+
+**Revision:** `033531b34aebf221836c79fe2e3204e082232803`. HEAD moved to `4ff88d3` during the run, but `033531b..4ff88d3` touches only `deploy/` and `docs/`, so `apps/`, `packages/` and `runtime/` are identical.
+
+**How it was run:**
+- The stack ran from a fresh `git archive` export of `033531b` with `bun install`, using `env -i` and the "How to reproduce" variables.
+- The updated `scripts/acceptance/` (driver plus the new `acc-c41-*` fixtures) was copied into the export. That directory holds test code only.
+- Driver command: `AIRLOCK_STACK_ROOT=<export> AIRLOCK_STACK_REVISION=033531b… AIRLOCK_EVIDENCE_SUBDIR=c41-033531b bun scripts/acceptance/local.ts C41A C41B C41C C41D C41E C41E2 C41F K6`.
+- Each kill is `kill -9` of the pid in `data/run/{control,supervisor}.pid`. The restart is `scripts/dev-up.sh --detach`, which is idempotent and restarts only the dead process.
+- The kill is triggered from a live SSE stream at the named event, so it lands mid-operation. For every uncertain operation, the supervisor's own journal record (`GET /operations/:id`) was captured before the kill and again at the end.
+
+**Scope:** real local runc (dev-unsafe, Colima) with scripted drivers only. Nothing here measures a deployment, Kata or gVisor.
+
+**Evidence:** `docs/evidence/local/c41-033531b/` (per-row JSON with checks, timelines and event trails, `results.json`, `final-host-listing.txt`).
+
+### Rows: 7 PASS, 0 FAIL (plus K6 PASS)
+
+| Row | Kill moment | What was verified | Time (UTC) | Result |
+|---|---|---|---|---|
+| C41A | control SIGKILL 1.5 s into `browser_navigate https://httpbin.org/delay/8` (supervisor op `pending`) | Reclaimed 53 s after the kill (60 s worker lease), counted as recovery 1 of 2. The outstanding `browserOp` was reconciled "(intent): not replayed". Its operationId has one `started` event and no completion anywhere. The old browser attempt was revoked by the supervisor's authorization lapse, then "Discarded … revoked; destroyed" by the recovery. Every later op ran on a new attempt. Final state: `done/RESULT_VERIFIED`, cleanup `confirmed`, no containers or networks. | 13:45:13 | PASS |
+| C41B | control SIGKILL 2.5 s into `code_run` (`sleep 20`, then **append** a marker line) | The uncertain `authorTool` was reconciled "not replayed" and never recorded as completed. Exactly one completed `code_run` exists, and it is a new operation on a fresh sandbox. `outputs/marker.txt` has exactly **one** line. No artifact came from the old attempt. The old sandbox was discarded. Cleanup `confirmed`. | 13:46:27 | PASS |
+| C41C | control SIGKILL while a judge held browser control (holder=human, after a human observe) | Between the restart and the reclaim, human observe and scroll → **409** and take → **409** ("browser loop is not running"). On reclaim: "Control returned to the agent" (#22) **before** the recovered run's first browser op (#27). The agent restarted in a fresh session with navigate → observe. No human op completed after the kill. Final `Task.control.holder=agent`. | 13:38:10 | PASS |
+| C41D | control SIGKILL with the **real** proposal caught in `claimed` (polled every 15 ms after the exact-digest approve) | **(a) real path:** `claimed` → `outcome_unknown` after the restart. The receipt read fails because `forms.example.com` is unreachable, so it stays `outcome_unknown` and is never confirmed or resubmitted. **(b) store level (labelled injection, see note):** a `submitted` proposal whose submission had really reached the loopback fixtures destination → `outcome_unknown` → "Receipt read (reconciliation) 1: confirmed" → `confirmed` with the destination's receipt and the approved digest. A `claimed` proposal that never reached it → `outcome_unknown` ("read 1: none"). The destination's `submission_accepted` counts are 1 (the pre-crash post), 0 and 0, so nothing was re-submitted, and no controller step ran after the restart. The replayed script's new proposal needed a fresh decision (rejected, 200). | 13:39:31 | PASS |
+| C41E | control SIGKILL right after `browser_download_save` → `download.read` of a 9,000,000-byte file from speed.cloudflare.com was accepted by the supervisor (op `pending`) | The op never completed at the controller: the supervisor finished it (HTTP 200) but the response was lost. No download artifact or "Download stored" event exists from the killed attempt, and there are no `.tmp-*` blobs in the control artifact store, neither while the control plane was down nor at the end. The old attempt (and its tmpfs downloads) was destroyed. The only stored download is the complete 9,000,000 B file from the fresh attempt after the replay. | 13:48:02 | PASS |
+| C41E2 | control SIGKILL while the browser's own download (`httpbin.org/drip`, 300 kB over 40 s) was `in_progress` | The partial file never became an artifact (0 download artifacts), there are no `.tmp-*` blobs, the old attempt was destroyed, and cleanup is `confirmed`. | 13:43:04 | PASS |
+| C41F | **supervisor** SIGKILL 1.5 s into `browser_navigate …/delay/8`, restarted about 4 s later | The controller recorded "browser_navigate outcome unknown … not replayed and the browser session is closed". Right after the restart, the old attempt is `unknown` and the browser and egress containers are `Exited`. The supervisor journal shows the op `completed` with httpStatus 409 and `interruptedByRestart: true`. At the end the attempt is destroyed, and no containers or networks of the task remain. The task finished and did not run forever. | 13:44:34 | PASS |
+| K6 | after all rows | `/listing` empty; `docker ps -a`, `network ls` and `volume ls` (label `airlock.supervisor=true`) are empty | 13:49:10 | PASS |
+
+After `scripts/dev-down.sh`: "(no sandboxes)". `docker network ls --filter label=airlock.supervisor=true` is empty, and nothing is listening on 3000, 3100 or 4300 (`final-host-listing.txt`).
+
+**What C41D part (b) is.** The sandboxed browser cannot reach the loopback fixtures destination, so a controller-driven submit to it cannot happen locally. While the control plane was dead, the driver did two things:
+- It inserted two `action-proposals` records (`submitted` and `claimed`) for the killed task into its PGlite store.
+- It posted the `submitted` one **once** to the fixtures destination with a correctly minted approval code. This simulates a submit that landed before the crash.
+
+Everything after the restart is the product's own code: settling, the receipt reads and the transitions. Part (a) is the unmodified product path.
+
+### Observations (not failures)
+
+- **O1: stale control display during the lease gap.** Between the restart and the reclaim (49–58 s, which is the 60 s worker lease), `GET /api/tasks/:id` still says `running`, and `GET /api/tasks/:id/control` still says `holder: "human"` with `live: null`. Every human action is refused (409), so control is never simultaneous. The durable record is reset only when the run re-attaches (`apps/control/src/browser-control.ts:118-121`).
+- **O2: reconciliation does not read the supervisor's operation record.** Recovery marks outstanding ops "(intent): not replayed" without calling the supervisor's `GET /operations/:id`. In C41A, C41B and C41E that record shows the operation **did complete** in the orphaned sandbox (httpStatus 200): in C41B the old `sleep 20` ran to the end (`docker top` while the control plane was down). This is safe, because the result is discarded along with the sandbox and never recorded. But the event could state "completed at the supervisor; result discarded" (`apps/control/src/general-handler.ts:1727-1748`).
+- **O3: the recovery replay and a weak completion check (C41F).** A recovered run replays the scripted diagnostic from turn 1 (the recovery note says "start again"), so re-issued ops are new operations on new attempts. In C41F the script continued after the supervisor kill with observe and screenshot of a fresh `about:blank` session, and still ended `RESULT_VERIFIED`. That happened because `screenshot-evidence` counts any screenshot and `sources-visited` accepted example.com visited in the lost session. This is a scripted-driver artifact, but the checks do not bind the screenshot to a cited source (`apps/control/src/completion-checks.ts:131-144`).

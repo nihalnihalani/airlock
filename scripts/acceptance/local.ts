@@ -1123,6 +1123,513 @@ async function testFinalCleanup() {
 }
 
 // ---------------------------------------------------------------------------------------------
+// C41 (40 Stage 6): kill the control plane (or the supervisor) during representative operations,
+// restart it the way dev-up.sh does, and check reconciliation against the actual containers and
+// journal records. Nothing here edits product code; the only store write is C41D's labelled
+// injection (made while the control plane is dead).
+const STACK_ENV = () => ({ AIRLOCK_WEB_DIST: "none", AIRLOCK_GENERAL_DIAGNOSTIC_SCRIPTS_DIR: join(STACK, "scripts/acceptance/fixtures/general"), AIRLOCK_PROPOSAL_TTL_MS: "60000", AIRLOCK_FORMS_ORIGINS: "http://127.0.0.1:3100,https://forms.example.com", AIRLOCK_JUDGE_PASSWORD: JUDGE_PW, AIRLOCK_OPERATOR_PASSWORD: OPER_PW });
+function devUp() {
+  const t0 = Date.now();
+  const r = sh(["bash", join(STACK, "scripts/dev-up.sh"), "--detach"], STACK_ENV(), true);
+  return { code: r.code, ms: Date.now() - t0, lines: r.out.split("\n").filter((l) => /already running|did not|not reachable/.test(l)).slice(0, 6), err: r.code ? r.err.slice(-400) : "" };
+}
+async function killStackProcess(name: "control" | "supervisor") {
+  const pid = Number(readFileSync(join(STACK, `data/run/${name}.pid`), "utf8").trim());
+  sh(["kill", "-9", String(pid)]);
+  const at = iso();
+  for (let i = 0; i < 50 && sh(["kill", "-0", String(pid)]).code === 0; i++) await sleep(100);
+  return { process: name, pid, signal: "SIGKILL", at, dead: sh(["kill", "-0", String(pid)]).code !== 0 };
+}
+async function controlHealth(): Promise<number | string> {
+  try {
+    return (await fetch(`${CONTROL}/api/health`, { signal: AbortSignal.timeout(2000) })).status;
+  } catch (error) {
+    return `unreachable (${error instanceof Error ? error.message.slice(0, 80) : String(error)})`;
+  }
+}
+/** One live SSE stream (reconnecting from the last seq); resolves at the first event matching `pred`. */
+async function watchFor(cookie: string, id: string, pred: (e: Ev, seen: Ev[]) => boolean, timeoutMs = 240_000): Promise<{ hit: Ev | null; seen: Ev[] }> {
+  const seen: Ev[] = [];
+  const t0 = Date.now();
+  let after = 0;
+  while (Date.now() - t0 < timeoutMs) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), Math.max(1, timeoutMs - (Date.now() - t0)));
+    try {
+      const res = await fetch(`${CONTROL}/api/tasks/${id}/events?lastEventId=${after}`, { headers: { accept: "text/event-stream", cookie }, signal: ctrl.signal });
+      if (!res.ok || !res.body) {
+        await sleep(300);
+        continue;
+      }
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let i: number;
+        while ((i = buf.indexOf("\n\n")) >= 0) {
+          const block = buf.slice(0, i);
+          buf = buf.slice(i + 2);
+          let name = "message";
+          let data = "";
+          for (const line of block.split("\n")) {
+            if (line.startsWith("event:")) name = line.slice(6).trim();
+            else if (line.startsWith("data:")) data += line.slice(5).trim();
+          }
+          if (name === "end") {
+            ctrl.abort();
+            return { hit: null, seen };
+          }
+          if (name === "task" || !data) continue;
+          try {
+            const e = JSON.parse(data);
+            if (typeof e.seq !== "number") continue;
+            seen.push(e);
+            after = e.seq;
+            if (pred(e, seen)) {
+              ctrl.abort();
+              return { hit: e, seen };
+            }
+          } catch {
+            // ignore
+          }
+        }
+      }
+    } catch {
+      await sleep(200);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return { hit: null, seen };
+}
+const slimC41 = (evs: Ev[]) =>
+  evs.map((e) => ({
+    seq: e.seq,
+    at: e.at,
+    kind: e.kind,
+    title: e.title,
+    ...(e.detail ? { detail: e.detail.slice(0, 400) } : {}),
+    ...(e.data?.tool ? { tool: e.data.tool } : {}),
+    ...(e.data?.opState ? { opState: e.data.opState } : {}),
+    ...(e.data?.operationId ? { operationId: e.data.operationId } : {}),
+    ...(e.data?.attemptId ? { attemptId: e.data.attemptId } : {}),
+    ...(e.data?.actor ? { actor: e.data.actor } : {}),
+    ...(e.data?.proposalId ? { proposalId: e.data.proposalId } : {}),
+    ...(e.data?.status ? { status: e.data.status } : {}),
+    ...(e.data?.recoveries !== undefined ? { recoveries: e.data.recoveries } : {}),
+  }));
+/** The supervisor journal's record of one operation (M8): pending/completed/interrupted, never the body. */
+async function supOp(operationId: string | undefined): Promise<{ status: number; body: unknown }> {
+  if (!operationId) return { status: 0, body: null };
+  try {
+    const res = await fetch(`${SUPERVISOR}/operations/${operationId}`, { headers: { authorization: `Bearer ${SUP_TOKEN}` }, signal: AbortSignal.timeout(3000) });
+    return { status: res.status, body: await res.json().catch(() => null) };
+  } catch (error) {
+    return { status: -1, body: error instanceof Error ? error.message.slice(0, 120) : String(error) };
+  }
+}
+function taskNetworks(taskId: string) {
+  return sh(["docker", "network", "ls", "--filter", `label=airlock.task=${taskId}`, "--format", "{{.Name}}"]).out.trim().split("\n").filter(Boolean);
+}
+function supLogFor(attemptId: string, max = 20): string[] {
+  const p = join(STACK, "data/run/supervisor.log");
+  if (!existsSync(p)) return [];
+  return readFileSync(p, "utf8").split("\n").filter((l) => l.includes(attemptId)).slice(-max).map((l) => l.slice(0, 400));
+}
+function artifactTmpFiles(): string[] {
+  return sh(["find", join(STACK, "data/control/artifacts"), "-name", ".tmp-*"]).out.trim().split("\n").filter(Boolean);
+}
+/** Common end-state checks for a killed task: terminal, old attempt not live, no containers/networks. */
+async function c41EndState(t: Test, cookie: string, id: string, oldAttempt: string | undefined, timeoutMs = 10 * 60_000) {
+  const v = await waitTerminal(cookie, id, timeoutMs);
+  await sleep(2000);
+  const task = (await getTask(cookie, id)).task;
+  t.check(TERMINAL.has(task.status), `task reached a terminal status (${task.status}/${task.outcome ?? "none"}), not left running`);
+  t.check(task.cleanup?.status === "confirmed", `cleanup confirmed (${task.cleanup?.status}: ${task.cleanup?.detail ?? ""})`);
+  const attempts = (await attemptsFor(id)).map((a) => ({ attemptId: a.ref?.attemptId, generation: a.ref?.generation, role: a.role, status: a.status }));
+  const old = attempts.find((a) => a.attemptId === oldAttempt);
+  t.check(!old || old.status === "destroyed", `the interrupted attempt ${oldAttempt} is destroyed at the supervisor (${old?.status ?? "gone"})`);
+  t.check(attempts.every((a) => a.status === "destroyed"), `no live attempt of the task at the supervisor (${attempts.map((a) => `${a.attemptId}:${a.status}`).join(", ")})`);
+  const cs = taskContainers(id);
+  const ns = taskNetworks(id);
+  t.check(cs.length === 0, `no container of the task remains (${cs.join(", ") || "none"})`);
+  t.check(ns.length === 0, `no network of the task remains (${ns.join(", ") || "none"})`);
+  return { view: v, task, attempts };
+}
+function opTrail(evs: Ev[], operationId: string | undefined) {
+  return slimC41(evs.filter((e) => operationId && e.data?.operationId === operationId));
+}
+
+async function testC41Browser(proc: "control" | "supervisor") {
+  const sup = proc === "supervisor";
+  const t = new Test(
+    sup ? "C41F-supervisor-kill-browser-navigate" : "C41A-control-kill-browser-navigate",
+    sup
+      ? "C41: SIGKILL the SUPERVISOR while a browser navigate (httpbin.org/delay/8) is in flight, restart it with dev-up.sh → the uncertain op is not replayed, the browser attempt is revoked/stopped at restart and destroyed, egress container and networks removed, the task does not run forever"
+      : "C41: SIGKILL the CONTROL PLANE while a browser navigate (httpbin.org/delay/8) is in flight, restart it with dev-up.sh → the task is recovered (recovery counted) or ends INCONCLUSIVE; the old browser attempt is discarded (not reused); the uncertain op is reconciled, never re-dispatched; host empty",
+  );
+  const cookie = await judgeA();
+  const c = await call(cookie, "POST", "/api/tasks", { kind: "general", profileId: "web-research", issueText: `C41 ${proc} kill during a browser navigate`, egressAllow: ["example.com", "httpbin.org"], scriptedDriver: "acc-c41-slow-nav" });
+  t.check(c.status === 201, `create → ${c.status} ${c.status !== 201 ? c.text.slice(0, 200) : ""}`);
+  const id = c.json.id as string;
+  const w = await watchFor(cookie, id, (e, seen) => e.kind === "tool" && e.data?.tool === "browser_navigate" && e.data?.opState === "started" && seen.filter((x) => x.data?.tool === "browser_navigate" && x.data?.opState === "started").length === 2);
+  t.check(w.hit, "the slow navigate (httpbin.org/delay/8) was dispatched (started event)");
+  if (!w.hit) return saveRow(t);
+  const opId = w.hit.data.operationId as string;
+  const oldAttempt = w.hit.data.attemptId as string;
+  await sleep(1500);
+  const containersBefore = taskContainers(id);
+  const attemptBefore = (await attemptsFor(id)).map((a) => ({ attemptId: a.ref?.attemptId, status: a.status }));
+  const supOpBeforeKill = await supOp(opId);
+  const kill = await killStackProcess(proc);
+  t.check(kill.dead, `${proc} pid ${kill.pid} killed with SIGKILL at ${kill.at}, 1.5 s into the navigate`);
+  await sleep(3000);
+  const whileDown: Record<string, unknown> = { containers: taskContainers(id), controlHealth: await controlHealth() };
+  if (!sup) whileDown.supervisorAttempts = (await attemptsFor(id)).map((a) => ({ attemptId: a.ref?.attemptId, status: a.status }));
+  const up = devUp();
+  t.check(up.code === 0, `${proc} restarted via dev-up.sh --detach (exit ${up.code}, ${up.ms} ms) ${up.err}`);
+  const restartedAt = iso();
+  const afterRestart: Record<string, unknown> = { containers: taskContainers(id), supervisorAttempts: (await attemptsFor(id)).map((a) => ({ attemptId: a.ref?.attemptId, status: a.status })) };
+  if (sup) {
+    const a = (afterRestart.supervisorAttempts as any[]).find((x) => x.attemptId === oldAttempt);
+    t.check(a && a.status !== "created" && a.status !== "running", `right after the supervisor restart the old browser attempt is no longer live (${a?.status ?? "gone"})`);
+    const running = (afterRestart.containers as string[]).filter((l) => l.split(" ")[1] === "Up");
+    t.check(running.length === 0, `right after restart, no container of the task is running (${(afterRestart.containers as string[]).join(" | ") || "none"})`);
+  } else {
+    afterRestart.taskImmediately = (({ status, phase, attempts, budget }) => ({ status, phase, attempts, recoveries: budget?.recoveries }))((await getTask(cookie, id)).task);
+    const rec = await waitEvent(cookie, id, (e) => e.title === "Recovering task", 180_000);
+    t.check(rec, `the restarted control plane reclaimed the task (${rec?.title}: ${rec?.detail ?? ""})`);
+  }
+  const end = await c41EndState(t, cookie, id, oldAttempt);
+  const evs = await allEvents(cookie, id);
+  const trail = opTrail(evs, opId);
+  t.check(trail.length > 0 && trail.every((e) => e.opState !== "completed"), `the uncertain navigate ${opId} never completed (trail: ${trail.map((e) => `${e.title}[${e.opState ?? "-"}]`).join(" → ")})`);
+  const startedSameOp = evs.filter((e) => e.data?.operationId === opId && e.data?.opState === "started").length;
+  t.check(startedSameOp === 1, `operation ${opId} was dispatched exactly once (started events: ${startedSameOp})`);
+  if (sup) {
+    const unk = evs.find((e) => e.data?.operationId === opId && (e.data?.opState === "unknown" || e.data?.opState === "failed"));
+    t.check(unk, `the controller recorded the navigate's outcome as ${unk?.data?.opState ?? "?"} ("${unk?.title ?? "none"}")`);
+  } else {
+    const recon = evs.find((e) => e.title === "Reconciled outstanding supervisor operations" && (e.detail ?? "").includes(opId));
+    t.check(recon, `recovery reconciled the outstanding operation ${opId} ("${recon?.detail?.split("\n").find((l) => l.includes(opId)) ?? "none"}")`);
+    const discarded = evs.find((e) => e.title === "Discarded attempt from an earlier run" && e.data?.attemptId === oldAttempt);
+    t.check(discarded && discarded.data?.opState === "completed", `the old browser attempt was discarded, not reused ("${discarded?.detail ?? "no event"}")`);
+    t.check((end.task.budget?.recoveries ?? 0) >= 1, `recovery counted (task.budget.recoveries = ${end.task.budget?.recoveries})`);
+    t.check(end.task.outcome !== "RESULT_VERIFIED" || (end.task.budget?.recoveries ?? 0) >= 1, `outcome ${end.task.outcome} is honest (a verified result only after a counted recovery)`);
+  }
+  const pivot = sup ? w.hit.seq : (evs.find((e) => e.title === "Recovering task")?.seq ?? Infinity);
+  const lateOld = evs.filter((e) => e.seq > pivot && e.kind === "tool" && e.data?.attemptId === oldAttempt && e.data?.opState === "completed");
+  t.check(lateOld.length === 0, `no browser op completed on the old attempt after the ${sup ? "kill" : "recovery"} (${lateOld.length})`);
+  const laterOps = evs.filter((e) => e.seq > w.hit!.seq && e.kind === "tool" && e.data?.opState === "completed" && e.data?.attemptId);
+  const laterAttempts = [...new Set(laterOps.map((e) => e.data.attemptId as string))];
+  t.check(laterAttempts.every((a) => a !== oldAttempt), `browser ops after the kill ran only on fresh attempt(s): ${laterAttempts.join(", ") || "none"}`);
+  t.ev("timeline", { taskId: id, uncertainOperation: opId, oldAttempt, containersBefore, attemptBefore, kill, whileDown, restart: { at: restartedAt, ...up }, afterRestart });
+  t.ev("supervisorOperationRecord", { beforeKill: supOpBeforeKill, atEnd: await supOp(opId) });
+  t.ev("final", { status: end.task.status, outcome: end.task.outcome ?? null, recoveries: end.task.budget?.recoveries ?? 0, cleanup: end.task.cleanup, attempts: end.attempts, result: end.task.result ?? null });
+  t.ev("uncertainOperationTrail", trail);
+  t.ev("supervisorLogOldAttempt", supLogFor(oldAttempt));
+  t.ev("events", slimC41(evs));
+  saveRow(t);
+}
+const testC41A = () => testC41Browser("control");
+const testC41F = () => testC41Browser("supervisor");
+
+async function testC41Code() {
+  const t = new Test("C41B-control-kill-code-run", "C41: SIGKILL the control plane during an analysis-sandbox code_run (sleep 20, then append one marker line) → the uncertain run is reconciled, never recorded as a success; any re-run is a new operation in a fresh sandbox; the marker holds exactly one line; cleanup confirmed");
+  const cookie = await judgeA();
+  const c = await call(cookie, "POST", "/api/tasks", { kind: "general", profileId: "analysis", issueText: "C41 control kill during code_run", scriptedDriver: "acc-c41-slow-code" });
+  t.check(c.status === 201, `create → ${c.status} ${c.status !== 201 ? c.text.slice(0, 200) : ""}`);
+  const id = c.json.id as string;
+  const w = await watchFor(cookie, id, (e) => e.data?.tool === "code_run" && e.data?.opState === "started");
+  t.check(w.hit, "code_run (sleep 20) dispatched");
+  if (!w.hit) return saveRow(t);
+  const opId = w.hit.data.operationId as string;
+  const oldAttempt = w.hit.data.attemptId as string;
+  await sleep(2500);
+  const containersBefore = taskContainers(id);
+  const oldContainer = containersBefore.map((l) => l.split(" ")[0]!).find((n) => n.includes(oldAttempt)) ?? containersBefore[0]?.split(" ")[0];
+  const topBefore = oldContainer ? sh(["docker", "top", oldContainer, "-o", "pid,etime,args"]).out.trim().split("\n").slice(0, 8) : [];
+  const supOpBeforeKill = await supOp(opId);
+  const kill = await killStackProcess("control");
+  t.check(kill.dead, `control pid ${kill.pid} killed with SIGKILL at ${kill.at}, 2.5 s into the run`);
+  await sleep(3000);
+  const topWhileDown = oldContainer ? sh(["docker", "top", oldContainer, "-o", "pid,etime,args"]).out.trim().split("\n").slice(0, 8) : [];
+  const whileDown = { controlHealth: await controlHealth(), containers: taskContainers(id), supervisorAttempts: (await attemptsFor(id)).map((a) => ({ attemptId: a.ref?.attemptId, status: a.status })), topBefore, topWhileDown };
+  const up = devUp();
+  t.check(up.code === 0, `control restarted via dev-up.sh --detach (exit ${up.code}, ${up.ms} ms) ${up.err}`);
+  const restartedAt = iso();
+  const rec = await waitEvent(cookie, id, (e) => e.title === "Recovering task", 180_000);
+  t.check(rec, `the restarted control plane reclaimed the task (${rec?.detail ?? "no Recovering event"})`);
+  const end = await c41EndState(t, cookie, id, oldAttempt);
+  const evs = await allEvents(cookie, id);
+  const trail = opTrail(evs, opId);
+  t.check(trail.every((e) => e.opState !== "completed"), `the uncertain code_run ${opId} never completed and was never recorded as a success (trail: ${trail.map((e) => `${e.title}[${e.opState ?? "-"}]`).join(" → ")})`);
+  const recon = evs.find((e) => e.title === "Reconciled outstanding supervisor operations" && (e.detail ?? "").includes(opId));
+  t.check(recon, `recovery reconciled ${opId}: "${recon?.detail?.split("\n").find((l) => l.includes(opId)) ?? "none"}"`);
+  const runsCompleted = evs.filter((e) => e.kind === "exec" && e.data?.tool === "code_run" && e.data?.opState === "completed");
+  t.check(runsCompleted.every((e) => e.data?.operationId !== opId && e.data?.attemptId !== oldAttempt), `every completed code_run is a new operation on a fresh attempt (${runsCompleted.map((e) => `${e.data?.operationId}@${e.data?.attemptId}`).join(", ") || "none"})`);
+  t.check(runsCompleted.length <= 1, `at most one completed code_run recorded (${runsCompleted.length})`);
+  const discarded = evs.find((e) => e.title === "Discarded attempt from an earlier run" && e.data?.attemptId === oldAttempt);
+  t.check(discarded && discarded.data?.opState === "completed", `the old analysis sandbox was discarded ("${discarded?.detail ?? "no event"}")`);
+  t.check((end.task.budget?.recoveries ?? 0) >= 1, `recovery counted (${end.task.budget?.recoveries})`);
+  const arts = ((await call(cookie, "GET", `/api/tasks/${id}/artifacts`)).json as any[]) ?? [];
+  const marker = arts.find((a) => a.kind === "output" && a.filename === "marker.txt");
+  let markerText: string | null = null;
+  if (marker) {
+    const d = await call(cookie, "GET", `/api/artifacts/${marker.id}`, undefined, { binary: true });
+    markerText = new TextDecoder().decode(d.bytes!);
+  }
+  const lines = (markerText ?? "").split("\n").filter(Boolean);
+  if (end.task.outcome === "RESULT_VERIFIED") t.check(lines.length === 1, `outputs/marker.txt has exactly one line: the fresh sandbox's single run (${JSON.stringify(lines)})`);
+  else t.check(marker === undefined || lines.length <= 1, `no verified result; marker lines ${lines.length}`);
+  t.check(arts.filter((a) => a.source?.attemptId === oldAttempt).length === 0, `no artifact came from the old attempt (${arts.filter((a) => a.source?.attemptId === oldAttempt).length})`);
+  t.ev("timeline", { taskId: id, uncertainOperation: opId, oldAttempt, oldContainer, containersBefore, kill, whileDown, restart: { at: restartedAt, ...up } });
+  t.ev("supervisorOperationRecord", { beforeKill: supOpBeforeKill, atEnd: await supOp(opId) });
+  t.ev("final", { status: end.task.status, outcome: end.task.outcome ?? null, recoveries: end.task.budget?.recoveries ?? 0, cleanup: end.task.cleanup, attempts: end.attempts, markerLines: lines, artifacts: arts.map((a) => ({ id: a.id, kind: a.kind, filename: a.filename, sha256: a.sha256, attemptId: a.source?.attemptId })) });
+  t.ev("uncertainOperationTrail", trail);
+  t.ev("supervisorLogOldAttempt", supLogFor(oldAttempt));
+  t.ev("events", slimC41(evs));
+  saveRow(t);
+}
+
+async function testC41Takeover() {
+  const t = new Test("C41C-control-kill-during-takeover", "C41: a person takes browser control, then the control plane is SIGKILLed → after restart no human action is honoured on the old session, control returns to the agent before any agent browser op (never simultaneous), the agent works in a fresh session (observes afresh), old attempt destroyed");
+  const cookie = await judgeA();
+  const c = await call(cookie, "POST", "/api/tasks", { kind: "general", profileId: "web-research", issueText: "C41 control kill during takeover", egressAllow: ["example.com"], scriptedDriver: "acc-c41-takeover" });
+  t.check(c.status === 201, `create → ${c.status}`);
+  const id = c.json.id as string;
+  t.check(await waitLiveBrowser(cookie, id), "task running with a live browser");
+  const take = await call(cookie, "POST", `/api/tasks/${id}/control/take`, {});
+  t.check(take.status === 200, `take → ${take.status} ${take.text.slice(0, 160)}`);
+  await sleep(1500);
+  const ctlBefore = (await call(cookie, "GET", `/api/tasks/${id}/control`)).json;
+  t.check(ctlBefore?.control?.holder === "human", `holder=${ctlBefore?.control?.holder} before the kill`);
+  const hObs = await call(cookie, "POST", `/api/tasks/${id}/control/action`, { request: { op: "observe" } });
+  t.check(hObs.status === 200 && hObs.json?.ok, `human observe while holding → ${hObs.status}`);
+  const before = await allEvents(cookie, id);
+  const oldAttempt = [...before].reverse().find((e) => e.data?.attemptId)?.data?.attemptId as string | undefined;
+  const kill = await killStackProcess("control");
+  t.check(kill.dead, `control pid ${kill.pid} SIGKILLed while the human held control`);
+  await sleep(3000);
+  const whileDown = { controlHealth: await controlHealth(), containers: taskContainers(id) };
+  const up = devUp();
+  t.check(up.code === 0, `control restarted via dev-up.sh (exit ${up.code}, ${up.ms} ms)`);
+  // Before the worker reclaims the task (lease up to 60 s): what the API says and does.
+  const ctlGap = await call(cookie, "GET", `/api/tasks/${id}/control`);
+  const actGap = await call(cookie, "POST", `/api/tasks/${id}/control/action`, { request: { op: "observe" } });
+  const clickGap = await call(cookie, "POST", `/api/tasks/${id}/control/action`, { request: { op: "scroll", args: { dy: 50 } } });
+  const takeGap = await call(cookie, "POST", `/api/tasks/${id}/control/take`, {});
+  t.check(!(actGap.status === 200 && actGap.json?.ok) && !(clickGap.status === 200 && clickGap.json?.ok), `after restart, before reclaim: human actions on the dead run are not executed (observe → ${actGap.status}, scroll → ${clickGap.status})`);
+  const rec = await waitEvent(cookie, id, (e) => e.title === "Recovering task", 180_000);
+  t.check(rec, `task reclaimed (${rec?.detail ?? "none"})`);
+  const returned = await waitEvent(cookie, id, (e) => e.title === "Control returned to the agent", 60_000);
+  t.check(returned, `"Control returned to the agent": ${returned?.detail ?? "no event"}`);
+  const ctlAfter = (await call(cookie, "GET", `/api/tasks/${id}/control`)).json;
+  const end = await c41EndState(t, cookie, id, oldAttempt);
+  const evs = await allEvents(cookie, id);
+  const recSeq = evs.find((e) => e.title === "Recovering task")?.seq ?? Infinity;
+  const retSeq = evs.find((e) => e.title === "Control returned to the agent" && e.seq > (before.at(-1)?.seq ?? 0))?.seq ?? Infinity;
+  const firstAgentOp = evs.find((e) => e.seq > recSeq && e.kind === "tool" && e.data?.opState === "started" && String(e.data?.tool ?? "").startsWith("browser_"));
+  t.check(retSeq < (firstAgentOp?.seq ?? Infinity), `control returned to the agent (#${retSeq}) before the recovered run's first browser op (#${firstAgentOp?.seq} ${firstAgentOp?.data?.tool})`);
+  const postRecBrowser = evs.filter((e) => e.seq > recSeq && e.kind === "tool" && e.data?.opState === "completed" && String(e.data?.tool ?? "").startsWith("browser_"));
+  const firstTools = postRecBrowser.slice(0, 2).map((e) => e.data?.tool);
+  t.check(firstTools[0] === "browser_navigate" && firstTools[1] === "browser_observe" && postRecBrowser.every((e) => e.data?.attemptId !== oldAttempt), `recovered run starts a fresh session and observes before anything else (${firstTools.join(" → ")}, attempt ${postRecBrowser[0]?.data?.attemptId})`);
+  const humanAfter = evs.filter((e) => e.seq > (before.at(-1)?.seq ?? 0) && e.data?.actor === "human" && e.data?.opState === "completed");
+  t.check(humanAfter.length === 0, `no human browser op completed after the kill (${humanAfter.length})`);
+  t.check(end.task.control === undefined || end.task.control?.holder === "agent", `final Task.control holder = ${end.task.control?.holder ?? "(unset)"}`);
+  t.ev("timeline", { taskId: id, oldAttempt, kill, whileDown, restart: up, controlBefore: ctlBefore?.control, afterRestartBeforeReclaim: { control: { status: ctlGap.status, body: ctlGap.json }, humanObserve: { status: actGap.status, body: actGap.text.slice(0, 300) }, humanScroll: { status: clickGap.status, body: clickGap.text.slice(0, 300) }, take: { status: takeGap.status, body: takeGap.text.slice(0, 300) } }, controlAfterReclaim: ctlAfter });
+  t.ev("final", { status: end.task.status, outcome: end.task.outcome ?? null, recoveries: end.task.budget?.recoveries ?? 0, cleanup: end.task.cleanup, control: end.task.control ?? null, attempts: end.attempts });
+  t.ev("events", slimC41(evs));
+  saveRow(t);
+}
+
+async function withControlStore<T>(fn: (db: any) => Promise<T>): Promise<T> {
+  const mod = await import(Bun.resolveSync("@electric-sql/pglite", join(STACK, "apps/control")));
+  const db = new mod.PGlite(join(STACK, "data/control/pglite"));
+  try {
+    return await fn(db);
+  } finally {
+    await db.close();
+  }
+}
+function fixturesAccepted(proposalId: string): number {
+  const p = join(STACK, "data/run/fixtures.log");
+  if (!existsSync(p)) return -1;
+  return readFileSync(p, "utf8").split("\n").filter((l) => l.includes("submission_accepted") && l.includes(proposalId)).length;
+}
+
+async function testC41Proposal() {
+  const t = new Test("C41D-control-kill-approved-submission", "C41: control plane SIGKILLed during an approved submission. (a) real path: a proposal to the configured-but-unreachable https://forms.example.com is approved and the kill lands while the controller holds it; (b) store level: two proposals on the loopback fixtures destination are left `submitted` (its submission really reached the destination) and `claimed` (never reached it). After restart: claimed/submitted → outcome_unknown, reconciled ONLY by receipt reads; the reached one becomes confirmed with the destination's receipt; nothing is re-submitted");
+  const cookie = await judgeA();
+  const c = await call(cookie, "POST", "/api/tasks", { kind: "general", profileId: "web-research", issueText: "C41 control kill during an approved submission", egressAllow: ["example.com", "forms.example.com"], scriptedDriver: "acc-c41-propose" });
+  t.check(c.status === 201, `create → ${c.status}`);
+  const id = c.json.id as string;
+  let pending: any = null;
+  for (let i = 0; i < 240 && !pending; i++) {
+    pending = ((await call(cookie, "GET", `/api/tasks/${id}/approvals`)).json as any[] | null)?.find((p) => p.status === "pending") ?? null;
+    if (!pending) await sleep(250);
+  }
+  t.check(pending, `proposal pending (${pending?.id})`);
+  if (!pending) return saveRow(t);
+  const ok = await call(cookie, "POST", `/api/tasks/${id}/approvals/${pending.id}/decide`, { decision: "approve", payloadDigest: pending.payloadDigest });
+  t.check(ok.status === 200 && ok.json?.status === "approved", `approved with the exact digest → ${ok.status}`);
+  const seenStates: string[] = ["approved"];
+  let atKill = "approved";
+  const t0 = Date.now();
+  while (Date.now() - t0 < 5000) {
+    const s = ((await call(cookie, "GET", `/api/tasks/${id}/approvals`)).json as any[]).find((p) => p.id === pending.id)?.status;
+    if (s && seenStates.at(-1) !== s) seenStates.push(s);
+    if (s && s !== "approved") {
+      atKill = s;
+      break;
+    }
+    await sleep(15);
+  }
+  const kill = await killStackProcess("control");
+  t.check(kill.dead, `control pid ${kill.pid} SIGKILLed with the real proposal ${atKill} (states seen: ${seenStates.join(" → ")})`);
+  await sleep(1500);
+  // ---- store level, while the control plane is dead (labelled injection) ----
+  const fx = await import(join(STACK, "apps/fixtures/src/lib.ts"));
+  const secret = DEV.AIRLOCK_FORMS_SECRET ?? readEnvFile(join(STACK, "data/dev.env")).AIRLOCK_FORMS_SECRET;
+  const origin = "http://127.0.0.1:3100";
+  const injected: any[] = [];
+  const storeView = await withControlStore(async (db) => {
+    const taskRow = (await db.query("SELECT owner, data FROM records WHERE kind='tasks' AND id=$1", [id])).rows[0];
+    const real = (await db.query("SELECT data FROM records WHERE kind='action-proposals' AND id=$1", [pending.id])).rows[0]?.data;
+    const owner = taskRow.owner as string;
+    const attemptId = (taskRow.data.attemptId ?? real?.attemptId) as string;
+    for (const [label, status] of [["reached", "submitted"], ["not-reached", "claimed"]] as const) {
+      const norm = fx.normalizeFields("contact-request", { name: `C41 ${label}`, email: "c41@example.com", message: `store-level ${status} proposal (${label})` });
+      const fields = norm.fields as Record<string, string>;
+      const payloadDigest = await fx.formPayloadDigest(origin, "contact-request", fields);
+      const now = Date.now();
+      const p = { schemaVersion: real?.schemaVersion ?? 1, id: `prop-c41${label === "reached" ? "r" : "n"}${randomInt(100000, 999999)}`, owner, taskId: id, attemptId, browserGeneration: 0, destination: origin, adapter: "airlock-forms-v1", formId: "contact-request", fields, payloadDigest, summary: `C41 store-level injection (${label})`, createdAt: new Date(now - 60_000).toISOString(), expiresAt: new Date(now + 10 * 60_000).toISOString(), status, decidedBy: "verifier_tester (store-level injection)", decidedAt: new Date(now - 30_000).toISOString() };
+      await db.query("INSERT INTO records(owner,kind,id,data) VALUES($1,'action-proposals',$2,$3::jsonb)", [owner, p.id, JSON.stringify(p)]);
+      injected.push({ label, ...p });
+    }
+    return { taskStatus: taskRow.data.status, taskPhase: taskRow.data.phase, leaseUntil: taskRow.data.leaseUntil, attemptId, realProposalStatusInStore: real?.status };
+  });
+  // The "reached" submission: exactly what the controller would have sent, posted once to the destination.
+  const reached = injected.find((p) => p.label === "reached");
+  const code = fx.mintApprovalCode({ secret, proposalId: reached.id, payloadDigest: reached.payloadDigest, expiresAtEpoch: Math.floor(Date.parse(reached.expiresAt) / 1000) });
+  const form = new URLSearchParams({ ...reached.fields, [fx.APPROVAL_FIELD]: code });
+  const post = await fetch(`${origin}/f/contact-request/submit`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: form.toString() });
+  const postText = await post.text();
+  t.check(post.status === 200 && postText.includes("Submission accepted"), `the 'reached' submission was recorded by the destination (${post.status})`);
+  const acceptedBefore = { reached: fixturesAccepted(reached.id), notReached: fixturesAccepted(injected[1].id), real: fixturesAccepted(pending.id) };
+  const up = devUp();
+  t.check(up.code === 0, `control restarted via dev-up.sh (exit ${up.code}, ${up.ms} ms)`);
+  const rec = await waitEvent(cookie, id, (e) => e.title === "Recovering task", 180_000);
+  t.check(rec, `task reclaimed (${rec?.detail ?? "none"})`);
+  // The replayed script proposes again: a NEW proposal that needs a new decision. Reject it.
+  const known = new Set([pending.id, ...injected.map((p) => p.id)]);
+  let fresh: any = null;
+  for (let i = 0; i < 240 && !fresh; i++) {
+    const l = ((await call(cookie, "GET", `/api/tasks/${id}/approvals`)).json as any[]) ?? [];
+    fresh = l.find((p) => !known.has(p.id) && p.status === "pending") ?? null;
+    if (!fresh && TERMINAL.has((await getTask(cookie, id)).task.status)) break;
+    if (!fresh) await sleep(500);
+  }
+  const rej = fresh ? await call(cookie, "POST", `/api/tasks/${id}/approvals/${fresh.id}/decide`, { decision: "reject", payloadDigest: fresh.payloadDigest }) : null;
+  const end = await c41EndState(t, cookie, id, storeView.attemptId);
+  const props = ((await call(cookie, "GET", `/api/tasks/${id}/approvals`)).json as any[]) ?? [];
+  const byId = (pid: string) => props.find((p) => p.id === pid);
+  const evs = await allEvents(cookie, id);
+  const recSeq = evs.find((e) => e.title === "Recovering task")?.seq ?? Infinity;
+  const evFor = (pid: string) => evs.filter((e) => e.data?.proposalId === pid && e.seq > recSeq);
+  const realFinal = byId(pending.id);
+  t.check(realFinal && realFinal.status !== "confirmed" && (atKill !== "claimed" || realFinal.status === "outcome_unknown"), `real proposal: ${atKill} at the kill → ${realFinal?.status} after restart (forms.example.com is unreachable, so it cannot be confirmed)`);
+  const r = byId(reached.id);
+  t.check(r?.status === "confirmed" && r?.receipt?.payloadDigest === reached.payloadDigest, `'reached' (submitted at the kill) → ${r?.status}, receipt ${r?.receipt?.receiptId ?? "none"} with the approved payload digest`);
+  t.check(evFor(reached.id).some((e) => e.title === "Final action outcome unknown") && evFor(reached.id).some((e) => /Receipt read \(reconciliation\) \d+: confirmed/.test(e.title)), `'reached': moved to outcome_unknown, then confirmed by a receipt READ (${evFor(reached.id).map((e) => e.title).join(" → ")})`);
+  const n = byId(injected[1].id);
+  t.check(n?.status === "outcome_unknown", `'not-reached' (claimed at the kill) → ${n?.status}; the destination has no receipt, so it stays outcome_unknown (${evFor(injected[1].id).map((e) => e.title).join(" → ")})`);
+  const acceptedAfter = { reached: fixturesAccepted(reached.id), notReached: fixturesAccepted(injected[1].id), real: fixturesAccepted(pending.id) };
+  t.check(acceptedAfter.reached === 1 && acceptedAfter.notReached === 0 && acceptedAfter.real === 0, `nothing re-submitted: destination submission_accepted counts reached=${acceptedAfter.reached} (the one pre-crash post), not-reached=${acceptedAfter.notReached}, real=${acceptedAfter.real}`);
+  const resubmit = evs.filter((e) => e.seq > recSeq && (e.title === "Approved: Airlock submits the form" || e.data?.actor === "controller") && [pending.id, ...injected.map((p) => p.id)].includes(e.data?.proposalId));
+  const controllerOps = evs.filter((e) => e.seq > recSeq && e.data?.actor === "controller");
+  t.check(resubmit.length === 0 && controllerOps.length === 0, `no controller submission step after the restart (${controllerOps.length} controller events)`);
+  const readTok = fx.receiptsReadToken(secret);
+  const rcptN = await fetch(`${origin}/api/receipts/${injected[1].id}`, { headers: { authorization: `Bearer ${readTok}` } });
+  t.check(rcptN.status === 404, `destination still has no receipt for 'not-reached' (${rcptN.status})`);
+  t.check(!fresh || (rej?.status === 200 && byId(fresh.id)?.status === "rejected"), `the replayed script's new proposal ${fresh?.id ?? "(none)"} needed a fresh decision (rejected → ${rej?.status}); approvals are not carried across the restart`);
+  t.ev("timeline", { taskId: id, realProposal: { id: pending.id, statesSeen: seenStates, atKill }, kill, storeAtKill: storeView, restart: up, destinationPost: { status: post.status }, acceptedBefore, acceptedAfter });
+  t.ev("injected", injected.map(({ fields, ...p }) => ({ ...p, fields })));
+  t.ev("proposalsFinal", props.map((p) => ({ id: p.id, status: p.status, destination: p.destination, payloadDigest: p.payloadDigest, receipt: p.receipt ?? null })));
+  t.ev("final", { status: end.task.status, outcome: end.task.outcome ?? null, recoveries: end.task.budget?.recoveries ?? 0, cleanup: end.task.cleanup });
+  t.ev("events", slimC41(evs));
+  t.note = "Part (b) is a store-level injection: the loopback fixtures destination is unreachable from the sandboxed browser, so the controller-driven submit cannot reach it locally. The driver wrote two proposal records (status submitted / claimed) into the dead control plane's PGlite store and posted the 'reached' one once to the fixtures destination with a correctly minted approval code (simulating a submit that landed before the crash). Reconciliation after restart is the product's own code.";
+  saveRow(t);
+}
+
+async function testC41Download(variant: "read" | "transfer") {
+  const read = variant === "read";
+  const t = new Test(
+    read ? "C41E-control-kill-download-read" : "C41E2-control-kill-download-transfer",
+    read
+      ? "C41: control plane SIGKILLed while browser_download_save (download.read of a 9,000,000-byte file from speed.cloudflare.com) is in flight → the transfer never becomes an artifact, no orphan temp blobs, the old attempt torn down"
+      : "C41: control plane SIGKILLed while the browser's own download (httpbin.org/drip, 300000 bytes over 40 s) is in progress → the partial file never becomes an artifact, no orphan temp blobs, the old attempt torn down",
+  );
+  const cookie = await judgeA();
+  const c = await call(cookie, "POST", "/api/tasks", { kind: "general", profileId: "web-research", issueText: `C41 control kill during a download (${variant})`, egressAllow: read ? ["speed.cloudflare.com", "httpbin.org"] : ["httpbin.org"], scriptedDriver: read ? "acc-c41-download" : "acc-c41-drip" });
+  t.check(c.status === 201, `create → ${c.status}`);
+  const id = c.json.id as string;
+  const tmpBefore = artifactTmpFiles();
+  const w = read
+    ? await watchFor(cookie, id, (e) => e.data?.tool === "browser_download_save" && e.data?.opState === "started")
+    : await watchFor(cookie, id, (e) => e.data?.tool === "browser_download_list" && e.data?.opState === "completed");
+  t.check(w.hit, read ? "browser_download_save (download.read) dispatched" : `browser_download_list completed (downloads: ${JSON.stringify(w.hit?.data?.downloads ?? w.seen.at(-1)?.data?.downloads ?? null)?.slice(0, 300)})`);
+  if (!w.hit) return saveRow(t);
+  const oldAttempt = w.hit.data.attemptId as string;
+  const opId = w.hit.data.operationId as string;
+  let supOpBeforeKill = await supOp(opId);
+  for (let i = 0; read && i < 300 && supOpBeforeKill.status !== 200; i++) supOpBeforeKill = await supOp(opId);
+  const kill = await killStackProcess("control");
+  t.check(kill.dead, `control pid ${kill.pid} SIGKILLed ${read ? "immediately after download.read started" : "while the browser download is in progress"}`);
+  if (!read) {
+    const dl = (w.seen.find((e) => e.seq === w.hit!.seq)?.data?.downloads ?? []) as any[];
+    t.check(dl.some((d) => d.state === "in_progress"), `at the kill the browser reported the download in progress (${dl.map((d) => `${d.downloadId}:${d.state}`).join(", ") || "none"})`);
+  }
+  await sleep(3000);
+  const whileDown = { controlHealth: await controlHealth(), containers: taskContainers(id), tmpFiles: artifactTmpFiles() };
+  t.check(whileDown.tmpFiles.length === 0, `no .tmp-* blob files in the control artifact store while the control plane is dead (${whileDown.tmpFiles.length})`);
+  const up = devUp();
+  t.check(up.code === 0, `control restarted via dev-up.sh (exit ${up.code}, ${up.ms} ms)`);
+  const rec = await waitEvent(cookie, id, (e) => e.title === "Recovering task", 180_000);
+  t.check(rec, `task reclaimed (${rec?.detail ?? "none"})`);
+  const end = await c41EndState(t, cookie, id, oldAttempt);
+  const evs = await allEvents(cookie, id);
+  const trail = opTrail(evs, opId);
+  if (read) {
+    t.check(supOpBeforeKill.status === 200, `the kill landed after the supervisor had accepted download.read ${opId} (supervisor journal: ${JSON.stringify(supOpBeforeKill.body)?.slice(0, 200)})`);
+    t.check(trail.every((e) => e.opState !== "completed"), `the interrupted download.read ${opId} never completed at the controller (${trail.map((e) => `${e.title}[${e.opState ?? "-"}]`).join(" → ")})`);
+  }
+  const arts = ((await call(cookie, "GET", `/api/tasks/${id}/artifacts`)).json as any[]) ?? [];
+  const downloads = arts.filter((a) => a.kind === "download");
+  t.check(downloads.every((a) => a.source?.attemptId !== oldAttempt), `no download artifact from the killed attempt (download artifacts: ${downloads.map((a) => `${a.filename} ${a.byteLength}B @${a.source?.attemptId}`).join(", ") || "none"})`);
+  const storedEvents = evs.filter((e) => e.kind === "artifact" && /Download stored/.test(e.title));
+  t.check(storedEvents.every((e) => e.data?.attemptId !== oldAttempt), `no "Download stored" event for the killed attempt (${storedEvents.length} stored in total)`);
+  if (!read) t.check(downloads.length === 0 || downloads.every((a) => a.byteLength === 300000), `no partial file stored (sizes: ${downloads.map((a) => a.byteLength).join(",") || "none"})`);
+  else t.check(downloads.every((a) => a.byteLength === 9000000), `any stored download is the complete file (sizes: ${downloads.map((a) => a.byteLength).join(",") || "none"})`);
+  const tmpAfter = artifactTmpFiles();
+  t.check(tmpAfter.length === 0, `no .tmp-* blob files in the control artifact store at the end (${tmpAfter.length}; before: ${tmpBefore.length})`);
+  const discarded = evs.find((e) => e.title === "Discarded attempt from an earlier run" && e.data?.attemptId === oldAttempt);
+  t.check(discarded && discarded.data?.opState === "completed", `the old browser attempt (its tmpfs downloads with it) was discarded ("${discarded?.detail ?? "no event"}")`);
+  t.ev("timeline", { taskId: id, oldAttempt, operation: opId, kill, whileDown, restart: up });
+  t.ev("supervisorOperationRecord", { beforeKill: supOpBeforeKill, atEnd: await supOp(opId) });
+  t.ev("final", { status: end.task.status, outcome: end.task.outcome ?? null, recoveries: end.task.budget?.recoveries ?? 0, cleanup: end.task.cleanup, attempts: end.attempts, artifacts: arts.map((a) => ({ id: a.id, kind: a.kind, filename: a.filename, byteLength: a.byteLength, sha256: a.sha256, attemptId: a.source?.attemptId })) });
+  t.ev("interruptedOperationTrail", trail);
+  t.ev("supervisorLogOldAttempt", supLogFor(oldAttempt));
+  t.ev("events", slimC41(evs));
+  saveRow(t);
+}
+const testC41E = () => testC41Download("read");
+const testC41E2 = () => testC41Download("transfer");
+
+// ---------------------------------------------------------------------------------------------
 const TESTS: Record<string, () => Promise<void>> = {
   A1: testAnalysis,
   B1: testWeb,
@@ -1141,6 +1648,13 @@ const TESTS: Record<string, () => Promise<void>> = {
   D1: testUnsupported,
   M1: testMutationGuard,
   K7: testCleanupSweep,
+  C41A: testC41A,
+  C41B: testC41Code,
+  C41C: testC41Takeover,
+  C41D: testC41Proposal,
+  C41E: testC41E,
+  C41E2: testC41E2,
+  C41F: testC41F,
   K6: testFinalCleanup,
 };
 

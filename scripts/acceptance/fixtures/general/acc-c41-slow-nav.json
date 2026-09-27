@@ -1,0 +1,8 @@
+{ "_comment": "ACCEPTANCE diagnostic (verifier_tester, C41): a browser run whose second navigation is slow (httpbin.org/delay/8) so a control-plane or supervisor kill lands while the operation is in flight.",
+  "turns": [
+    { "text": "Opening example.com.", "toolCalls": [{ "name": "browser_navigate", "args": { "url": "https://example.com/" } }] },
+    { "text": "Opening a slow page.", "toolCalls": [{ "name": "browser_navigate", "args": { "url": "https://httpbin.org/delay/8" } }] },
+    { "text": "Observing.", "toolCalls": [{ "name": "browser_observe", "args": {} }] },
+    { "text": "Screenshot.", "toolCalls": [{ "name": "browser_screenshot", "args": {} }] },
+    { "text": "Submitting.", "toolCalls": [{ "name": "submit_result", "args": { "summary": "Acceptance diagnostic (C41): example.com and a slow page were opened and captured.", "sources": ["https://example.com/"] } }] }
+  ] }
