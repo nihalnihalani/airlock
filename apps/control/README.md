@@ -91,8 +91,13 @@ lease, and runs the `RepairHandler`:
 The model never sets the outcome; only `compare()` results and budget/deadline logic do. Every
 phase change, tool call, exec, model turn and lifecycle step is an appended `RunEvent` with bounded
 detail. Cancellation moves the task to `cancelling` and aborts the in-process run; the worker then
-claims it in cancel mode and revokes + destroys the attempt before recording `cancelled`. Any
-failure destroys the attempt; incomplete teardown stays visible on the task.
+claims it in cancel mode and revokes + destroys the attempt before recording `cancelled`. If the
+supervisor cannot confirm the teardown (unreachable, stop not confirmed) the task **stays
+`cancelling`**: the lease is released with a retry-after (5 s) and a later tick runs the cancel
+pass again, up to 5 retries counted from the durable `runs` records. Only a confirmed teardown
+records `cancelled`; past the bound the task is recorded `failed` with the incomplete-teardown
+error and its `attemptId` kept, never a `cancelled` receipt. Any failure destroys the attempt;
+incomplete teardown stays visible on the task.
 
 ## Driver modes
 

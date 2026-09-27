@@ -37,7 +37,7 @@ import type { LoadedProfile } from "./profiles.ts";
 import { MODEL_TOOLS, systemPrompt, taskMessage, type ToolSpec } from "./prompts.ts";
 import type { Store } from "./store/index.ts";
 import { SupervisorFenceError, SupervisorNotFoundError, type SupervisorClient } from "./supervisor-client.ts";
-import { LostLeaseError, type TaskContext, type TaskHandler } from "./worker/index.ts";
+import { LostLeaseError, TeardownIncompleteError, type TaskContext, type TaskHandler } from "./worker/index.ts";
 
 // --- Structural types matching apps/control/src/vultr-client.ts, verifier/index.ts, artifacts/index.ts ---
 
@@ -169,7 +169,7 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
       const ref: AttemptRef = { taskId: task.id, attemptId: task.attemptId, generation: task.generation };
       const result = await teardown(ref);
       await ctx.event("lifecycle", result.clean ? "Attempt destroyed after cancellation" : "Teardown incomplete after cancellation", result.detail, result.data);
-      if (!result.clean) throw new Error(`Cancelled, but teardown of attempt ${task.attemptId} is incomplete: ${result.detail}`);
+      if (!result.clean) throw new TeardownIncompleteError(`Cancellation requested, but teardown of attempt ${task.attemptId} is incomplete: ${result.detail}`);
     }
     await ctx.event("lifecycle", "Task cancelled");
     return { status: "cancelled", error: undefined } as Partial<Task>;

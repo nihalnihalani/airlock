@@ -20,7 +20,7 @@ export interface Harness {
 
 export const OWNER = "operator";
 
-export async function makeHarness(fixture: Fixture, supervisor: FakeSupervisor, driver: ModelDriver, options: { leaseMs?: number } = {}): Promise<Harness> {
+export async function makeHarness(fixture: Fixture, supervisor: FakeSupervisor, driver: ModelDriver, options: { leaseMs?: number; cancelRetries?: number; cancelRetryDelayMs?: number } = {}): Promise<Harness> {
   const store = await createStore();
   const bus = new TaskEventBus();
   const artifacts = new MemoryArtifactStore();
@@ -42,6 +42,8 @@ export async function makeHarness(fixture: Fixture, supervisor: FakeSupervisor, 
     bus,
     pollMs: 15,
     leaseMs: options.leaseMs ?? 3000,
+    ...(options.cancelRetries !== undefined ? { cancelRetries: options.cancelRetries } : {}),
+    ...(options.cancelRetryDelayMs !== undefined ? { cancelRetryDelayMs: options.cancelRetryDelayMs } : {}),
     settled: async (_owner, task) => {
       if (!terminal.has(task.status)) return;
       settled.set(task.id, task);

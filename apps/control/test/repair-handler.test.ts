@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import type { RunEvent, Task } from "@airlock/contracts";
+import type { AttemptRef, RunEvent, Task } from "@airlock/contracts";
+import { SupervisorUnavailableError } from "../src/supervisor-client.ts";
 import { STORE_KIND_VERIFICATIONS } from "../src/repair-handler.ts";
 import { FX_FIXED_SOURCE, FX_BROKEN_SOURCE, fixtureObserve, makeFixture, scriptedDriverDouble, type Fixture, type ScriptedTurn } from "./helpers/doubles.ts";
 import { FakeSupervisor, okExec } from "./helpers/fake-supervisor.ts";
@@ -221,6 +222,95 @@ describe("repair handler", () => {
       // tombstone and must be reported clean because the journal says `destroyed`, never "incomplete".
       expect(events.some((e) => e.title === "Attempt destroyed after cancellation")).toBe(true);
       expect(events.some((e) => /incomplete/i.test(e.title))).toBe(false);
+    } finally {
+      await h.close();
+    }
+  });
+
+  /** A FakeSupervisor whose teardown verbs fail while `outage` is set (supervisor restart, VPC blip). */
+  class OutageSupervisor extends FakeSupervisor {
+    outage = false;
+    private unavailable() {
+      return new SupervisorUnavailableError("Supervisor call failed after retries (outage)");
+    }
+    override async revoke(input: { ref: AttemptRef }) {
+      if (this.outage) throw this.unavailable();
+      return super.revoke(input);
+    }
+    override async destroy(input: { ref: AttemptRef }) {
+      if (this.outage) throw this.unavailable();
+      return super.destroy(input);
+    }
+    override async getAttempt(attemptId: string) {
+      if (this.outage) throw this.unavailable();
+      return super.getAttempt(attemptId);
+    }
+  }
+
+  async function cancelDuringOutage(options: { cancelRetries: number }) {
+    let releaseExec: (() => void) | null = null;
+    const execStarted = new Promise<void>((resolve) => { releaseExec = resolve; });
+    const supervisor = new OutageSupervisor({
+      profile: fixture.profile,
+      observe: fixtureObserve,
+      exec: (command, _files, signal) =>
+        new Promise((resolve, reject) => {
+          releaseExec?.();
+          const timer = setTimeout(() => resolve(okExec({ stdout: `ran ${command}` })), 20_000);
+          signal?.addEventListener("abort", () => { clearTimeout(timer); reject(new Error("exec aborted")); }, { once: true });
+        }),
+    });
+    const driver = scriptedDriverDouble([{ toolCalls: [{ name: "run", args: { command: "sleep 100" } }] }, ...repairScript(FX_FIXED_SOURCE)]);
+    const h = await makeHarness(fixture, supervisor, driver, { leaseMs: 300, cancelRetries: options.cancelRetries, cancelRetryDelayMs: 40 });
+    h.worker.start();
+    const task = await h.newTask();
+    await execStarted;
+    const attemptId = [...supervisor.attempts.keys()][0]!;
+    supervisor.outage = true;
+    const next = await h.store.compareAndSwap<Task>(OWNER, "tasks", task.id, { status: "running" }, { status: "cancelling" });
+    expect(next?.status).toBe("cancelling");
+    h.worker.abort(task.id);
+    return { h, supervisor, task, attemptId };
+  }
+
+  test("cancel while the supervisor is unreachable stays `cancelling` and the teardown is retried until it is confirmed", async () => {
+    const { h, supervisor, task, attemptId } = await cancelDuringOutage({ cancelRetries: 50 });
+    try {
+      // The first cancel pass cannot revoke or destroy: the task must NOT be recorded as terminal.
+      await h.waitUntil(async () => (await h.store.listEvents(task.id)).filter((e) => e.title === "Teardown incomplete after cancellation").length >= 2);
+      const during = await h.store.get<Task>(OWNER, "tasks", task.id);
+      expect(during?.status).toBe("cancelling");
+      expect(during?.attemptId).toBe(attemptId);
+      expect(supervisor.attempts.has(attemptId)).toBe(true);
+      expect(supervisor.destroyed).not.toContain(attemptId);
+      // The supervisor comes back: the next pass revokes + destroys and only then records `cancelled`.
+      supervisor.outage = false;
+      const result = await h.waitFor(task.id);
+      expect(result.status).toBe("cancelled");
+      expect(supervisor.revoked).toContain(attemptId);
+      expect(supervisor.destroyed).toContain(attemptId);
+      expect(supervisor.attempts.size).toBe(0);
+      const events = await h.store.listEvents(task.id);
+      expect(events.some((e) => e.title === "Attempt destroyed after cancellation")).toBe(true);
+      expect(events.some((e) => e.title === "Task cancelled")).toBe(true);
+    } finally {
+      await h.close();
+    }
+  });
+
+  test("cancel whose teardown never completes ends `failed` (never a `cancelled` receipt) with the attempt still visible", async () => {
+    const { h, supervisor, task, attemptId } = await cancelDuringOutage({ cancelRetries: 2 });
+    try {
+      const result = await h.waitFor(task.id);
+      expect(result.status).toBe("failed");
+      expect(result.attemptId).toBe(attemptId);
+      expect(result.error).toMatch(/teardown/i);
+      expect(result.error).toMatch(/incomplete/i);
+      expect(supervisor.attempts.has(attemptId)).toBe(true);
+      const events = await h.store.listEvents(task.id);
+      // one initial pass + 2 retries, each visible
+      expect(events.filter((e) => e.title === "Teardown incomplete after cancellation").length).toBe(3);
+      expect(events.some((e) => e.title === "Task cancelled")).toBe(false);
     } finally {
       await h.close();
     }

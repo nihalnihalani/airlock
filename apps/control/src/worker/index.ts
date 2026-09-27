@@ -26,6 +26,18 @@ export class LostLeaseError extends Error {
   }
 }
 
+/**
+ * Thrown by the cancel-mode handler when revoke/destroy could not be confirmed. The worker keeps the
+ * task in `cancelling` and retries the teardown on a later tick (bounded); it never records
+ * `cancelled` on the strength of a DB write alone (CLAUDE.md §3.5).
+ */
+export class TeardownIncompleteError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TeardownIncompleteError";
+  }
+}
+
 export type WorkerMode = "run" | "cancel";
 
 export interface TaskContext {
@@ -71,6 +83,10 @@ export class TaskWorker {
       leaseMs?: number;
       pollMs?: number;
       concurrency?: number;
+      /** Cancel passes retried after an unconfirmed teardown before the task is recorded `failed` (default 5). */
+      cancelRetries?: number;
+      /** Wait before re-claiming a `cancelling` task whose teardown was not confirmed (default 5 s). */
+      cancelRetryDelayMs?: number;
       bus?: TaskEventBus;
       settled?: (owner: string, task: Task) => Promise<void>;
     } = {},
@@ -121,7 +137,9 @@ export class TaskWorker {
     this.lastTickAt = new Date(this.now()).toISOString();
     try {
       const now = this.now();
-      const leaseExpired = (t: Task) => t.leaseId === null || Date.parse(t.leaseUntil ?? "") <= now;
+      // A released task (leaseId null) may still carry a `leaseUntil` in the future: a retry-after
+      // set by an unconfirmed cancel teardown. It is not due until then.
+      const leaseExpired = (t: Task) => (t.leaseId === null ? t.leaseUntil === null || Date.parse(t.leaseUntil) <= now : Date.parse(t.leaseUntil ?? "") <= now);
       const candidates = [
         ...(await this.db.scanWhere<Task>("tasks", { status: "queued" })),
         ...(await this.db.scanWhere<Task>("tasks", { status: "running" })),
@@ -240,6 +258,36 @@ export class TaskWorker {
           ));
         if (!released) {
           // Someone else already moved the task (e.g. running → cancelling by the API). Nothing to undo.
+        }
+      } else if (mode === "cancel" && error instanceof TeardownIncompleteError) {
+        // Revoke/destroy not confirmed: the sandbox may still be running. Stay in `cancelling`,
+        // release the lease with a retry-after so a later tick tries again, bounded by the number
+        // of cancel passes recorded durably in `runs`. Past the bound the task is `failed` (an
+        // honest record of an unconfirmed teardown), never `cancelled`, and keeps its attemptId.
+        const passes = (await this.db.scanWhere<{ taskId: string; mode: WorkerMode }>("runs", { taskId, mode: "cancel" })).length;
+        const retries = Math.max(0, this.options.cancelRetries ?? 5);
+        if (passes <= retries) {
+          const retryAt = new Date(this.now() + (this.options.cancelRetryDelayMs ?? 5000)).toISOString();
+          await this.appendEvent(owner, taskId, "lifecycle", "Teardown will be retried", `${error.message} (cancel pass ${passes} of ${retries + 1}; next at ${retryAt})`).catch((e) =>
+            backgroundFailure("record teardown retry", e),
+          );
+          await this.db.compareAndSwap(
+            owner,
+            "tasks",
+            taskId,
+            { leaseId, status: "cancelling" },
+            { leaseId: null, leaseUntil: retryAt, updatedAt: new Date(this.now()).toISOString() },
+          );
+        } else {
+          const detail = `${error.message} (teardown still unconfirmed after ${passes} cancel passes; the attempt stays recorded)`;
+          await this.appendEvent(owner, taskId, "error", "Task failed", detail).catch((e) => backgroundFailure("record task error", e));
+          await this.db.compareAndSwap(
+            owner,
+            "tasks",
+            taskId,
+            { leaseId, status: "cancelling" },
+            { status: "failed", error: detail.slice(0, 2000), leaseId: null, leaseUntil: null, updatedAt: new Date(this.now()).toISOString() },
+          );
         }
       } else {
         const detail = error instanceof Error ? error.message : "Task execution failed";
