@@ -62,7 +62,7 @@ Cookie `airlock_session` (HttpOnly, SameSite=Strict, sha256 of the token stored)
 | `POST /api/tasks/:id/cancel` → `Task` | owner or operator | queued → cancelled; running → cancelling (worker runs the teardown path); terminal → 409. |
 | `POST /api/tasks/:id/preview` `PreviewRequest` → `PreviewResult` | operator, judge (any task; intended: the judge tries the operator's passed candidate) | Refused (409) unless `candidateDigest` equals the task's sealed digest, the verification record passed, and the stored bundle still carries that digest. Runs a fresh `preview` invocation on the sealed bundle; writes nothing. One per 2 s per session (429). |
 | `POST /api/tasks/:id/export` → `{grantId,url,expiresAt}` | owner or operator | Immutable `ExportGrant` bound to (task, candidateDigest, verificationRecordId); repeated calls return the same unexpired grant. |
-| `GET /api/exports/:grantId` | the granting owner | Streams the zip (`patch.diff`, `manifest.json`, `verification.json`, `baseline.json`, `reproduction/`, `README.txt`). Repeatable; 410 when expired. |
+| `GET /api/exports/:grantId` | the granting owner | Streams the zip: `patch.diff`, `manifest.json`, `verification.json`, `baseline.json`, `task.json` (the task record with lease fields removed: owner role, issue text, budget, `scriptedDriver` on diagnostic runs), `events.jsonl` (the complete run event log, including every model turn's text and every command run), `reproduction/`, `README.txt`. Repeatable; 410 when expired. |
 | `POST /api/hostile {command, profileId?}` → `BlastRadiusCard` | judge, operator | One per 10 s per session. |
 
 ## Phases and outcomes

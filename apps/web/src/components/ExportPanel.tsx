@@ -42,8 +42,10 @@ export function ExportPanel({
         ]}
       />
       <p className="muted">
-        The bundle contains patch.diff, manifest.json, verification.json, baseline.json, reproduction/ and README.txt for
-        exactly this candidate digest and verification record.
+        The bundle contains patch.diff, manifest.json, verification.json, baseline.json, task.json (the task record
+        with lease fields removed, including the pasted issue text), events.jsonl (the complete run event log, including
+        every model turn and every command run), reproduction/ and README.txt for exactly this candidate digest and
+        verification record.
       </p>
       {canExport ? (
         <div className="btn-row">
