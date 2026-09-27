@@ -107,6 +107,22 @@ export async function settleOpenProposals(
   const out: ActionProposal[] = [];
   for (let p of rows) {
     const common = { proposalId: p.id, formId: p.formId, destination: p.destination, payloadDigest: p.payloadDigest };
+    // A concurrent decide or claim can win the compare-and-swap after this pass read the row: then
+    // re-read once and settle whatever state it moved to (pending → approved still expires).
+    for (let pass = 0; pass < 3; pass++) {
+      const before = p.status;
+      await settleOne();
+      if (p.status !== before || !["pending", "approved", "claimed", "submitted"].includes(p.status)) break;
+      p = (await store.get<ActionProposal>(owner, STORE_KIND_PROPOSALS, p.id)) ?? p;
+      if (!["pending", "approved", "claimed", "submitted"].includes(p.status)) break;
+    }
+    if (p.status === "outcome_unknown" && input.forms && !input.alreadyRead?.has(p.id)) {
+      input.alreadyRead?.add(p.id);
+      p = await reconcileByReceipt(store, owner, p, input.forms, emit, input.receiptDelaysMs ?? [0, 500, 1000]);
+    }
+    out.push(p);
+    continue;
+    async function settleOne() {
     if (p.status === "pending" || p.status === "approved") {
       const next = await transitionProposal(store, owner, p.id, [p.status], { status: "expired" });
       if (next) {
@@ -125,11 +141,7 @@ export async function settleOpenProposals(
         p = next;
       }
     }
-    if (p.status === "outcome_unknown" && input.forms && !input.alreadyRead?.has(p.id)) {
-      input.alreadyRead?.add(p.id);
-      p = await reconcileByReceipt(store, owner, p, input.forms, emit, input.receiptDelaysMs ?? [0, 500, 1000]);
     }
-    out.push(p);
   }
   return out;
 }
