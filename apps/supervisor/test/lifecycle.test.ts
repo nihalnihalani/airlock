@@ -12,11 +12,11 @@ const ENVELOPE = JSON.stringify({
 });
 
 async function createAuthor(docker: FakeDocker) {
-  const { core, journal } = makeCore(docker);
+  const { core, journal, dir } = makeCore(docker);
   const base = { ref: REF, profileId: PROFILE.id, role: "author" as const, absoluteDeadline: future(60_000) };
   const operation = await operationFor("create1", base);
   const response = await core.createAttempt({ ...base, operation });
-  return { core, journal, response };
+  return { core, journal, dir, response };
 }
 
 describe("lifecycle", () => {
@@ -274,6 +274,150 @@ describe("lifecycle", () => {
     expect(record?.revoked).toBe(true);
     expect(docker.calls.some((c) => c.startsWith("stopContainer airlocktest-author-task1-att1"))).toBe(true);
     core.stop();
+  });
+
+  test("freeze whose outstanding operations do not settle refuses to collect: no stopConfirmed, attempt unknown (B5)", async () => {
+    const docker = new FakeDocker(defaultHandler({ collector: { stdout: ENVELOPE } }));
+    const { core, journal } = makeCore(docker, undefined, { settleMs: 100, writeTimeoutMs: 60_000 });
+    const base = { ref: REF, profileId: PROFILE.id, role: "author" as const, absoluteDeadline: future(60_000) };
+    await core.createAttempt({ ...base, operation: await operationFor("create-unsettled", base) });
+    // An unresponsive daemon: the accepted write never returns, even when aborted.
+    docker.archive = { hang: true, ignoreAbort: true };
+    void core.authorTool(REF, await operationFor("w-hung", {}), { kind: "write", path: "tabulate/__init__.py", content: "x" }).catch(() => undefined);
+    await new Promise((r) => setTimeout(r, 20));
+    docker.calls.length = 0;
+    const error = await core.freeze(REF, await operationFor("freeze-unsettled", { ref: REF })).catch((e) => e as SupervisorError);
+    expect(error).toBeInstanceOf(SupervisorError);
+    expect((error as SupervisorError).code).toBe("fenced");
+    expect((error as SupervisorError).status).toBe(409);
+    // Nothing was collected, the collector is gone, and the attempt is not usable.
+    expect(docker.calls.some((c) => /^exec airlocktest-collector-task1-att1 .*collector\.py/.test(c))).toBe(false);
+    expect(docker.containers.has("airlocktest-collector-task1-att1")).toBe(false);
+    expect(journal.getAttempt("att1")?.status).toBe("unknown");
+    expect(journal.getAttempt("att1")?.revoked).toBe(true);
+    const again = await core.freeze(REF, await operationFor("freeze-unsettled-2", { ref: REF })).catch((e) => e as SupervisorError);
+    expect((again as SupervisorError).code).toBe("fenced");
+    const tool = await core.authorTool(REF, await operationFor("e-after", {}), { kind: "exec", command: "echo hi" }).catch((e) => e as SupervisorError);
+    expect((tool as SupervisorError).code).toBe("revoked");
+    core.stop();
+  });
+
+  test("a write whose upload was aborted (effect unknown) makes the workspace uncollectable (B5)", async () => {
+    const docker = new FakeDocker(defaultHandler({ collector: { stdout: ENVELOPE } }));
+    const { core, journal } = makeCore(docker, undefined, { settleMs: 5_000, writeTimeoutMs: 100 });
+    const base = { ref: REF, profileId: PROFILE.id, role: "author" as const, absoluteDeadline: future(60_000) };
+    await core.createAttempt({ ...base, operation: await operationFor("create-aborted-write", base) });
+    docker.archive = { hang: true };
+    const write = core.authorTool(REF, await operationFor("w-abort", {}), { kind: "write", path: "tabulate/__init__.py", content: "x" }).catch((e) => e as Error);
+    await new Promise((r) => setTimeout(r, 20));
+    const error = await core.freeze(REF, await operationFor("freeze-aborted-write", { ref: REF })).catch((e) => e as SupervisorError);
+    expect((error as SupervisorError).code).toBe("fenced");
+    expect(await write).toBeInstanceOf(Error);
+    expect(docker.calls.some((c) => /^exec airlocktest-collector-task1-att1 .*collector\.py/.test(c))).toBe(false);
+    expect(journal.getAttempt("att1")?.status).toBe("unknown");
+    core.stop();
+  });
+
+  test("a write in flight when freeze starts lands before collection; a write after revoke is refused (B5)", async () => {
+    const docker = new FakeDocker(defaultHandler({ collector: { stdout: ENVELOPE } }));
+    const { core, journal } = await createAuthor(docker);
+    docker.archive = { delayMs: 150 };
+    docker.calls.length = 0;
+    const write = core.authorTool(REF, await operationFor("w-inflight", {}), { kind: "write", path: "tabulate/__init__.py", content: "print(2)\n" });
+    await new Promise((r) => setTimeout(r, 20));
+    const response = await core.freeze(REF, await operationFor("freeze-inflight", { ref: REF }));
+    const result = response.body as FreezeResult;
+    expect(result.stopConfirmed).toBe(true);
+    expect(result.outstandingOperationsSettled).toBe(true);
+    expect((await write).body).toEqual({ kind: "write", byteLength: 9 });
+    const seq = docker.calls;
+    const landed = seq.findIndex((c) => c === "putArchive-landed airlocktest-author-task1-att1");
+    const collectorExec = seq.findIndex((c) => /^exec airlocktest-collector-task1-att1 .*collector\.py/.test(c));
+    expect(landed).toBeGreaterThanOrEqual(0);
+    expect(collectorExec).toBeGreaterThan(landed);
+    expect(journal.getAttempt("att1")?.status).toBe("stopped");
+    // After revocation no write dispatch starts: refused by the fence, no upload issued.
+    docker.archive = {};
+    const uploads = docker.calls.filter((c) => c.startsWith("putArchive ")).length;
+    const late = await core.authorTool(REF, await operationFor("w-late", {}), { kind: "write", path: "tabulate/__init__.py", content: "late" }).catch((e) => e as SupervisorError);
+    expect((late as SupervisorError).code).toBe("revoked");
+    expect(docker.calls.filter((c) => c.startsWith("putArchive ")).length).toBe(uploads);
+    core.stop();
+  });
+
+  test("restart with a running attempt and a pending operation stops the container and revokes the attempt (B8)", async () => {
+    const docker = new FakeDocker(defaultHandler({ collector: { stdout: ENVELOPE } }));
+    const { core, journal, dir } = await createAuthor(docker);
+    // A tool call was cut off by the crash: its operation is still pending.
+    const crashed = await operationFor("tool-crashed", { ref: REF, args: { kind: "exec", command: "sleep 100" } });
+    expect(journal.beginOperation(crashed, "authorTool").kind).toBe("new");
+    core.stop();
+    docker.calls.length = 0;
+    const { core: restarted } = makeCore(docker, journal, { dir });
+    await restarted.start();
+    expect(docker.calls).toContain("stopContainer airlocktest-author-task1-att1 t=2");
+    expect(docker.containers.get("airlocktest-author-task1-att1")?.running).toBe(false);
+    const record = journal.getAttempt("att1");
+    expect(record?.revoked).toBe(true);
+    expect(record?.status).toBe("unknown");
+    // The cut-off operation replays as an interrupted 409, never re-executes.
+    const replay = await restarted.authorTool(REF, crashed, { kind: "exec", command: "sleep 100" });
+    expect(replay.status).toBe(409);
+    const tool = await restarted.authorTool(REF, await operationFor("tool-after-restart", {}), { kind: "exec", command: "echo hi" }).catch((e) => e as SupervisorError);
+    expect((tool as SupervisorError).code).toBe("revoked");
+    const freeze = await restarted.freeze(REF, await operationFor("freeze-after-restart", { ref: REF })).catch((e) => e as SupervisorError);
+    expect((freeze as SupervisorError).code).toBe("fenced");
+    expect(docker.calls.some((c) => c.startsWith("exec airlocktest-author-task1-att1"))).toBe(false);
+    restarted.stop();
+  });
+
+  test("restart with a `created` attempt (probe never completed) stops the container and revokes the attempt (B8)", async () => {
+    const docker = new FakeDocker(defaultHandler());
+    const { core, journal, dir } = await createAuthor(docker);
+    core.stop();
+    // Simulate a crash between provisioning and the probe verdict.
+    journal.updateAttempt("att1", { status: "created" });
+    docker.calls.length = 0;
+    const { core: restarted } = makeCore(docker, journal, { dir });
+    await restarted.start();
+    expect(docker.calls).toContain("stopContainer airlocktest-author-task1-att1 t=2");
+    expect(docker.containers.get("airlocktest-author-task1-att1")?.running).toBe(false);
+    expect(journal.getAttempt("att1")?.revoked).toBe(true);
+    expect(journal.getAttempt("att1")?.status).toBe("unknown");
+    const tool = await restarted.authorTool(REF, await operationFor("tool-created", {}), { kind: "write", path: "tabulate/__init__.py", content: "x" }).catch((e) => e as SupervisorError);
+    expect((tool as SupervisorError).code).toBe("revoked");
+    expect(docker.calls.some((c) => c.startsWith("putArchive"))).toBe(false);
+    restarted.stop();
+  });
+
+  test("a write Docker refuses outright is an error, not lost control: the attempt stays usable and freezes normally (B5)", async () => {
+    const docker = new FakeDocker(defaultHandler({ collector: { stdout: ENVELOPE } }));
+    const { core, journal } = await createAuthor(docker);
+    docker.archive = { refuse: true };
+    const refused = await core.authorTool(REF, await operationFor("w-refused", {}), { kind: "write", path: "tabulate/__init__.py", content: "x" }).catch((e) => e as SupervisorError);
+    expect((refused as SupervisorError).code).toBe("invalid_body");
+    expect(journal.getAttempt("att1")?.status).toBe("running");
+    expect(journal.getAttempt("att1")?.revoked).toBe(false);
+    docker.archive = {};
+    const response = await core.freeze(REF, await operationFor("freeze-after-refusal", { ref: REF }));
+    expect(response.status).toBe(200);
+    expect((response.body as FreezeResult).outstandingOperationsSettled).toBe(true);
+    core.stop();
+  });
+
+  test("an attempt interrupted by a restart is never frozen, even after the janitor relabels it `stopped` (B8)", async () => {
+    const docker = new FakeDocker(defaultHandler({ collector: { stdout: ENVELOPE } }));
+    const { core, journal, dir } = await createAuthor(docker);
+    core.stop();
+    const { core: restarted } = makeCore(docker, journal, { dir });
+    await restarted.start();
+    expect(journal.getAttempt("att1")?.status).toBe("unknown");
+    // The janitor's later confirmed stop relabels the attempt; its workspace is still uncertain.
+    journal.updateAttempt("att1", { status: "stopped" });
+    const freeze = await restarted.freeze(REF, await operationFor("freeze-after-janitor", { ref: REF })).catch((e) => e as SupervisorError);
+    expect((freeze as SupervisorError).code).toBe("fenced");
+    expect(docker.calls.some((c) => /collector/.test(c))).toBe(false);
+    restarted.stop();
   });
 
   test("janitor removes owned containers the journal does not know and tombstones them", async () => {

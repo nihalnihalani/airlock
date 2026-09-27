@@ -77,8 +77,8 @@ export function fakeHost(): HostReport {
   };
 }
 
-export function makeCore(api: FakeDocker, journal?: Journal): { core: Supervisor; journal: Journal; dir: string } {
-  const dir = tempDir();
+export function makeCore(api: FakeDocker, journal?: Journal, seams: { settleMs?: number; writeTimeoutMs?: number; dir?: string } = {}): { core: Supervisor; journal: Journal; dir: string } {
+  const dir = seams.dir ?? tempDir();
   const j = journal ?? new Journal(join(dir, "journal.sqlite"));
   const core = new Supervisor({
     api,
@@ -87,6 +87,8 @@ export function makeCore(api: FakeDocker, journal?: Journal): { core: Supervisor
     profiles: new Map([[PROFILE.id, PROFILE]]),
     host: fakeHost(),
     log: () => {},
+    ...(seams.settleMs !== undefined ? { settleMs: seams.settleMs } : {}),
+    ...(seams.writeTimeoutMs !== undefined ? { writeTimeoutMs: seams.writeTimeoutMs } : {}),
   });
   return { core, journal: j, dir };
 }

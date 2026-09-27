@@ -525,11 +525,14 @@ function createRawDockerode(socketPath: string | undefined): DockerApi {
         const containers = await docker.listContainers({ all: true, filters: { label: labelFilters } });
         return containers.map((c) => ({ name: (c.Names?.[0] ?? "").replace(/^\//, ""), labels: c.Labels ?? {}, state: c.State }));
       }),
-    async putArchive(name, tar, path) {
+    async putArchive(name, tar, path, signal) {
       try {
-        await docker.getContainer(name).putArchive(Buffer.from(tar), { path, noOverwriteDirNonDir: true });
+        await docker.getContainer(name).putArchive(Buffer.from(tar), { path, noOverwriteDirNonDir: true, ...(signal ? { abortSignal: signal } : {}) });
       } catch (error) {
-        if (statusOf(error) === 404) throw new SupervisorError("not_found", `Container ${name} is gone; cannot deliver files.`);
+        const status = statusOf(error);
+        if (status === 404) throw new SupervisorError("not_found", `Container ${name} is gone; cannot deliver files.`);
+        // Any other 4xx is Docker refusing the upload outright: nothing was written.
+        if (status !== undefined && status >= 400 && status < 500) throw new SupervisorError("invalid_body", `Docker refused the upload to ${name} (${status}); nothing was written.`);
         throw dockerUnavailable(error);
       }
     },

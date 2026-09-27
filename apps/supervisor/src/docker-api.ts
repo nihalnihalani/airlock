@@ -108,6 +108,10 @@ export interface DockerApi {
   removeContainer(name: string, force: boolean): Promise<void>;
   inspectContainer(name: string): Promise<ContainerDetail | null>;
   listContainers(labelFilters: string[]): Promise<ContainerSummary[]>;
-  putArchive(name: string, tar: Uint8Array, path: string): Promise<void>;
+  /**
+   * Upload a tar into the container. Docker accepts archive writes into a stopped container, so an
+   * aborted upload's effect is unknown: callers treat an aborted or failed write as lost control.
+   */
+  putArchive(name: string, tar: Uint8Array, path: string, signal?: AbortSignal): Promise<void>;
   exec(name: string, spec: ExecSpec, signal: AbortSignal): Promise<ExecSession>;
 }

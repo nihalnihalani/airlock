@@ -3,12 +3,14 @@
  *
  * Ordering rules (research/37 "Cancellation, recovery and identity", CLAUDE.md §3.5):
  *   - record before dispatch: the journal row exists before any Docker side effect;
- *   - freeze: revoke → stop (t=2) → settle outstanding execs → re-inspect stopped → collect in a
- *     fresh container with the volume read-only;
+ *   - freeze: revoke → stop (t=2) → settle outstanding execs and writes → re-inspect stopped →
+ *     collect in a fresh container with the volume read-only; an unsettled operation refuses the
+ *     freeze (`unknown`, 409) because a late write could still land in the workspace;
  *   - every start/exec re-checks the fence immediately before the side effect;
  *   - lost control over a command stops the whole container (OpenMuse quarantine);
  *   - failed teardown stays visible (`unknown`) and the identity is tombstoned so nothing can
- *     resurrect it.
+ *     resurrect it;
+ *   - restart: every live attempt is revoked, stopped and marked `unknown` (see `reconcile`).
  */
 import {
   type AttemptRef,
@@ -43,6 +45,8 @@ export const COLLECTOR = "/opt/airlock/collector.py";
 export const PROFILE_JSON = "/opt/airlock/profile/profile.json";
 const STOP_SECONDS = 2;
 const SETTLE_MS = 20_000;
+/** Bound on one author write; shorter than SETTLE_MS so a slow write resolves before settle gives up. */
+const WRITE_TIMEOUT_MS = 10_000;
 const MAX_TIMER_MS = 2_147_000_000;
 
 export interface OperationResponse {
@@ -58,6 +62,10 @@ export interface CoreDeps {
   host: HostReport;
   /** Test seam: a Logger, or a plain sink that receives each finished JSON line. Default: the process logger. */
   log?: Logger | ((line: string) => void);
+  /** Test seam: how long freeze waits for outstanding operations (default SETTLE_MS). */
+  settleMs?: number;
+  /** Test seam: the abort timeout on one author write (default WRITE_TIMEOUT_MS). */
+  writeTimeoutMs?: number;
 }
 
 export interface ProvisionRequest {
@@ -85,6 +93,10 @@ export class Supervisor {
   readonly host: HostReport;
   private readonly log: Logger;
   private readonly outstanding = new Map<string, Set<Promise<unknown>>>();
+  /** Attempts with a write whose effect is unknown (aborted or failed mid-upload): never collectable. */
+  private readonly uncertainWrites = new Set<string>();
+  private readonly settleMs: number;
+  private readonly writeTimeoutMs: number;
   private readonly locks = new Map<string, Promise<void>>();
   private readonly revokeSignals = new Map<string, AbortController>();
   private readonly deadlineTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -97,6 +109,8 @@ export class Supervisor {
     this.config = deps.config;
     this.profiles = deps.profiles;
     this.host = deps.host;
+    this.settleMs = deps.settleMs ?? SETTLE_MS;
+    this.writeTimeoutMs = deps.writeTimeoutMs ?? WRITE_TIMEOUT_MS;
     this.log = typeof deps.log === "function" ? createLogger({ app: "supervisor", level: "debug", write: (line) => (deps.log as (line: string) => void)(line) }) : (deps.log ?? log);
   }
 
@@ -121,10 +135,22 @@ export class Supervisor {
     this.deadlineTimers.clear();
   }
 
-  /** Journal vs Docker: a live attempt whose container is gone becomes unknown; revoked ones are stopped. */
+  /**
+   * Journal vs Docker after a restart: a live attempt whose container is gone becomes unknown;
+   * revoked or expired ones are stopped; every other live attempt (`created` or `running`) is
+   * revoked, stopped and marked `unknown`, never re-armed.
+   *
+   * Why every live attempt and not only those with an interrupted operation: the operations journal
+   * does not bind an operation to an attempt, a `created` attempt never finished its probe, and the
+   * in-memory record of outstanding execs and writes died with the process, so no live attempt can
+   * be proven idle. The conservative choice matches research/37 "Cancellation, recovery and
+   * identity": a crash yields `unknown/interrupted`, and the controller discards an uncertain author
+   * workspace and starts an explicit fresh attempt. `unknown` also refuses freeze, so the uncertain
+   * workspace is never collected.
+   */
   private async reconcile(): Promise<void> {
     const startedAt = Date.now();
-    const seen = { attempts: 0, missing: 0, stopped: 0, rearmed: 0 };
+    const seen = { attempts: 0, missing: 0, stopped: 0, interrupted: 0 };
     for (const record of this.journal.listAttempts()) {
       if (record.status === "destroyed") continue;
       seen.attempts += 1;
@@ -141,14 +167,13 @@ export class Supervisor {
         seen.stopped += 1;
         continue;
       }
-      if (record.status === "running" && !detail.state.running) {
-        // It stopped while nobody was watching: nothing may dispatch into it again.
-        this.journal.revoke(record.attemptId, "unknown");
-        this.log.warn("attempt container stopped while unobserved; dispatch closed", { attemptId: record.attemptId, container: record.container });
-        continue;
-      }
-      this.armDeadline(record);
-      seen.rearmed += 1;
+      // Live at the crash: revoke (persisted first), then stop and confirm. A stop that fails or is
+      // not confirmed stays `unknown` with dispatch closed and the janitor keeps retrying it.
+      this.journal.revoke(record.attemptId, "unknown");
+      this.closeDispatch(record.attemptId);
+      if (detail.state.running) await this.stopAndConfirm(record, "restart");
+      this.log.warn("attempt was live at restart; revoked, stopped and marked unknown", { attemptId: record.attemptId, container: record.container, status: record.status, wasRunning: detail.state.running });
+      seen.interrupted += 1;
     }
     this.log.debug("reconcile pass", { ...seen, durationMs: Date.now() - startedAt });
   }
@@ -533,8 +558,26 @@ export class Supervisor {
         ...ancestorDirs([args.path]).map((dir) => ({ path: dir, kind: "dir" as const })),
         { path: args.path, kind: "file" as const, bytes },
       ]);
+      // The fence is re-checked synchronously right before dispatch, and `tracked` registers the
+      // write in the same tick, so a freeze/revoke either fences it here or finds it outstanding.
+      // Revocation does not abort an accepted write (an aborted upload's effect is unknown); freeze
+      // waits for it instead. Only the write's own timeout aborts it, and then its effect is unknown.
       this.journal.fence({ taskId: record.taskId, attemptId: record.attemptId, generation: record.generation });
-      await this.tracked(record.attemptId, () => this.api.putArchive(record.container, tar, sourceRoot));
+      if (signal.aborted) throw new SupervisorError("revoked", `Attempt ${record.attemptId} is revoked; dispatch is closed.`);
+      try {
+        await this.tracked(record.attemptId, () =>
+          this.api.putArchive(record.container, tar, sourceRoot, AbortSignal.timeout(this.writeTimeoutMs)).catch((error: unknown) => {
+            // Marked before the tracked promise settles, so a concurrent settle already sees it. Only a
+            // definite refusal (container gone, Docker 4xx) is known to have written nothing; an
+            // abort, timeout or transport error leaves the write's effect unknown.
+            if (!(error instanceof SupervisorError && (error.code === "not_found" || error.code === "invalid_body"))) this.uncertainWrites.add(record.attemptId);
+            throw error;
+          }),
+        );
+      } catch (error) {
+        if (this.uncertainWrites.has(record.attemptId)) await this.quarantine(record, `write lost control (${describe(error)})`);
+        throw error;
+      }
       return { kind: "write", byteLength: bytes.length };
     }
 
@@ -552,7 +595,7 @@ export class Supervisor {
     return { kind: "exec", result: outcome.result };
   }
 
-  /** Keep a handle on every in-flight exec so freeze can wait for them. */
+  /** Keep a handle on every in-flight exec and write so freeze can wait for them. */
   private async tracked<T>(attemptId: string, fn: () => Promise<T>): Promise<T> {
     let set = this.outstanding.get(attemptId);
     if (!set) {
@@ -599,8 +642,11 @@ export class Supervisor {
         if (record.role !== "author") throw new SupervisorError("fenced", `Only author attempts can be frozen; ${ref.attemptId} is ${record.role}.`);
         const profile = this.profile(record.profileId);
         const current = this.journal.getAttempt(record.attemptId);
-        if (!current || current.status === "destroyed" || current.status === "unknown") {
-          throw new SupervisorError("fenced", `Attempt ${record.attemptId} is ${current?.status ?? "gone"}; nothing to freeze.`);
+        // Only a live author that this process has watched without interruption can be frozen. A
+        // revoked, stopped or unknown attempt (cancelled, expired, or live at a restart and later
+        // stopped by the janitor) holds a workspace whose last writes are uncertain: never collected.
+        if (!current || current.status !== "running" || current.revoked) {
+          throw new SupervisorError("fenced", `Attempt ${record.attemptId} is ${current ? `${current.status}${current.revoked ? " (revoked)" : ""}` : "gone"}; only a live, unrevoked author attempt can be frozen.`);
         }
         const names = this.names(ref, "author");
         // 1. revoke dispatch
@@ -614,8 +660,14 @@ export class Supervisor {
           // 3. stop the container
           await this.api.stopContainer(record.container, STOP_SECONDS);
           const stoppedAt = new Date().toISOString();
-          // 4. settle outstanding execs
+          // 4. settle outstanding execs and writes. If any did not settle (or a write's effect is
+          //    unknown) a late write could still land in the workspace: refuse to collect or seal.
           const settled = await this.settle(record.attemptId);
+          if (!settled) {
+            this.journal.updateAttempt(record.attemptId, { status: "unknown" });
+            this.log.warn("freeze: outstanding operations did not settle; refusing to collect", { attemptId: record.attemptId, container: record.container, uncertainWrite: this.uncertainWrites.has(record.attemptId) });
+            throw new SupervisorError("fenced", `Outstanding operations on ${record.container} did not settle; the workspace is uncertain and will not be collected.`);
+          }
           // 5. re-inspect stopped
           const expected = this.expectedFor({
             container: names.container,
@@ -645,11 +697,15 @@ export class Supervisor {
 
   private async settle(attemptId: string): Promise<boolean> {
     const set = this.outstanding.get(attemptId);
-    if (!set || set.size === 0) return true;
+    if (!set || set.size === 0) return !this.uncertainWrites.has(attemptId);
     const pending = [...set].map((p) => p.then(() => undefined, () => undefined));
-    const timeout = new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), SETTLE_MS));
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), this.settleMs);
+    });
     const outcome = await Promise.race([Promise.all(pending).then(() => "settled" as const), timeout]);
-    return outcome === "settled";
+    clearTimeout(timer);
+    return outcome === "settled" && !this.uncertainWrites.has(attemptId);
   }
 
   /**
@@ -738,6 +794,7 @@ export class Supervisor {
         this.journal.updateAttempt(record.attemptId, { status: teardown.clean ? "destroyed" : "unknown" });
         this.journal.tombstone(record.attemptId, record.taskId, teardown.clean ? "destroyed" : "teardown incomplete");
         this.outstanding.delete(record.attemptId);
+        this.uncertainWrites.delete(record.attemptId);
         this.revokeSignals.delete(record.attemptId);
         const result: DestroyResult = { teardown };
         this.log.info(teardown.clean ? "attempt destroyed" : "attempt teardown incomplete", { attemptId: record.attemptId, container: names.container, volume: names.volume, containersRemaining: teardown.containersRemaining, volumesRemaining: teardown.volumesRemaining });

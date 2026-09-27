@@ -5,6 +5,7 @@
  */
 import { Readable } from "node:stream";
 import type { ContainerCreateSpec, ContainerDetail, DockerApi, ExecSession, ExecSpec } from "../src/docker-api";
+import { SupervisorError } from "../src/errors";
 
 export interface ScriptedExec {
   stdout?: string;
@@ -204,9 +205,28 @@ export class FakeDocker implements DockerApi {
       .filter(([, c]) => matches(c.spec.labels, labelFilters))
       .map(([name, c]) => ({ name, labels: c.spec.labels, state: c.running ? "running" : "exited" }));
   }
-  async putArchive(name: string, tar: Uint8Array, path: string) {
+  /**
+   * Shape archive uploads: `delayMs` before the write lands; `hang` never lands until the request is
+   * aborted (then rejects); `ignoreAbort` keeps hanging even when aborted (an unresponsive daemon).
+   * `refuse` answers like the runtime adapter does for a Docker 4xx (nothing written).
+   * A landed write is recorded as `putArchive-landed <name>`.
+   */
+  archive: { delayMs?: number; hang?: boolean; ignoreAbort?: boolean; refuse?: boolean } = {};
+  async putArchive(name: string, tar: Uint8Array, path: string, signal?: AbortSignal) {
     this.record(`putArchive ${name} ${path} ${tar.length}b`);
+    // Same contract as the runtime adapter (runtime.ts): 404 → not_found, other 4xx → invalid_body.
+    if (!this.containers.has(name)) throw new SupervisorError("not_found", `Container ${name} is gone; cannot deliver files.`);
+    if (this.archive.refuse) throw new SupervisorError("invalid_body", `Docker refused the upload to ${name} (400); nothing was written.`);
+    const { delayMs = 0, hang = false, ignoreAbort = false } = this.archive;
+    if (hang || delayMs > 0) {
+      await new Promise<void>((resolve, reject) => {
+        if (!hang) setTimeout(resolve, delayMs);
+        if (!ignoreAbort) signal?.addEventListener("abort", () => reject(Object.assign(new Error("request aborted"), { name: "AbortError" })), { once: true });
+      });
+    }
+    // Docker accepts archive writes into a stopped container: only a removed one refuses.
     if (!this.containers.has(name)) throw Object.assign(new Error("no such container"), { statusCode: 404 });
+    this.record(`putArchive-landed ${name}`);
   }
   async exec(name: string, spec: ExecSpec, signal: AbortSignal): Promise<ExecSession> {
     this.record(`exec ${name} ${spec.cmd.join(" ")}`);
