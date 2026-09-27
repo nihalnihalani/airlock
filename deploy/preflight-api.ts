@@ -128,7 +128,11 @@ console.log("== G4/D1: workspace quota, background child, post-stop collection")
     console.log(`  D1 host MemAvailable: before ${Math.round(before / 1024)} MiB, with the workspace full ${Math.round(afterFill / 1024)} MiB (delta ${Math.round((before - afterFill) / 1024)} MiB)`);
     const out = String(fill.json?.result?.stdout ?? "");
     console.log(`  workspace fill:\n${out.trim().split("\n").map((l) => "    " + l).join("\n")}`);
-    check(/No space left|rc=1/.test(out) || fill.json?.result?.exitCode !== 0, "D1/G4: writing past the workspace quota fails inside the sandbox");
+    // dd stops at ENOSPC: the bytes it managed to write must stay within the workspace size (the
+    // exit status is the pipe's, so it is not the evidence; the byte count and df are).
+    const written = Number(/^(\d+) bytes/m.exec(out)?.[1] ?? NaN);
+    const dfSizeKiB = Number(/\s(\d+)\s+\d+\s+\d+\s+\d+%\s+\/workspace/.exec(out)?.[1] ?? NaN);
+    check(Number.isFinite(written) && written < 400 * 1024 * 1024 && Number.isFinite(dfSizeKiB) && dfSizeKiB * 1024 <= 134_217_728, `D1/G4: the workspace quota holds (wrote ${written} of 419430400 bytes; /workspace size ${dfSizeKiB} KiB)`);
     await call("POST", `/attempts/${r.attemptId}/tool`, { ref: r, args: { kind: "exec", command: "rm -f /workspace/fill" } });
     const bg = await call("POST", `/attempts/${r.attemptId}/tool`, { ref: r, args: { kind: "exec", command: "nohup sleep 1000 >/dev/null 2>&1 & echo started" } });
     check(bg.status === 200, "G4: detached background child started");
