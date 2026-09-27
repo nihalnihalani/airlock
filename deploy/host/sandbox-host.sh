@@ -15,7 +15,8 @@
 #   - ufw (active by default on Vultr's Ubuntu image, 22/tcp only): adds 4300/tcp from the control plane's
 #     VPC address only (the Vultr firewall group filters the public interface only, so a VPC neighbour
 #     would otherwise reach the supervisor; the bearer token remains the second line)
-#   - systemd unit airlock-supervisor.service (not started here; deploy.sh writes the env and starts it)
+#   - systemd unit airlock-supervisor.service with AIRLOCK_PRODUCTION=1 (not started here; deploy.sh
+#     writes the env and starts it)
 #
 # Trade-off, documented in deploy/README.md: a member of the docker group is root-equivalent on this
 # host. The supervisor is the one process that must hold the Docker socket (CLAUDE.md §2); running it
@@ -166,7 +167,10 @@ Group=airlock-supervisor
 SupplementaryGroups=docker
 WorkingDirectory=/opt/airlock/app/apps/supervisor
 EnvironmentFile=/etc/airlock/supervisor.env
-ExecStart=/usr/local/bin/bun src/index.ts
+# D4: this host is a deployment. The supervisor refuses to start with dev-unsafe, runc or without a
+# pinned AIRLOCK_RUNTIME_IMAGE_ID. Set on the command line (after the EnvironmentFile is applied) so
+# an env file entry cannot override it.
+ExecStart=/usr/bin/env AIRLOCK_PRODUCTION=1 /usr/local/bin/bun src/index.ts
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=yes

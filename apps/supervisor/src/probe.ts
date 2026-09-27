@@ -51,12 +51,16 @@ export function parseProbeOutput(stdout: string, probedAt: string): IsolationPro
   return { probedAt, ...p, allBlocked };
 }
 
-export async function runProbe(api: DockerApi, container: string, workingDir: string, signal?: AbortSignal): Promise<IsolationProbe> {
+/**
+ * `workspaceBytes` is the size the owned workspace tmpfs must not exceed; the probe treats a larger
+ * or unbounded tmpfs at /workspace or /candidate as a host-backed mount (REACHED).
+ */
+export async function runProbe(api: DockerApi, container: string, workingDir: string, workspaceBytes: number, signal?: AbortSignal): Promise<IsolationProbe> {
   const probedAt = new Date().toISOString();
   const outcome = await runExec(
     api,
     container,
-    { cmd: timedCommand(["/bin/bash", "--noprofile", "--norc", PROBE_PATH], PROBE_TIMEOUT_SECONDS), user: SANDBOX_USER, workingDir },
+    { cmd: timedCommand(["/bin/bash", "--noprofile", "--norc", PROBE_PATH, "--workspace-bytes", String(workspaceBytes)], PROBE_TIMEOUT_SECONDS), user: SANDBOX_USER, workingDir },
     { timeoutMs: (PROBE_TIMEOUT_SECONDS + 7) * 1000, outputBytes: 16_384, ...(signal ? { signal } : {}) },
   );
   if (outcome.result.status !== "succeeded") return parseProbeOutput("", probedAt);

@@ -10,7 +10,11 @@
  *   - lost control over a command stops the whole container (OpenMuse quarantine);
  *   - failed teardown stays visible (`unknown`) and the identity is tombstoned so nothing can
  *     resurrect it;
- *   - restart: every live attempt is revoked, stopped and marked `unknown` (see `reconcile`).
+ *   - restart: every live attempt is revoked, stopped and marked `unknown` (see `reconcile`);
+ *   - execution authority ends at min(authorizedUntil, deadline); `renew` moves authorizedUntil
+ *     (never past the deadline, never for revoked work) and one timer enforces the earlier of the two;
+ *   - host admission: every sandbox reserves its share of the host budget before any Docker call
+ *     and releases it only once its container is confirmed removed (capacity.ts).
  */
 import {
   type AttemptRef,
@@ -19,6 +23,7 @@ import {
   type Caps,
   FileEnvelope,
   type FreezeResult,
+  type HostListing,
   type IsolationProbe,
   type Operation,
   type ProfileManifest,
@@ -27,14 +32,15 @@ import {
   type TeardownRecord,
   workspaceBytesOf,
 } from "@airlock/contracts";
+import { HostCapacity, sandboxCost } from "./capacity";
 import type { SupervisorConfig } from "./config";
 import type { CreateAttemptRequest, DestroyResult } from "./types";
 import type { DockerApi } from "./docker-api";
 import { SupervisorError, describe } from "./errors";
 import { SANDBOX_USER, SUPERVISOR_GRACE_MS, authorCommand, runExec, timedCommand } from "./exec";
 import type { HostReport } from "./host";
-import { type AttemptNames, attemptLabels, attemptNames, ours, ownedFilter, ATTEMPT_LABEL, OPERATION_LABEL, ROLE_LABEL, TASK_LABEL } from "./names";
-import { type AttemptRecord, Journal, attemptStateOf } from "./operations";
+import { type AttemptNames, attemptLabels, attemptNames, ours, ownedFilter, ATTEMPT_LABEL, OPERATION_LABEL, OWNER_LABEL, ROLE_LABEL, TASK_LABEL } from "./names";
+import { type AttemptRecord, Journal, attemptStateOf, authorityEndsAt } from "./operations";
 import { createLogger, log, type Logger } from "./log";
 import { runProbe } from "./probe";
 import { type ExpectedSandbox, InspectionFailed, type SandboxSpec, inspectSandbox, sandboxCreateSpec, workspaceDriverOpts, workspaceVolumeBounded } from "./runtime";
@@ -91,6 +97,7 @@ export class Supervisor {
   readonly config: SupervisorConfig;
   readonly profiles: Map<string, ProfileManifest>;
   readonly host: HostReport;
+  readonly capacity: HostCapacity;
   private readonly log: Logger;
   private readonly outstanding = new Map<string, Set<Promise<unknown>>>();
   /** Attempts with a write whose effect is unknown (aborted or failed mid-upload): never collectable. */
@@ -109,6 +116,7 @@ export class Supervisor {
     this.config = deps.config;
     this.profiles = deps.profiles;
     this.host = deps.host;
+    this.capacity = new HostCapacity(deps.config.capacity);
     this.settleMs = deps.settleMs ?? SETTLE_MS;
     this.writeTimeoutMs = deps.writeTimeoutMs ?? WRITE_TIMEOUT_MS;
     this.log = typeof deps.log === "function" ? createLogger({ app: "supervisor", level: "debug", write: (line) => (deps.log as (line: string) => void)(line) }) : (deps.log ?? log);
@@ -122,6 +130,7 @@ export class Supervisor {
     const interrupted = this.journal.interruptPendingOperations();
     if (interrupted > 0) this.log.warn("marked pending operations as interrupted after restart", { interrupted });
     await this.reconcile();
+    await this.adoptCapacity();
     await this.janitor();
     this.janitorTimer = setInterval(() => {
       this.janitor().catch((error) => this.log.error("janitor failed", { error }));
@@ -161,7 +170,7 @@ export class Supervisor {
         seen.missing += 1;
         continue;
       }
-      if (record.revoked || record.deadline < new Date().toISOString()) {
+      if (record.revoked || authorityEndsAt(record) < new Date().toISOString()) {
         if (detail.state.running) await this.api.stopContainer(record.container, STOP_SECONDS);
         if (!record.revoked) this.journal.revoke(record.attemptId, "revoked");
         seen.stopped += 1;
@@ -178,10 +187,39 @@ export class Supervisor {
     this.log.debug("reconcile pass", { ...seen, durationMs: Date.now() - startedAt });
   }
 
+  /**
+   * Restart: every owned container Docker still lists counts against the host budget until its
+   * removal is confirmed, whatever its state. Attempts are charged by their profile; one-shot and
+   * collector containers (whose profile is not recorded) by the most expensive loaded profile.
+   */
+  private async adoptCapacity(): Promise<void> {
+    const byAttempt = new Map(this.journal.listAttempts().map((a) => [a.attemptId, a]));
+    const profiles = [...this.profiles.values()];
+    for (const container of await this.api.listContainers(ownedFilter(this.config.namespace))) {
+      const role = container.labels[ROLE_LABEL];
+      const createsWorkspace = role !== "collector";
+      const record = byAttempt.get(container.labels[ATTEMPT_LABEL] ?? "");
+      const profile = record ? this.profiles.get(record.profileId) : undefined;
+      const costs = (profile ? [profile] : profiles).map((p) => sandboxCost(p.caps, this.capacity.budget, createsWorkspace));
+      const cost = costs.reduce((max, c) => (c.memoryBytes > max.memoryBytes ? c : max), costs[0] ?? { memoryBytes: 0, pids: 0, scratchBytes: 0 });
+      this.capacity.adopt(container.name, cost);
+    }
+    const used = this.capacity.used();
+    if (used.sandboxes > 0) this.log.info("capacity: adopted existing sandboxes after restart", { ...used, budget: this.capacity.budget });
+  }
+
   // -------------------------------------------------------------------------------------------
   // Shared helpers
   // -------------------------------------------------------------------------------------------
 
+  /**
+   * Host admission (M2): reserve this sandbox's memory, PIDs and scratch against the host budget,
+   * synchronously, before any Docker call. Throws `capacity` (429) with nothing created.
+   */
+  admit(container: string, profile: ProfileManifest, createsWorkspace: boolean): void {
+    this.capacity.reserve(container, sandboxCost(profile.caps, this.capacity.budget, createsWorkspace));
+    this.log.debug("capacity reserved", { container, used: this.capacity.used() });
+  }
   profile(profileId: string): ProfileManifest {
     const profile = this.profiles.get(profileId);
     if (!profile) throw new SupervisorError("unsupported_profile", `Profile ${profileId} is not supported by this supervisor.`);
@@ -205,6 +243,12 @@ export class Supervisor {
     } catch (error) {
       const status = error instanceof SupervisorError ? error.status : 500;
       const body = { error: describe(error), code: error instanceof SupervisorError ? error.code : "internal" };
+      if (error instanceof SupervisorError && error.code === "capacity") {
+        // Refused before any effect: not a receipt. The same operation id may be retried later.
+        this.journal.abandonOperation(operation.operationId);
+        this.log.info("operation refused at host admission", { operationId: operation.operationId, kind, error: error.message });
+        throw error;
+      }
       this.journal.completeOperation(operation.operationId, status, body);
       this.log.debug("journal: operation failed", { operationId: operation.operationId, kind, status, code: body.code, durationMs: Date.now() - startedAt, error });
       throw error;
@@ -267,9 +311,14 @@ export class Supervisor {
     return { ...spec, defaultRuntime: this.host.defaultRuntime };
   }
 
-  /** Create volume (optional) + container, start it, inspect the effective config, fail closed. */
+  /**
+   * Create volume (optional) + container, start it, inspect the effective config (including the
+   * pinned image ID and the runner readiness exec), fail closed. A caller that has not admitted the
+   * sandbox yet is admitted here, before the first Docker call.
+   */
   async provision(request: ProvisionRequest): Promise<Provisioned> {
     const expected = this.expectedFor(request);
+    if (!this.capacity.has(request.container)) this.admit(request.container, request.profile, request.createVolume);
     let volumeCreated = false;
     const workspaceBytes = workspaceBytesOf(request.profile.caps);
     try {
@@ -286,17 +335,19 @@ export class Supervisor {
       await this.api.createContainer(sandboxCreateSpec(expected));
       await this.api.startContainer(request.container);
       const { inspection } = await this.inspect(expected, { requireRunning: true });
+      this.capacity.settled(request.container);
       this.log.debug("sandbox provisioned", { container: request.container, volume: request.volume, image: request.profile.runtimeImage, runtime: inspection.runtime, devUnsafe: inspection.devUnsafe, allPassed: inspection.allPassed, guestHostname: inspection.guestHostname, mount: request.mount });
       return { inspection, expected, guest: { uname: inspection.guestUname, hostname: inspection.guestHostname } };
     } catch (error) {
+      this.capacity.settled(request.container);
       this.log.warn("sandbox provisioning failed; removing its resources", { container: request.container, volume: request.volume, error });
       await this.removeResources(request.container, volumeCreated ? request.volume : undefined);
       throw error;
     }
   }
 
-  inspect(expected: ExpectedSandbox, options: { requireRunning: boolean; previousGuest?: { uname: string; hostname: string } }) {
-    return inspectSandbox(
+  async inspect(expected: ExpectedSandbox, options: { requireRunning: boolean; previousGuest?: { uname: string; hostname: string } }) {
+    const result = await inspectSandbox(
       this.api,
       expected,
       {
@@ -304,12 +355,20 @@ export class Supervisor {
         configuredRuntime: this.config.runtime,
         devUnsafe: this.config.devUnsafe,
         defaultRuntime: this.host.defaultRuntime,
+        runtimeImageId: this.config.runtimeImageId,
       },
       options,
     );
+    // Dev-unsafe without a pin: record the image ID actually observed (HostCheck.runtimeImageId).
+    if (!this.config.runtimeImageId && /^sha256:[a-f0-9]{64}$/.test(result.detail.image)) this.host.check.runtimeImageId = result.detail.image;
+    return result;
   }
 
-  /** Force-remove a container and (optionally) a volume; never throws. */
+  /**
+   * Force-remove a container and (optionally) a volume; never throws. The container's host
+   * reservation is released only when an inspect confirms it is gone; otherwise the janitor keeps
+   * checking.
+   */
   async removeResources(container: string, volume?: string): Promise<void> {
     const startedAt = Date.now();
     try {
@@ -317,6 +376,7 @@ export class Supervisor {
     } catch (error) {
       this.log.warn("remove container failed", { container, error });
     }
+    await this.releaseIfGone(container);
     if (volume) {
       // Volume removal races the container's own removal; retry briefly.
       for (let i = 0; i < 5; i++) {
@@ -333,16 +393,59 @@ export class Supervisor {
     this.log.debug("resources removed", { container, volume: volume ?? null, durationMs: Date.now() - startedAt });
   }
 
-  /** Checkpoint 5: list what the supervisor still owns under these labels. */
+  /** Release a reservation once Docker confirms the container no longer exists. */
+  private async releaseIfGone(container: string): Promise<boolean> {
+    if (!this.capacity.has(container)) return false;
+    let detail;
+    try {
+      detail = await this.api.inspectContainer(container);
+    } catch (error) {
+      this.log.warn("capacity: could not confirm removal; reservation kept", { container, error });
+      return false;
+    }
+    if (detail) return false;
+    this.capacity.release(container);
+    this.log.debug("capacity released", { container, used: this.capacity.used() });
+    return true;
+  }
+
+  /**
+   * Checkpoint 5: list what the supervisor still owns under these labels, plus the host-wide
+   * listing taken right after (M7): "(no sandboxes)" means that listing is empty, not this filter.
+   */
   async teardownRecord(labelFilters: string[]): Promise<TeardownRecord> {
     const [containers, volumes] = await Promise.all([this.api.listContainers(labelFilters), this.api.listVolumes(labelFilters)]);
     const containersRemaining = containers.map((c) => c.name).sort();
     const volumesRemaining = volumes.map((v) => v.name).sort();
+    const host = await this.hostListing();
     return {
       destroyedAt: new Date().toISOString(),
       containersRemaining,
       volumesRemaining,
       clean: containersRemaining.length === 0 && volumesRemaining.length === 0,
+      host,
+    };
+  }
+
+  /**
+   * Every Airlock-owned container and volume on this Docker host, by the owner label alone (any
+   * namespace), so another deployment's or a test's leftovers are not hidden from the listing.
+   */
+  async hostListing(): Promise<HostListing> {
+    const filter = [`${OWNER_LABEL}=true`];
+    const [containers, volumes] = await Promise.all([this.api.listContainers(filter), this.api.listVolumes(filter)]);
+    return {
+      listedAt: new Date().toISOString(),
+      scope: "host",
+      containers: containers
+        .map((c) => ({
+          name: c.name,
+          ...(c.labels[TASK_LABEL] ? { taskId: c.labels[TASK_LABEL] } : {}),
+          ...(c.labels[ROLE_LABEL] ? { role: c.labels[ROLE_LABEL] } : {}),
+          state: c.state,
+        }))
+        .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)),
+      volumes: volumes.map((v) => v.name).sort(),
     };
   }
 
@@ -366,32 +469,42 @@ export class Supervisor {
     return names.value;
   }
 
+  /** One timer per attempt, at min(authorizedUntil, deadline); re-armed by every renewal. */
   private armDeadline(record: AttemptRecord): void {
     if (this.stopped) return;
     const existing = this.deadlineTimers.get(record.attemptId);
     if (existing) clearTimeout(existing);
-    const delay = Math.min(Math.max(0, Date.parse(record.deadline) - Date.now()), MAX_TIMER_MS);
+    const endsAt = authorityEndsAt(record);
+    const delay = Math.min(Math.max(0, Date.parse(endsAt) - Date.now()), MAX_TIMER_MS);
     const timer = setTimeout(() => {
-      this.log.debug("deadline timer fired", { attemptId: record.attemptId, deadline: record.deadline });
+      this.log.debug("deadline timer fired", { attemptId: record.attemptId, deadline: record.deadline, authorizedUntil: record.authorizedUntil });
       this.expire(record.attemptId).catch((error) => this.log.error("expire failed", { attemptId: record.attemptId, error }));
     }, delay);
     this.deadlineTimers.set(record.attemptId, timer);
-    this.log.debug("deadline armed", { attemptId: record.attemptId, deadline: record.deadline, delayMs: delay });
+    this.log.debug("deadline armed", { attemptId: record.attemptId, deadline: record.deadline, authorizedUntil: record.authorizedUntil, delayMs: delay });
   }
 
   /**
-   * The absolute deadline: revoke and stop regardless of the caller. Like `revoke`, the stop is
-   * confirmed by inspection; a stop that fails or is not confirmed leaves the row `unknown` (visible,
-   * dispatch closed) and the janitor keeps retrying the stop (CLAUDE.md §3.5).
+   * The end of execution authority (the absolute deadline, or an authorization that was not renewed
+   * in time): revoke and stop regardless of the caller. Like `revoke`, the stop is confirmed by
+   * inspection; a stop that fails or is not confirmed leaves the row `unknown` (visible, dispatch
+   * closed) and the janitor keeps retrying the stop (CLAUDE.md §3.5). A timer that fires after a
+   * renewal it raced re-arms instead of revoking.
    */
   async expire(attemptId: string): Promise<void> {
     await this.withLock(attemptId, async () => {
       const record = this.journal.getAttempt(attemptId);
       if (!record || record.status === "destroyed" || record.revoked) return;
-      this.log.info("attempt deadline reached; revoking and stopping", { attemptId, container: record.container, deadline: record.deadline });
+      const endsAt = authorityEndsAt(record);
+      if (Date.parse(endsAt) > Date.now()) {
+        this.armDeadline(record);
+        return;
+      }
+      const cause = record.authorizedUntil < record.deadline ? "authorization" : "deadline";
+      this.log.info(cause === "deadline" ? "attempt deadline reached; revoking and stopping" : "attempt authorization lapsed without renewal; revoking and stopping", { attemptId, container: record.container, deadline: record.deadline, authorizedUntil: record.authorizedUntil });
       this.journal.revoke(attemptId, "revoked");
       this.closeDispatch(attemptId);
-      await this.stopAndConfirm(record, "deadline");
+      await this.stopAndConfirm(record, cause);
     });
   }
 
@@ -424,11 +537,15 @@ export class Supervisor {
       const profile = this.profile(body.profileId);
       const names = this.names(body.ref, body.role);
       const deadline = this.boundDeadline(body.absoluteDeadline, profile.caps);
+      const authorizedUntil = body.authorizedUntil === undefined ? deadline : this.boundAuthorization(body.authorizedUntil, deadline);
       return this.withLock(names.attemptId, async () => {
+        // From here to insertAttempt there is no await: the tombstone, generation and admission
+        // checks and the insert are one step, so two creates for one task cannot both pass.
         if (this.journal.isTombstoned(names.attemptId)) {
           throw new SupervisorError("revoked", `Attempt ${names.attemptId} was destroyed earlier and cannot be resurrected.`);
         }
         if (this.journal.getAttempt(names.attemptId)) throw new SupervisorError("operation_conflict", `Attempt ${names.attemptId} already exists.`);
+        this.checkTaskGeneration(body.ref);
         const now = new Date().toISOString();
         const record: AttemptRecord = {
           taskId: names.taskId,
@@ -440,13 +557,20 @@ export class Supervisor {
           volume: names.volume,
           status: "created",
           deadline,
+          authorizedUntil,
           revoked: false,
           devUnsafe: this.config.devUnsafe,
           createdAt: now,
           updatedAt: now,
         };
-        // Record before dispatch.
-        this.journal.insertAttempt(record);
+        // Admit (host budget) before any Docker call, then record before dispatch.
+        this.admit(names.container, profile, true);
+        try {
+          this.journal.insertAttempt(record);
+        } catch (error) {
+          this.capacity.release(names.container);
+          throw error;
+        }
         const labels = attemptLabels(names);
         let provisioned: Provisioned;
         try {
@@ -476,24 +600,70 @@ export class Supervisor {
         if (materialized.result.status !== "succeeded") {
           await fail("internal", `Materializing the pristine source tree failed (${materialized.result.status}): ${materialized.result.stderr.slice(0, 400)}`);
         }
-        const probe = await runProbe(this.api, names.container, "/workspace", signal);
+        const probe = await runProbe(this.api, names.container, "/workspace", workspaceBytesOf(profile.caps), signal);
         this.log.debug("isolation probe", { attemptId: names.attemptId, container: names.container, allBlocked: probe.allBlocked, metadataEndpoint: probe.metadataEndpoint, dns: probe.dns, outboundTcp: probe.outboundTcp, dockerSocket: probe.dockerSocket, hostMounts: probe.hostMounts });
         if (!probe.allBlocked) {
           await fail("probe_failed", `Isolation probe not fully BLOCKED (${probeSummary(probe)}); sandbox destroyed and run refused.`, probe);
         }
         // Re-check the fence before handing the sandbox out: the deadline may have passed meanwhile.
         const current = this.journal.getAttempt(names.attemptId);
-        if (!current || current.revoked || current.deadline < new Date().toISOString()) {
-          await fail("internal", "Attempt deadline passed during preparation.", probe);
+        if (!current || current.revoked || authorityEndsAt(current) < new Date().toISOString()) {
+          await fail("internal", "Attempt deadline or authorization passed during preparation.", probe);
         }
         this.journal.updateAttempt(names.attemptId, { status: "running", inspection: provisioned.inspection, probe });
-        this.armDeadline({ ...record, status: "running" });
+        this.armDeadline({ ...(current ?? record), status: "running" });
         this.log.info("attempt running", { attemptId: names.attemptId, taskId: names.taskId, role: body.role, container: names.container, runtime: provisioned.inspection.runtime, devUnsafe: provisioned.inspection.devUnsafe, deadline });
         const state = this.journal.getAttempt(names.attemptId);
         if (!state) throw new SupervisorError("internal", "Attempt vanished from the journal.");
         return { status: 200, body: attemptStateOf(state) };
       });
     });
+  }
+
+  /** Bound a requested authorization: in the future, never past the attempt's deadline. */
+  private boundAuthorization(authorizedUntil: string, deadline: string): string {
+    const requested = Date.parse(authorizedUntil);
+    if (!Number.isFinite(requested) || requested <= Date.now()) throw new SupervisorError("invalid_body", "authorizedUntil must be in the future.");
+    return new Date(Math.min(requested, Date.parse(deadline))).toISOString();
+  }
+
+  /**
+   * A new attempt never silently supersedes a live one of the same task: while any older attempt of
+   * the task is live (not revoked, not destroyed) the create is refused; the caller revokes or
+   * destroys it first. A generation older than one already recorded for the task is stale.
+   */
+  private checkTaskGeneration(ref: AttemptRef): void {
+    for (const other of this.journal.listTaskAttempts(ref.taskId)) {
+      if (other.attemptId === ref.attemptId) continue;
+      if (ref.generation < other.generation) {
+        throw new SupervisorError("stale_generation", `Generation ${ref.generation} is older than generation ${other.generation} already recorded for task ${ref.taskId}.`);
+      }
+      if (other.status !== "destroyed" && !other.revoked) {
+        throw new SupervisorError("fenced", `Attempt ${other.attemptId} (generation ${other.generation}) of task ${ref.taskId} is still live; revoke or destroy it before creating ${ref.attemptId}.`);
+      }
+    }
+  }
+
+  /**
+   * M1: extend (or shorten) an attempt's execution authorization. Clamped to the absolute deadline;
+   * refused for an unknown, revoked, stopped, destroyed or tombstoned attempt, for any generation
+   * but the recorded one, and once the current authorization has lapsed: a renewal never revives.
+   */
+  async renew(ref: AttemptRef, operation: Operation, authorizedUntil: string): Promise<OperationResponse> {
+    this.names(ref, "author");
+    return this.withOperation(operation, "renew", () =>
+      this.withLock(ref.attemptId, async () => {
+        const record = this.journal.fence(ref);
+        if (record.status !== "running") throw new SupervisorError("fenced", `Attempt ${ref.attemptId} is ${record.status}; only a running attempt can be renewed.`);
+        const bounded = this.boundAuthorization(authorizedUntil, record.deadline);
+        this.journal.updateAttempt(record.attemptId, { authorizedUntil: bounded });
+        const updated = this.journal.getAttempt(record.attemptId);
+        if (!updated) throw new SupervisorError("internal", "Attempt vanished from the journal.");
+        this.armDeadline(updated);
+        this.log.debug("attempt authorization renewed", { attemptId: record.attemptId, authorizedUntil: bounded, requested: authorizedUntil, deadline: record.deadline });
+        return { status: 200, body: attemptStateOf(updated) };
+      }),
+    );
   }
 
   getAttempt(attemptId: string): AttemptState | null {
@@ -640,6 +810,9 @@ export class Supervisor {
       this.withLock(ref.attemptId, async () => {
         const record = this.journal.fenceLifecycle(ref);
         if (record.role !== "author") throw new SupervisorError("fenced", `Only author attempts can be frozen; ${ref.attemptId} is ${record.role}.`);
+        if (authorityEndsAt(record) <= new Date().toISOString()) {
+          throw new SupervisorError("fenced", `Attempt ${ref.attemptId} is past its execution authorization; it will be stopped, not collected.`);
+        }
         const profile = this.profile(record.profileId);
         const current = this.journal.getAttempt(record.attemptId);
         // Only a live author that this process has watched without interruption can be frozen. A
@@ -649,6 +822,9 @@ export class Supervisor {
           throw new SupervisorError("fenced", `Attempt ${record.attemptId} is ${current ? `${current.status}${current.revoked ? " (revoked)" : ""}` : "gone"}; only a live, unrevoked author attempt can be frozen.`);
         }
         const names = this.names(ref, "author");
+        // 0. admit the collector before anything changes: a full host refuses the freeze (429) with
+        //    the attempt still live, instead of revoking it and then failing to collect.
+        this.admit(names.collector, profile, false);
         // 1. revoke dispatch
         this.journal.revoke(record.attemptId, "revoked");
         this.closeDispatch(record.attemptId);
@@ -763,7 +939,7 @@ export class Supervisor {
     this.names(ref, "author");
     return this.withOperation(operation, "revoke", () =>
       this.withLock(ref.attemptId, async () => {
-        const record = this.journal.fenceLifecycle(ref);
+        const record = this.journal.fenceLifecycle(ref, { allowNewer: true });
         const current = this.journal.getAttempt(record.attemptId);
         if (!current || current.status === "destroyed") throw new SupervisorError("revoked", `Attempt ${record.attemptId} was destroyed.`);
         this.journal.revoke(record.attemptId, current.status === "stopped" ? "stopped" : "revoked");
@@ -786,7 +962,7 @@ export class Supervisor {
     this.names(ref, "author");
     return this.withOperation(operation, "destroy", () =>
       this.withLock(ref.attemptId, async () => {
-        const record = this.journal.fenceLifecycle(ref);
+        const record = this.journal.fenceLifecycle(ref, { allowNewer: true });
         const names = this.names(ref, record.role);
         this.journal.revoke(record.attemptId, record.status === "destroyed" ? "destroyed" : "revoked");
         this.closeDispatch(record.attemptId);
@@ -813,8 +989,8 @@ export class Supervisor {
   // Janitor
   // -------------------------------------------------------------------------------------------
 
-  async janitor(): Promise<{ expired: string[]; destroyed: string[]; removedUnknown: string[] }> {
-    const report = { expired: [] as string[], destroyed: [] as string[], removedUnknown: [] as string[] };
+  async janitor(): Promise<{ expired: string[]; destroyed: string[]; removedUnknown: string[]; released: string[] }> {
+    const report = { expired: [] as string[], destroyed: [] as string[], removedUnknown: [] as string[], released: [] as string[] };
     const nowMs = Date.now();
     const nowIso = new Date(nowMs).toISOString();
 
@@ -833,6 +1009,13 @@ export class Supervisor {
           report.expired.push(current.attemptId);
         }
       });
+    }
+
+    // Authority that lapsed without its timer (belt and braces): revoke and stop.
+    for (const record of this.journal.listAttempts()) {
+      if (record.status === "destroyed" || record.revoked || authorityEndsAt(record) >= nowIso) continue;
+      await this.expire(record.attemptId);
+      report.expired.push(record.attemptId);
     }
 
     for (const record of this.journal.expiredAttempts(nowIso)) {
@@ -893,6 +1076,11 @@ export class Supervisor {
         this.log.warn("janitor: remove volume failed", { volume: volume.name, error });
       }
       report.removedUnknown.push(volume.name);
+    }
+    // Host admission: a reservation whose container is confirmed gone is released (this is how a
+    // quarantined or failed removal eventually gives its share back).
+    for (const container of this.capacity.releasable()) {
+      if (await this.releaseIfGone(container)) report.released.push(container);
     }
     this.log.debug("janitor pass", { ...report, durationMs: Date.now() - nowMs });
     return report;

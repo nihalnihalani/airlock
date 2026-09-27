@@ -91,12 +91,19 @@ are reported in `rejected` so the controller can fail the freeze. Prints a `File
 ### `probe.sh`
 Isolation probe, checkpoint 4. Python stdlib only (`-I -S`), 2 s timeouts. Reports
 `metadataEndpoint` (`http://169.254.169.254/v1.json`), `dns` (`example.com`), `outboundTcp`
-(`1.1.1.1:443`), `dockerSocket` (`/var/run/docker.sock`, `/run/docker.sock`) and `hostMounts`
-(any mount point outside `/`, `/workspace`, `/candidate`, `/tmp`, `/proc`, `/sys`, `/dev` and the
-three Docker-managed files `/etc/hosts`, `/etc/hostname`, `/etc/resolv.conf`) as
+(`1.1.1.1:443`), `dockerSocket` (`/var/run/docker.sock`, `/run/docker.sock`) and `hostMounts` as
 `BLOCKED | REACHED | UNKNOWN`, plus `allBlocked` and a `details` object. Exit 0 only when all
-blocked. Under `--network none` in the built image every check is BLOCKED (see the integration test);
-a host bind mount is detected as REACHED.
+blocked. `hostMounts` exempts no subtree: every mount must be one of the expected ones by mount
+point *and* filesystem type — `/` (overlay, 9p or virtio-fs), exactly one workspace at `/workspace`
+or `/candidate` (a tmpfs no larger than `--workspace-bytes`, passed by the supervisor, or the
+virtio-fs/9p share of that tmpfs under Kata/gVisor), `/tmp` (noexec tmpfs ≤ 64 MiB), `/proc`,
+`/sys`, `/dev` with their standard pseudo-filesystem children (Docker's read-only tmpfs masks and
+`/dev/null` binds), and the three Docker-managed files `/etc/hosts`, `/etc/hostname`,
+`/etc/resolv.conf`. Anything else — a host bind anywhere, including under `/workspace`, `/tmp` or
+`/dev`, a disk-backed workspace, an unbounded tmpfs, stacked mounts — is REACHED. Under
+`--network none` in the built image with the supervisor's mounts every check is BLOCKED (see the
+integration test). `--mountinfo PATH --only-mounts` classify a saved mountinfo for tests; they
+skip the network checks, which then report UNKNOWN, so that mode can never pass.
 
 ## Profile adapter module
 

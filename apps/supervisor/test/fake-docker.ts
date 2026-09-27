@@ -65,9 +65,11 @@ export type ExecHandler = (container: string, spec: ExecSpec) => ScriptedExec;
 
 export const PROBE_OK = JSON.stringify({ metadataEndpoint: "BLOCKED", dns: "BLOCKED", outboundTcp: "BLOCKED", dockerSocket: "BLOCKED", hostMounts: "BLOCKED", allBlocked: true });
 
-export function defaultHandler(overrides: Partial<Record<"uname" | "hostname" | "probe" | "materialize" | "collector" | "adapter" | "author" | "head", ScriptedExec>> = {}): ExecHandler {
+export function defaultHandler(overrides: Partial<Record<"uname" | "hostname" | "probe" | "materialize" | "collector" | "adapter" | "author" | "head" | "ready" | "count", ScriptedExec>> = {}): ExecHandler {
   return (_container, spec) => {
     const cmd = spec.cmd.join(" ");
+    if (cmd.includes("sys.stdout.write('ready")) return overrides.ready ?? { stdout: "ready\n" };
+    if (cmd.includes("airlock-blast")) return overrides.count ?? { stdout: "16\n" };
     if (cmd.includes("/bin/uname")) return overrides.uname ?? { stdout: "Linux fake 6.1.0 #1 SMP x86_64 GNU/Linux\n" };
     if (cmd.includes("/bin/hostname")) return overrides.hostname ?? { stdout: "sandbox\n" };
     if (cmd.includes("probe.sh")) return overrides.probe ?? { stdout: `${PROBE_OK}\n` };
@@ -148,8 +150,12 @@ export class FakeDocker implements DockerApi {
     const c = this.containers.get(name);
     if (c) c.running = false;
   }
+  /** When set, `removeContainer` throws this for the named container and leaves it in place. */
+  removeError: ((name: string) => Error | undefined) | undefined;
   async removeContainer(name: string, force: boolean) {
-    this.record(`removeContainer ${name} force=${force}`);
+    const error = this.removeError?.(name);
+    this.record(`removeContainer ${name} force=${force}${error ? " (FAIL)" : ""}`);
+    if (error) throw error;
     this.containers.delete(name);
   }
   async inspectContainer(name: string): Promise<ContainerDetail | null> {

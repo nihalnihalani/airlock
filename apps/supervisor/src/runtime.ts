@@ -228,6 +228,20 @@ export interface InspectContext {
   configuredRuntime: RuntimeName;
   devUnsafe: boolean;
   defaultRuntime: string;
+  /** The pinned `sha256:` image ID (AIRLOCK_RUNTIME_IMAGE_ID). Absent only in dev-unsafe. */
+  runtimeImageId?: string | undefined;
+}
+
+/**
+ * The fixed readiness exec (M12): the runner's interpreter starts, isolated (-I -S), as the sandbox
+ * user, and prints `ready`. Bounded to 4 s inside the container and 5 s at the supervisor. Anything
+ * else (timeout, other output, a non-zero exit) fails the inspection closed before any dispatch.
+ */
+export const READINESS_ARGV = ["/usr/local/bin/python3", "-I", "-S", "-c", "import sys; sys.stdout.write('ready\\n')"];
+
+export async function runnerReady(api: DockerApi, container: string, workingDir: string): Promise<boolean> {
+  const outcome = await runExec(api, container, { cmd: timedCommand(READINESS_ARGV, 4), user: SANDBOX_USER, workingDir }, { timeoutMs: 5_000, outputBytes: 64 });
+  return outcome.result.status === "succeeded" && outcome.result.exitCode === 0 && outcome.result.stdout === "ready\n" && !outcome.controlLost;
 }
 
 /**
@@ -247,6 +261,13 @@ export async function inspectSandbox(
     throw new SupervisorError("inspection_failed", `Container ${expected.name} is not owned by this supervisor; refusing to dispatch.`);
   }
   const effective = checkEffective(detail, expected, context.namespace);
+  // D2: the container's effective image ID must be the pinned runtime image. A retagged tag (same
+  // name, other bytes) produces a different ID and fails closed here, on every inspection.
+  if (context.runtimeImageId !== undefined && detail.image !== context.runtimeImageId) {
+    effective.failures.push("imageId");
+    effective.identityMatches = false;
+    effective.allPassed = false;
+  }
   const image = await api.inspectImage(detail.image);
   const imageDigest = image ? (image.repoDigests[0] ?? image.id) : detail.image;
   const effectiveRuntime = typeof detail.hostConfig.Runtime === "string" ? detail.hostConfig.Runtime : "";
@@ -254,6 +275,10 @@ export async function inspectSandbox(
 
   let guestUname = options.previousGuest?.uname ?? "";
   let guestHostname = options.previousGuest?.hostname ?? "";
+  if (detail.state.running && effective.allPassed && !(await runnerReady(api, expected.name, expected.workingDir))) {
+    effective.failures.push("readiness");
+    effective.allPassed = false;
+  }
   if (detail.state.running && effective.allPassed) {
     const uname = await runExec(api, expected.name, { cmd: timedCommand(["/bin/uname", "-a"], 5), user: SANDBOX_USER, workingDir: expected.workingDir }, { timeoutMs: 10_000, outputBytes: 512 });
     const host = await runExec(api, expected.name, { cmd: timedCommand(["/bin/hostname"], 5), user: SANDBOX_USER, workingDir: expected.workingDir }, { timeoutMs: 10_000, outputBytes: 128 });

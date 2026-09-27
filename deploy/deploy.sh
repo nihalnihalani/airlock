@@ -9,8 +9,10 @@
 #      from $AIRLOCK_ENV_FILE (default <repo>/.env). Nothing is printed; nothing goes through Vultr user_data.
 #   2. rsync the tree to both VMs (/opt/airlock/app), excluding node_modules, data, .env*, dist, research/.
 #   3. VM B: deploy/host/sandbox-host.sh (docker, runsc, kata, bun, service user, nftables, unit), then
-#      `bun install --frozen-lockfile`, build airlock-runtime-python:tabulate-365 on the host, write
-#      /etc/airlock/supervisor.env (root, 0600), restart airlock-supervisor, wait for /health on the VPC address.
+#      `bun install --frozen-lockfile`, build airlock-runtime-python:tabulate-365 on the host and capture
+#      its image ID (AIRLOCK_RUNTIME_IMAGE_ID, enforced by the supervisor on every inspection), write
+#      /etc/airlock/supervisor.env (root, 0600; also AIRLOCK_INSTANCE_ID = the sandbox instance id from
+#      state.json), restart airlock-supervisor, wait for /health on the VPC address, log the /host check.
 #   4. VM A: deploy/host/control-host.sh (caddy, bun, service user, unit), `bun install --frozen-lockfile`,
 #      `bun run --cwd apps/web build`, write /etc/airlock/control.env (root, 0600), restart airlock-control,
 #      wait for /api/session on 127.0.0.1:3000 and then over https on the public name.
@@ -57,6 +59,7 @@ CONTROL_IP="$(jq -r .control.publicIp "$STATE")"
 CONTROL_VPC_IP="$(jq -r .control.vpcIp "$STATE")"
 SANDBOX_IP="$(jq -r .sandbox.publicIp "$STATE")"
 SANDBOX_VPC_IP="$(jq -r .sandbox.vpcIp "$STATE")"
+SANDBOX_INSTANCE_ID="$(jq -r '.sandbox.id // empty' "$STATE")"
 PUBLIC_HOST="$(jq -r .publicHost "$STATE")"
 SSH_KEY_FILE="$(jq -r .sshKeyFile "$STATE")"
 SSH=(ssh -i "$SSH_KEY_FILE" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=15)
@@ -121,6 +124,9 @@ if [[ -z "$ONLY" || "$ONLY" == "sandbox" ]]; then
   "${SSH[@]}" "root@$SANDBOX_IP" "cd /opt/airlock/app && sudo -u airlock-supervisor -H /usr/local/bin/bun install --frozen-lockfile"
   log "building the runtime image on VM B (runtime/python/build.sh tabulate-365)"
   "${SSH[@]}" "root@$SANDBOX_IP" "cd /opt/airlock/app && PATH=/usr/local/bin:\$PATH runtime/python/build.sh tabulate-365 && chown -R airlock-supervisor:airlock-supervisor /opt/airlock/app"
+  RUNTIME_IMAGE_ID="$("${SSH[@]}" "root@$SANDBOX_IP" "docker image inspect --format '{{.Id}}' airlock-runtime-python:tabulate-365")"
+  [[ "$RUNTIME_IMAGE_ID" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "deploy: could not read the runtime image ID on VM B (got '$RUNTIME_IMAGE_ID')" >&2; exit 1; }
+  log "runtime image ID: $RUNTIME_IMAGE_ID (AIRLOCK_RUNTIME_IMAGE_ID; a retag fails every inspection)"
   log "writing /etc/airlock/supervisor.env (root, 0600)"
   write_env "$SANDBOX_IP" /etc/airlock/supervisor.env <<EOF
 PORT=4300
@@ -131,6 +137,14 @@ AIRLOCK_DOCKER_RUNTIME_NAME=${AIRLOCK_DOCKER_RUNTIME_NAME:-}
 AIRLOCK_DATA_DIR=/var/lib/airlock/supervisor
 AIRLOCK_PROFILES_DIR=/opt/airlock/app/profiles
 AIRLOCK_NAMESPACE=airlock
+AIRLOCK_RUNTIME_IMAGE_ID=$RUNTIME_IMAGE_ID
+AIRLOCK_INSTANCE_ID=$SANDBOX_INSTANCE_ID
+AIRLOCK_HOST_MEMORY_BYTES=${AIRLOCK_HOST_MEMORY_BYTES:-}
+AIRLOCK_HOST_HEADROOM_BYTES=${AIRLOCK_HOST_HEADROOM_BYTES:-}
+AIRLOCK_HOST_PIDS=${AIRLOCK_HOST_PIDS:-}
+AIRLOCK_HOST_SCRATCH_BYTES=${AIRLOCK_HOST_SCRATCH_BYTES:-}
+AIRLOCK_MAX_SANDBOXES=${AIRLOCK_MAX_SANDBOXES:-}
+AIRLOCK_VM_OVERHEAD_BYTES=${AIRLOCK_VM_OVERHEAD_BYTES:-}
 EOF
   "${SSH[@]}" "root@$SANDBOX_IP" "systemctl daemon-reload && systemctl restart airlock-supervisor.service"
   log "waiting for the supervisor on http://$SANDBOX_VPC_IP:4300/health (VPC only)"
@@ -144,7 +158,11 @@ EOF
     "${SSH[@]}" "root@$SANDBOX_IP" "journalctl -u airlock-supervisor -n 40 --no-pager" >&2 || true
     exit 1
   fi
-  log "supervisor health: $(jq -c '{status, host: {selectedRuntime: .host.selectedRuntime, devUnsafe: .host.devUnsafe, kvmPresent: .host.kvmPresent, kvmReadWrite: .host.kvmReadWrite, availableRuntimes: .host.availableRuntimes}}' <<<"$HEALTH")"
+  log "supervisor health: $(jq -c . <<<"$HEALTH")"
+  # /health says only {ok:true}; the host check is on the authenticated /host. The bearer header is
+  # passed on stdin (curl -H @-) so the token never appears in a process list on VM B.
+  HOSTCHECK="$("${SSH[@]}" "root@$SANDBOX_IP" "curl -fsS -m 5 -H @- http://$SANDBOX_VPC_IP:4300/host" <<<"Authorization: Bearer $SUPERVISOR_TOKEN")"
+  log "supervisor host check: $(jq -c '{selectedRuntime, devUnsafe, kvmPresent, kvmReadWrite, availableRuntimes, runtimeImageId, instanceId, hostUname}' <<<"$HOSTCHECK")"
 fi
 
 # --- 4. VM A: control plane ------------------------------------------------------------------------------------------------

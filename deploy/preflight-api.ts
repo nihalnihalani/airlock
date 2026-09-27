@@ -47,14 +47,18 @@ async function call(method: string, path: string, body?: Record<string, unknown>
   return { status: res.status, json, text };
 }
 
-const health = await (await fetch(`${BASE}/health`)).json();
-console.log("== supervisor /health");
-console.log(JSON.stringify({ status: health.status, docker: health.docker, host: health.host }, null, 2));
-check(health.status === "ok", `status ok (${health.status})`);
-check(health.host?.devUnsafe === false, `host.devUnsafe=false (${health.host?.devUnsafe})`);
-check(health.host?.kvmPresent === true, `host.kvmPresent=true (${health.host?.kvmPresent})`);
-check(typeof health.host?.selectedRuntime === "string" && health.host.selectedRuntime !== "runc", `host.selectedRuntime=${health.host?.selectedRuntime} (not runc)`);
-const expected = health.host?.selectedRuntime as string;
+const live = await (await fetch(`${BASE}/health`)).json();
+console.log("== supervisor /health (public liveness) and /host (authenticated host check)");
+check(live?.ok === true && Object.keys(live).length === 1, `public /health is liveness only (${JSON.stringify(live)})`);
+const hostRes = await call("GET", "/host");
+const host = hostRes.json;
+console.log(JSON.stringify(host, null, 2));
+check(hostRes.status === 200, `GET /host → ${hostRes.status}`);
+check(host?.devUnsafe === false, `host.devUnsafe=false (${host?.devUnsafe})`);
+check(host?.kvmPresent === true, `host.kvmPresent=true (${host?.kvmPresent})`);
+check(typeof host?.selectedRuntime === "string" && host.selectedRuntime !== "runc", `host.selectedRuntime=${host?.selectedRuntime} (not runc)`);
+check(typeof host?.runtimeImageId === "string" && host.runtimeImageId.startsWith("sha256:"), `runtime image pinned (${host?.runtimeImageId})`);
+const expected = host?.selectedRuntime as string;
 
 console.log("== author sandbox: create → inspect → probe → uname → destroy");
 const ref = { taskId: `preflight-${Date.now().toString(36)}`, attemptId: "a1", generation: 0 };

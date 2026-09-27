@@ -4,6 +4,8 @@
  * Nothing here is caller-selectable at runtime: the image, runtime, caps and profiles come from
  * this configuration plus the profile directory. Requests only name attempts and operations.
  */
+import { isIPv4, isIPv6 } from "node:net";
+import { totalmem } from "node:os";
 import { resolve } from "node:path";
 import { RuntimeName } from "@airlock/contracts";
 import { resolveNamespace } from "./names";
@@ -24,6 +26,27 @@ export interface SupervisorConfig {
   /** How long a stopped attempt's volume is retained past its deadline before the janitor destroys it. */
   retentionMs: number;
   janitorIntervalMs: number;
+  /** AIRLOCK_PRODUCTION=1 (set by deploy/host/sandbox-host.sh): refuse every dev-only configuration. */
+  production: boolean;
+  /**
+   * The `sha256:` image ID the runtime image must have (AIRLOCK_RUNTIME_IMAGE_ID, captured by deploy
+   * after the build). Every inspection compares the container's effective image ID to it; a retag
+   * fails closed. Required unless dev-unsafe.
+   */
+  runtimeImageId: string | undefined;
+  /** The Vultr instance id of this execution host (AIRLOCK_INSTANCE_ID), echoed in HostCheck. */
+  instanceId: string | undefined;
+  /** Host admission budget (see capacity.ts). */
+  capacity: CapacityBudget;
+}
+
+export interface CapacityBudget {
+  memoryBytes: number;
+  pids: number;
+  scratchBytes: number;
+  maxSandboxes: number;
+  /** Charged per sandbox on top of caps.memoryBytes: the guest VM's own footprint under Kata. */
+  vmOverheadBytes: number;
 }
 
 export type ConfigResult = { ok: true; config: SupervisorConfig } | { ok: false; reason: string };
@@ -61,11 +84,28 @@ export function loadConfig(env: Record<string, string | undefined>, repoRoot: st
   if (port === undefined) return { ok: false, reason: "PORT must be an integer between 1 and 65535." };
   const bind = env.SUPERVISOR_BIND?.trim() || "127.0.0.1";
   if (!/^[A-Za-z0-9.:\-\[\]]{1,128}$/.test(bind)) return { ok: false, reason: "SUPERVISOR_BIND is not a bind address." };
+  const bindClass = classifyBind(bind);
+  if (bindClass === "invalid" || bindClass === "public") {
+    return {
+      ok: false,
+      reason: `SUPERVISOR_BIND=${bind} is ${bindClass === "invalid" ? "not an IP address (or localhost)" : "a wildcard or public address"}. The supervisor holds the Docker socket and listens only on loopback or a private address (RFC 1918, 100.64.0.0/10, fc00::/7, fe80::/10).`,
+    };
+  }
+  const production = env.AIRLOCK_PRODUCTION?.trim() === "1";
 
   const runtimeRaw = env.AIRLOCK_RUNTIME?.trim() || "kata";
   const runtime = RuntimeName.safeParse(runtimeRaw);
   if (!runtime.success) return { ok: false, reason: "AIRLOCK_RUNTIME must be one of kata, runsc, runc." };
   const devUnsafe = env.AIRLOCK_DEV_UNSAFE?.trim() === "1";
+  if (production && (devUnsafe || runtime.data === "runc")) {
+    return {
+      ok: false,
+      reason: `AIRLOCK_PRODUCTION=1 refuses ${devUnsafe ? "AIRLOCK_DEV_UNSAFE=1" : "AIRLOCK_RUNTIME=runc"}: a deployment runs kata (target) or runsc (floor), never the dev-unsafe runc path.`,
+    };
+  }
+  if (devUnsafe && bindClass !== "loopback") {
+    return { ok: false, reason: `AIRLOCK_DEV_UNSAFE=1 is allowed only with a loopback SUPERVISOR_BIND (got ${bind}); dev-unsafe is a local-development mode.` };
+  }
   if (runtime.data === "runc" && !devUnsafe) {
     return {
       ok: false,
@@ -102,6 +142,38 @@ export function loadConfig(env: Record<string, string | undefined>, repoRoot: st
   const janitor = parseMs(env.AIRLOCK_JANITOR_INTERVAL_MS, 30_000);
   if (janitor === undefined) return { ok: false, reason: "AIRLOCK_JANITOR_INTERVAL_MS must be a positive integer." };
 
+  const runtimeImageId = env.AIRLOCK_RUNTIME_IMAGE_ID?.trim() || undefined;
+  if (runtimeImageId !== undefined && !/^sha256:[a-f0-9]{64}$/.test(runtimeImageId)) {
+    return { ok: false, reason: "AIRLOCK_RUNTIME_IMAGE_ID must be a `sha256:<64 hex>` image ID (docker image inspect --format '{{.Id}}')." };
+  }
+  const effectiveDevUnsafe = runtime.data === "runc" && devUnsafe;
+  if (runtimeImageId === undefined && (production || !effectiveDevUnsafe)) {
+    return {
+      ok: false,
+      reason: "AIRLOCK_RUNTIME_IMAGE_ID is not set. Outside dev-unsafe the supervisor enforces the built runtime image's ID on every inspection; deploy captures it after runtime/python/build.sh.",
+    };
+  }
+  const instanceId = env.AIRLOCK_INSTANCE_ID?.trim() || undefined;
+  if (instanceId !== undefined && !/^[A-Za-z0-9][A-Za-z0-9-]{0,127}$/.test(instanceId)) {
+    return { ok: false, reason: "AIRLOCK_INSTANCE_ID must be letters, digits and hyphens (a Vultr instance id)." };
+  }
+
+  const headroom = parseBytes(env.AIRLOCK_HOST_HEADROOM_BYTES, 1024 * 1024 * 1024);
+  if (headroom === undefined) return { ok: false, reason: "AIRLOCK_HOST_HEADROOM_BYTES must be a positive integer." };
+  const memoryBudget = parseBytes(env.AIRLOCK_HOST_MEMORY_BYTES, totalmem() - headroom);
+  if (memoryBudget === undefined || memoryBudget <= 0) {
+    return { ok: false, reason: "AIRLOCK_HOST_MEMORY_BYTES must be a positive integer (the default, total memory minus AIRLOCK_HOST_HEADROOM_BYTES, is not positive on this host)." };
+  }
+  const pidsBudget = parseBytes(env.AIRLOCK_HOST_PIDS, 4096);
+  if (pidsBudget === undefined) return { ok: false, reason: "AIRLOCK_HOST_PIDS must be a positive integer." };
+  const scratchBudget = parseBytes(env.AIRLOCK_HOST_SCRATCH_BYTES, 4 * 1024 * 1024 * 1024);
+  if (scratchBudget === undefined) return { ok: false, reason: "AIRLOCK_HOST_SCRATCH_BYTES must be a positive integer." };
+  const maxSandboxes = parseBytes(env.AIRLOCK_MAX_SANDBOXES, 8);
+  if (maxSandboxes === undefined) return { ok: false, reason: "AIRLOCK_MAX_SANDBOXES must be a positive integer." };
+  // Kata runs each sandbox in its own guest VM, whose kernel and agent are not inside caps.memoryBytes.
+  const vmOverhead = parseBytes(env.AIRLOCK_VM_OVERHEAD_BYTES, runtime.data === "kata" ? 160 * 1024 * 1024 : 0, true);
+  if (vmOverhead === undefined) return { ok: false, reason: "AIRLOCK_VM_OVERHEAD_BYTES must be a non-negative integer." };
+
   return {
     ok: true,
     config: {
@@ -110,7 +182,7 @@ export function loadConfig(env: Record<string, string | undefined>, repoRoot: st
       bind,
       runtime: runtime.data,
       dockerRuntime: dockerRuntimeOverride || DOCKER_RUNTIME_NAME[runtime.data],
-      devUnsafe: runtime.data === "runc" && devUnsafe,
+      devUnsafe: effectiveDevUnsafe,
       profilesDir,
       dataDir,
       journalPath,
@@ -118,8 +190,63 @@ export function loadConfig(env: Record<string, string | undefined>, repoRoot: st
       namespace,
       retentionMs: retention,
       janitorIntervalMs: janitor,
+      production,
+      runtimeImageId,
+      instanceId,
+      capacity: { memoryBytes: memoryBudget, pids: pidsBudget, scratchBytes: scratchBudget, maxSandboxes, vmOverheadBytes: vmOverhead },
     },
   };
+}
+
+export type BindClass = "loopback" | "private" | "public" | "invalid";
+
+/**
+ * Where a listen address sits. Wildcards (0.0.0.0, ::) count as public: they listen on every
+ * interface, including the public one. Only literal addresses (and `localhost`) are accepted, so a
+ * hostname can never resolve somewhere unexpected.
+ */
+export function classifyBind(raw: string): BindClass {
+  const bind = raw.startsWith("[") && raw.endsWith("]") ? raw.slice(1, -1) : raw;
+  if (bind === "localhost") return "loopback";
+  if (isIPv4(bind)) return classifyIPv4(bind);
+  if (isIPv6(bind)) {
+    const lower = bind.toLowerCase();
+    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(lower);
+    if (mapped?.[1]) return classifyIPv4(mapped[1]);
+    const groups = expandIPv6(lower);
+    if (!groups) return "invalid";
+    if (groups.every((g) => g === 0)) return "public"; // ::
+    if (groups.slice(0, 7).every((g) => g === 0) && groups[7] === 1) return "loopback"; // ::1
+    const first = groups[0] ?? 0;
+    if ((first & 0xfe00) === 0xfc00) return "private"; // fc00::/7
+    if ((first & 0xffc0) === 0xfe80) return "private"; // fe80::/10
+    return "public";
+  }
+  return "invalid";
+}
+
+function classifyIPv4(ip: string): BindClass {
+  const [a = -1, b = -1] = ip.split(".").map((part) => Number.parseInt(part, 10));
+  if (a === 127) return "loopback";
+  if (a === 10) return "private";
+  if (a === 172 && b >= 16 && b <= 31) return "private";
+  if (a === 192 && b === 168) return "private";
+  if (a === 100 && b >= 64 && b <= 127) return "private"; // 100.64.0.0/10 (CGNAT, NetBird/Tailscale)
+  return "public"; // including 0.0.0.0
+}
+
+function expandIPv6(ip: string): number[] | undefined {
+  const withoutZone = ip.split("%")[0] ?? "";
+  const halves = withoutZone.split("::");
+  if (halves.length > 2) return undefined;
+  const parse = (part: string) => (part === "" ? [] : part.split(":").map((g) => Number.parseInt(g, 16)));
+  const head = parse(halves[0] ?? "");
+  const tail = halves.length === 2 ? parse(halves[1] ?? "") : [];
+  const missing = 8 - head.length - tail.length;
+  if (halves.length === 1 && missing !== 0) return undefined;
+  if (missing < 0) return undefined;
+  const groups = [...head, ...new Array<number>(halves.length === 2 ? missing : 0).fill(0), ...tail];
+  return groups.length === 8 && groups.every((g) => Number.isInteger(g) && g >= 0 && g <= 0xffff) ? groups : undefined;
 }
 
 /** DOCKER_SOCKET wins; otherwise a unix:// DOCKER_HOST (Colima, rootless Docker); otherwise dockerode's default. */
@@ -129,6 +256,13 @@ export function resolveDockerSocket(env: Record<string, string | undefined>): st
   const host = env.DOCKER_HOST?.trim();
   if (host?.startsWith("unix://")) return host.slice("unix://".length);
   return undefined;
+}
+
+function parseBytes(raw: string | undefined, fallback: number, allowZero = false): number | undefined {
+  if (raw === undefined || raw.trim() === "") return Number.isFinite(fallback) ? Math.floor(fallback) : undefined;
+  if (!/^\d{1,16}$/.test(raw.trim())) return undefined;
+  const value = Number.parseInt(raw.trim(), 10);
+  return value > 0 || (allowZero && value === 0) ? value : undefined;
 }
 
 function parseMs(raw: string | undefined, fallback: number): number | undefined {

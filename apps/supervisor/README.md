@@ -18,7 +18,10 @@ SUPERVISOR_TOKEN=<secret> AIRLOCK_RUNTIME=kata bun src/index.ts
 
 The process refuses to start when: the token is missing or shorter than 16 characters; Docker is
 unreachable; the configured runtime is not listed by `docker info`; `AIRLOCK_RUNTIME=runc` without
-`AIRLOCK_DEV_UNSAFE=1`; a profile under `AIRLOCK_PROFILES_DIR` fails validation.
+`AIRLOCK_DEV_UNSAFE=1`; a profile under `AIRLOCK_PROFILES_DIR` fails validation; `SUPERVISOR_BIND`
+is a wildcard, public or non-literal address; dev-unsafe on a non-loopback bind;
+`AIRLOCK_RUNTIME_IMAGE_ID` unset outside dev-unsafe, or a profile image whose ID differs from it;
+`AIRLOCK_PRODUCTION=1` together with dev-unsafe or runc.
 
 ### Environment
 
@@ -26,7 +29,16 @@ unreachable; the configured runtime is not listed by `docker info`; `AIRLOCK_RUN
 |---|---|---|
 | `SUPERVISOR_TOKEN` | required | Bearer token for every route except `GET /health`. At least 16 characters. |
 | `PORT` | `4300` | Listen port. |
-| `SUPERVISOR_BIND` | `127.0.0.1` | Bind address. A deployment sets the **VPC** address of VM B; never a public interface. |
+| `SUPERVISOR_BIND` | `127.0.0.1` | Bind address. A deployment sets the **VPC** address of VM B. Must be a literal loopback or private address (RFC 1918, 100.64.0.0/10, fc00::/7, fe80::/10) or `localhost`; `0.0.0.0`, `::` and public addresses are refused at start. |
+| `AIRLOCK_PRODUCTION` | unset | `1` on a deployment (set in the systemd unit by `deploy/host/sandbox-host.sh`): refuses to start with dev-unsafe, runc, or without `AIRLOCK_RUNTIME_IMAGE_ID`. |
+| `AIRLOCK_RUNTIME_IMAGE_ID` | required unless dev-unsafe | `sha256:` image ID of the built runtime image (`docker image inspect --format '{{.Id}}'`; captured by `deploy/deploy.sh` after the build). Every inspection compares each container's effective image ID to it and fails closed on a mismatch (a retag fails). Dev-unsafe without it records the observed ID in `HostCheck.runtimeImageId`. |
+| `AIRLOCK_INSTANCE_ID` | unset | Vultr instance id of this host (deploy: `state.json` `.sandbox.id`); echoed as `HostCheck.instanceId`. |
+| `AIRLOCK_HOST_MEMORY_BYTES` | total memory − headroom | Host admission memory budget. |
+| `AIRLOCK_HOST_HEADROOM_BYTES` | `1073741824` | Memory kept back for the host when the budget is defaulted. |
+| `AIRLOCK_HOST_PIDS` | `4096` | PID budget (sum of `caps.pidsLimit`). |
+| `AIRLOCK_HOST_SCRATCH_BYTES` | `4294967296` | Scratch budget (64 MiB `/tmp` per sandbox + the workspace tmpfs of each sandbox that creates one). |
+| `AIRLOCK_MAX_SANDBOXES` | `8` | Concurrent sandboxes (author, hostile, invoke roles and collectors). |
+| `AIRLOCK_VM_OVERHEAD_BYTES` | `167772160` under kata, else `0` | Per-sandbox memory charged on top of `caps.memoryBytes` (the guest VM). |
 | `AIRLOCK_RUNTIME` | `kata` | `kata` \| `runsc` \| `runc`. Which OCI runtime every sandbox is created with, and what is checked on inspection. |
 | `AIRLOCK_DEV_UNSAFE` | unset | Must be `1` to allow `runc`. Then every inspection and attempt record carries `devUnsafe: true`. |
 | `AIRLOCK_DOCKER_RUNTIME_NAME` | `kata`/`runsc`/`runc` | Override for the name Docker lists the runtime under (e.g. `io.containerd.kata.v2`). Refused at start when the name belongs to a different tier than `AIRLOCK_RUNTIME` (a name matching `runc`/`crun`/`youki` is runc, `kata` is kata, `runsc`/`gvisor` is runsc). Inspection classifies the effective name the same way before it trusts the configured tier, so a container that actually runs on runc is always recorded `runc` + `devUnsafe`. |
@@ -80,21 +92,26 @@ socket, host mounts); anything not `BLOCKED` destroys the sandbox and refuses th
 ## API
 
 JSON bodies are exactly the `@airlock/contracts` types. `Authorization: Bearer <SUPERVISOR_TOKEN>` on
-everything except `GET /health`. Body limit 16 MiB.
+everything except `GET /health`. Body limit 16 MiB. A sandbox that does not fit the host budget is
+refused with **429** `{code: "capacity"}` before any Docker call; the refusal is not journaled as a
+receipt, so the same operation id may be retried.
 
 | Route | Body → Response |
 |---|---|
-| `GET /health` | `{status: "ok"\|"degraded", docker, host: HostCheck}` (no auth) |
-| `GET /host` | `HostCheck` |
-| `POST /attempts` | `CreateAttemptRequest → AttemptState` (roles `author`, `hostile`). Creates volume + container, materializes the pristine tree, inspects, probes. |
+| `GET /health` | `{ok: true}` (no auth; liveness only, no host inventory) |
+| `GET /host` | `HostCheck` (incl. `hostUname`, `hostHostname`, `instanceId`, `runtimeImageId`) |
+| `GET /capacity` | `{budget, used: {memoryBytes, pids, scratchBytes, sandboxes}, sandboxes: Reservation[]}` |
+| `GET /listing` | `HostListing`: every container and volume on this Docker host carrying `airlock.supervisor=true` (any namespace), with task/role/state |
+| `POST /attempts` | `CreateAttemptRequest → AttemptState` (roles `author`, `hostile`). Admits against the host budget, creates volume + container, inspects (effective config, pinned image ID, fixed readiness exec), materializes the pristine tree, probes. `authorizedUntil` (optional, clamped to the deadline) starts the renewable authorization. Refused 409 while another attempt of the same task is live (revoke or destroy it first; a higher generation may do so) and `stale_generation` for a generation older than one recorded for the task. |
 | `GET /attempts` | `AttemptState[]` (journaled attempts this supervisor owns) |
 | `GET /attempts/:attemptId` | `AttemptState` |
 | `POST /attempts/:attemptId/tool` | `AuthorToolRequest → AuthorToolResult`. `read` limited to `readablePaths`, `write` to `allowedReplacementPaths` (delivered by tar upload), `exec` runs `timeout --signal=TERM --kill-after=2s <commandTimeout>s bash --noprofile --norc -c <command>` as 1000:1000 in `/workspace/src`. |
+| `POST /attempts/:attemptId/renew` | `RenewRequest → AttemptState`: moves `authorizedUntil` (clamped to the deadline). 409 for an unknown-to-the-task, revoked, stopped, unknown, destroyed or tombstoned attempt, for any generation but the recorded one, and once the authorization has lapsed (never revives); 404 unknown attempt. When `authorizedUntil` passes without a renewal, dispatch is revoked and the whole container stopped, exactly like the deadline (one timer at the earlier of the two). |
 | `POST /attempts/:attemptId/freeze` | `FreezeRequest → FreezeResult`: revoke → collector container created with the volume read-only at `/candidate` (holds the tmpfs-backed workspace; it has run nothing) → stop author (t=2) → settle outstanding execs → re-inspect stopped → collector runs → `FileEnvelope`. An attempt whose container was already stopped (quarantine, deadline) has no workspace left to collect: the collector reports the files missing and the freeze fails closed. |
-| `POST /attempts/:attemptId/revoke` | `RevokeRequest → AttemptState` (dispatch closed, container stopped and confirmed) |
+| `POST /attempts/:attemptId/revoke` | `RevokeRequest → AttemptState` (dispatch closed, container stopped and confirmed). A higher generation than recorded is accepted here and in destroy (the takeover path) and fences the previous owner; tool calls and freeze require the recorded generation exactly. |
 | `POST /attempts/:attemptId/destroy` | `DestroyRequest → DestroyResult` (container + volume removed; `teardown` lists what remains) |
 | `POST /invoke` | `InvokeRequest → InvokeResult`: fresh one-shot container; bundle digests verified **before** anything is created; replacements + `request.json` uploaded as tar; materialize, then adapter; stdout parsed line by line with `Observation`; always destroyed. |
-| `POST /hostile` | `HostileRunRequest → BlastRadiusCard`: author-profile sandbox, the command under author caps, then measured survival (supervisor health, host sentinel hash, other attempts running, host uptime) and teardown. |
+| `POST /hostile` | `HostileRunRequest → BlastRadiusCard`: author-profile sandbox, the command under author caps, then measured survival (supervisor health, host sentinel hash, other attempts running, each other live attempt inspected before/after as `survived.siblings`, host uptime), `workspace: {filesBefore, filesAfter}` (16 scratch files written into the sandbox's own workspace before the command, counted after; `null` when the sandbox cannot answer) and teardown. Every `TeardownRecord` (destroy, invoke, hostile) carries `host`: the host-wide listing taken right after. |
 
 ### Errors
 

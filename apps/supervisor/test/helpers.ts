@@ -57,6 +57,10 @@ export function testConfig(dir: string): SupervisorConfig {
     namespace: "airlocktest",
     retentionMs: 60_000,
     janitorIntervalMs: 60_000,
+    production: false,
+    runtimeImageId: undefined,
+    instanceId: undefined,
+    capacity: { memoryBytes: 64 * 1024 ** 3, pids: 4096, scratchBytes: 64 * 1024 ** 3, maxSandboxes: 64, vmOverheadBytes: 0 },
   };
 }
 
@@ -77,13 +81,13 @@ export function fakeHost(): HostReport {
   };
 }
 
-export function makeCore(api: FakeDocker, journal?: Journal, seams: { settleMs?: number; writeTimeoutMs?: number; dir?: string } = {}): { core: Supervisor; journal: Journal; dir: string } {
+export function makeCore(api: FakeDocker, journal?: Journal, seams: { settleMs?: number; writeTimeoutMs?: number; dir?: string; config?: Partial<SupervisorConfig> } = {}): { core: Supervisor; journal: Journal; dir: string } {
   const dir = seams.dir ?? tempDir();
   const j = journal ?? new Journal(join(dir, "journal.sqlite"));
   const core = new Supervisor({
     api,
     journal: j,
-    config: testConfig(dir),
+    config: { ...testConfig(dir), ...seams.config },
     profiles: new Map([[PROFILE.id, PROFILE]]),
     host: fakeHost(),
     log: () => {},

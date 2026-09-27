@@ -8,8 +8,10 @@
  *    recorded result; same id + different digest is a conflict; same id while still pending is
  *    "in progress" and is reconciled, never rerun.
  *  - Generation fencing: a request whose generation is lower than the recorded one, or whose
- *    attempt is revoked, destroyed or tombstoned, is fenced (409). Fences are re-checked immediately
- *    before every start/exec, not only at request acceptance.
+ *    attempt is revoked, destroyed, tombstoned or past its execution authorization, is fenced (409).
+ *    A higher generation never silently takes over a live attempt: it may revoke or destroy it, not
+ *    dispatch into it. Fences are re-checked immediately before every start/exec, not only at
+ *    request acceptance.
  *  - A crash between intent and acknowledgement leaves a pending operation; on startup those become
  *    `interrupted` (409 on replay), never an invented receipt.
  */
@@ -31,6 +33,8 @@ export interface AttemptRecord {
   volume: string;
   status: AttemptStatus;
   deadline: string;
+  /** Renewable execution authorization, never past `deadline` (rows from before M1 carry the deadline). */
+  authorizedUntil: string;
   revoked: boolean;
   devUnsafe: boolean;
   inspection?: RuntimeInspection;
@@ -65,6 +69,7 @@ interface AttemptRow {
   volume: string;
   status: string;
   deadline: string;
+  authorized_until: string | null;
   revoked: number;
   dev_unsafe: number;
   inspection_json: string | null;
@@ -103,6 +108,7 @@ CREATE TABLE IF NOT EXISTS attempts (
   volume TEXT NOT NULL,
   status TEXT NOT NULL,
   deadline TEXT NOT NULL,
+  authorized_until TEXT,
   revoked INTEGER NOT NULL DEFAULT 0,
   dev_unsafe INTEGER NOT NULL DEFAULT 0,
   inspection_json TEXT,
@@ -149,6 +155,7 @@ function rowToAttempt(row: AttemptRow): AttemptRecord {
     volume: row.volume,
     status: row.status as AttemptStatus,
     deadline: row.deadline,
+    authorizedUntil: row.authorized_until ?? row.deadline,
     revoked: row.revoked === 1,
     devUnsafe: row.dev_unsafe === 1,
     createdAt: row.created_at,
@@ -168,7 +175,13 @@ export function attemptStateOf(record: AttemptRecord): AttemptState {
     ...(record.inspection ? { inspection: record.inspection } : {}),
     ...(record.probe ? { probe: record.probe } : {}),
     deadline: record.deadline,
+    authorizedUntil: record.authorizedUntil,
   };
+}
+
+/** When dispatch authority ends: the earlier of the renewable authorization and the absolute deadline. */
+export function authorityEndsAt(record: Pick<AttemptRecord, "deadline" | "authorizedUntil">): string {
+  return record.authorizedUntil < record.deadline ? record.authorizedUntil : record.deadline;
 }
 
 export class Journal {
@@ -179,6 +192,14 @@ export class Journal {
     this.db = new Database(path, { create: true, strict: true });
     this.db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA busy_timeout = 5000;");
     this.db.exec(SCHEMA);
+    this.migrate();
+  }
+
+  /** Additive migrations for journals written by an older supervisor. Old rows keep authority until their deadline. */
+  private migrate(): void {
+    const columns = this.db.query<{ name: string }, []>("PRAGMA table_info(attempts)").all().map((c) => c.name);
+    if (!columns.includes("authorized_until")) this.db.exec("ALTER TABLE attempts ADD COLUMN authorized_until TEXT");
+    this.db.exec("UPDATE attempts SET authorized_until = deadline WHERE authorized_until IS NULL");
   }
 
   close(): void {
@@ -218,6 +239,14 @@ export class Journal {
       .run(httpStatus, JSON.stringify(result), new Date().toISOString(), operationId);
   }
 
+  /**
+   * Forget an operation that was refused before any effect (host admission, 429), so the caller can
+   * retry the same id once capacity frees. Only ever called for refusals raised before a Docker call.
+   */
+  abandonOperation(operationId: string): void {
+    this.db.query("DELETE FROM operations WHERE operation_id = ? AND status = 'pending'").run(operationId);
+  }
+
   /** Startup: every operation still pending was cut off by a crash. It is interrupted, not rerun. */
   interruptPendingOperations(): number {
     const result = this.db
@@ -240,8 +269,8 @@ export class Journal {
     if (existing) throw new SupervisorError("operation_conflict", `Attempt ${record.attemptId} already exists.`);
     this.db
       .query(
-        `INSERT INTO attempts (attempt_id, task_id, generation, role, profile_id, container, volume, status, deadline, revoked, dev_unsafe, inspection_json, probe_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO attempts (attempt_id, task_id, generation, role, profile_id, container, volume, status, deadline, authorized_until, revoked, dev_unsafe, inspection_json, probe_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         record.attemptId,
@@ -253,6 +282,7 @@ export class Journal {
         record.volume,
         record.status,
         record.deadline,
+        record.authorizedUntil,
         record.revoked ? 1 : 0,
         record.devUnsafe ? 1 : 0,
         record.inspection ? JSON.stringify(record.inspection) : null,
@@ -271,9 +301,13 @@ export class Journal {
     return this.db.query<AttemptRow, []>("SELECT * FROM attempts ORDER BY created_at").all().map(rowToAttempt);
   }
 
+  listTaskAttempts(taskId: string): AttemptRecord[] {
+    return this.db.query<AttemptRow, [string]>("SELECT * FROM attempts WHERE task_id = ? ORDER BY created_at").all(taskId).map(rowToAttempt);
+  }
+
   updateAttempt(
     attemptId: string,
-    patch: Partial<Pick<AttemptRecord, "status" | "revoked" | "generation" | "inspection" | "probe">>,
+    patch: Partial<Pick<AttemptRecord, "status" | "revoked" | "generation" | "inspection" | "probe" | "authorizedUntil">>,
   ): void {
     const sets: string[] = [];
     const values: (string | number | null)[] = [];
@@ -293,6 +327,10 @@ export class Journal {
       sets.push("inspection_json = ?");
       values.push(JSON.stringify(patch.inspection));
     }
+    if (patch.authorizedUntil !== undefined) {
+      sets.push("authorized_until = ?");
+      values.push(patch.authorizedUntil);
+    }
     if (patch.probe !== undefined) {
       sets.push("probe_json = ?");
       values.push(JSON.stringify(patch.probe));
@@ -305,10 +343,36 @@ export class Journal {
   }
 
   /**
-   * The fence. Throws a SupervisorError (404/409) unless the ref may still act on the attempt.
-   * A higher generation than recorded is accepted and recorded, which fences the older one.
+   * The dispatch fence. Throws a SupervisorError (404/409) unless the ref may still dispatch into
+   * the attempt: same task, exactly the recorded generation, not revoked, destroyed or tombstoned,
+   * and inside its execution authorization. A lower generation is stale; a higher one is refused
+   * too (it must revoke the attempt first; see `fenceLifecycle`), so nothing silently takes over a
+   * live attempt.
    */
-  fence(ref: AttemptRef): AttemptRecord {
+  fence(ref: AttemptRef, nowIso: string = new Date().toISOString()): AttemptRecord {
+    const record = this.fenceIdentity(ref, false);
+    if (record.revoked) throw new SupervisorError("revoked", `Attempt ${ref.attemptId} is revoked; dispatch is closed.`);
+    if (authorityEndsAt(record) <= nowIso) {
+      throw new SupervisorError("revoked", `Attempt ${ref.attemptId} is past its execution authorization (${authorityEndsAt(record)}); dispatch is closed.`);
+    }
+    return record;
+  }
+
+  /**
+   * Like fence, but a revoked or lapsed attempt is still returned (freeze/revoke/destroy act on
+   * them). `allowNewer`: a higher generation may revoke or destroy an older attempt of its task; the
+   * higher generation is recorded so the previous owner's later calls are stale.
+   */
+  fenceLifecycle(ref: AttemptRef, options: { allowNewer: boolean } = { allowNewer: false }): AttemptRecord {
+    const record = this.fenceIdentity(ref, options.allowNewer);
+    if (options.allowNewer && ref.generation > record.generation) {
+      this.updateAttempt(ref.attemptId, { generation: ref.generation });
+      record.generation = ref.generation;
+    }
+    return record;
+  }
+
+  private fenceIdentity(ref: AttemptRef, allowNewer: boolean): AttemptRecord {
     const record = this.getAttempt(ref.attemptId);
     if (!record) {
       if (this.isTombstoned(ref.attemptId)) throw new SupervisorError("revoked", `Attempt ${ref.attemptId} was destroyed.`);
@@ -319,25 +383,10 @@ export class Journal {
     if (ref.generation < record.generation) {
       throw new SupervisorError("stale_generation", `Generation ${ref.generation} is older than the recorded ${record.generation}; a newer attempt owns this task.`);
     }
-    if (ref.generation > record.generation) {
-      this.updateAttempt(ref.attemptId, { generation: ref.generation });
-      record.generation = ref.generation;
+    if (ref.generation > record.generation && !allowNewer) {
+      throw new SupervisorError("fenced", `Generation ${ref.generation} is newer than the recorded ${record.generation}; a newer owner must revoke attempt ${ref.attemptId} before starting its own, never dispatch into it.`);
     }
-    if (record.revoked) throw new SupervisorError("revoked", `Attempt ${ref.attemptId} is revoked; dispatch is closed.`);
     return record;
-  }
-
-  /** Like fence, but a revoked attempt is still returned (freeze/destroy act on revoked attempts). */
-  fenceLifecycle(ref: AttemptRef): AttemptRecord {
-    try {
-      return this.fence(ref);
-    } catch (error) {
-      if (error instanceof SupervisorError && error.code === "revoked") {
-        const record = this.getAttempt(ref.attemptId);
-        if (record && record.status !== "destroyed" && record.taskId === ref.taskId) return record;
-      }
-      throw error;
-    }
   }
 
   revoke(attemptId: string, status: AttemptStatus): void {
@@ -354,7 +403,7 @@ export class Journal {
     return this.db.query<{ attempt_id: string }, [string]>("SELECT attempt_id FROM tombstones WHERE attempt_id = ?").get(attemptId) !== null;
   }
 
-  /** Live (not destroyed) attempts whose deadline has passed. */
+  /** Live (not destroyed) attempts whose absolute deadline has passed (retention is measured from it). */
   expiredAttempts(nowIso: string): AttemptRecord[] {
     return this.listAttempts().filter((a) => a.status !== "destroyed" && a.deadline < nowIso);
   }

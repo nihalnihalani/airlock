@@ -12,7 +12,8 @@
  * without the token, the principle that the vocabulary (not the token) is the boundary. Airlock
  * modifications: per-attempt disposable roles instead of per-Bot computers; execution, freeze,
  * invoke and hostile endpoints; operation journal and generation fencing; body digests; runtime tier
- * selection with dev-unsafe labelling; janitor and absolute deadlines.
+ * selection with dev-unsafe labelling; janitor and absolute deadlines; renewable execution
+ * authorization; host admission (429); a host-wide listing; `/health` reveals nothing but liveness.
  *
  * The shared secret is not the boundary; the vocabulary is. A caller with the token can create an
  * attempt for a supported profile, run a command inside it, freeze, revoke and destroy it. It cannot
@@ -30,6 +31,7 @@ import {
   FreezeRequest,
   HostileRunRequest,
   InvokeRequest,
+  RenewRequest,
   RevokeRequest,
   requestDigestOf,
 } from "@airlock/contracts";
@@ -132,12 +134,17 @@ export function createApp(deps: AppDeps): Hono {
     return checked.value;
   }
 
-  app.get("/health", async (c) => {
-    const docker = await core.api.ping();
-    return c.json({ status: docker ? "ok" : "degraded", docker, host: core.host.check });
-  });
+  // Unauthenticated liveness only (D15): no host inventory, runtimes or versions. The host check is
+  // on the authenticated GET /host.
+  app.get("/health", (c) => c.json({ ok: true }));
 
   app.get("/host", (c) => c.json(core.host.check));
+
+  /** Host admission budget and current reservations (M2). */
+  app.get("/capacity", (c) => c.json(core.capacity.usage()));
+
+  /** Every Airlock-owned container and volume on this Docker host (contracts HostListing, M7). */
+  app.get("/listing", async (c) => c.json(await core.hostListing()));
 
   app.post("/attempts", async (c) => {
     const request = await body(c, CreateAttemptRequest);
@@ -158,6 +165,14 @@ export function createApp(deps: AppDeps): Hono {
     const request = await body(c, AuthorToolRequest);
     if (request.ref.attemptId !== attemptId) throw new SupervisorError("invalid_body", "ref.attemptId does not match the path.");
     const response = await core.authorTool(request.ref, request.operation, request.args);
+    return c.json(response.body as object, response.status as 200);
+  });
+
+  app.post("/attempts/:attemptId/renew", async (c) => {
+    const attemptId = attemptParam(c);
+    const request = await body(c, RenewRequest);
+    if (request.ref.attemptId !== attemptId) throw new SupervisorError("invalid_body", "ref.attemptId does not match the path.");
+    const response = await core.renew(request.ref, request.operation, request.authorizedUntil);
     return c.json(response.body as object, response.status as 200);
   });
 
@@ -220,7 +235,7 @@ async function main(): Promise<void> {
     log.error("no profiles found", { profilesDir: config.profilesDir });
     process.exit(1);
   }
-  log.info("supervisor starting", { logLevel: log.level, bind: config.bind, port: config.port, runtime: config.runtime, dockerRuntime: config.dockerRuntime, devUnsafe: config.devUnsafe, namespace: config.namespace, profilesDir: config.profilesDir, dataDir: config.dataDir, journalPath: config.journalPath, dockerSocket: config.dockerSocket ?? null });
+  log.info("supervisor starting", { logLevel: log.level, bind: config.bind, port: config.port, runtime: config.runtime, dockerRuntime: config.dockerRuntime, devUnsafe: config.devUnsafe, production: config.production, runtimeImageId: config.runtimeImageId ?? null, instanceId: config.instanceId ?? null, capacity: config.capacity, namespace: config.namespace, profilesDir: config.profilesDir, dataDir: config.dataDir, journalPath: config.journalPath, dockerSocket: config.dockerSocket ?? null });
   const api = createDockerode(config.dockerSocket);
   if (!(await api.ping())) {
     log.error("Docker is not reachable. The supervisor cannot start without the engine it supervises.", { dockerSocket: config.dockerSocket ?? null });
@@ -231,6 +246,17 @@ async function main(): Promise<void> {
   if (!host.runtimeAvailable) {
     log.error("configured runtime is not listed by Docker; refusing to start", { runtime: config.runtime, dockerRuntime: config.dockerRuntime, availableRuntimes: host.check.availableRuntimes });
     process.exit(1);
+  }
+  if (config.runtimeImageId) {
+    // D2: every supported profile's image tag must resolve to the pinned image ID now; each
+    // container is checked again at every inspection.
+    for (const profile of profiles.values()) {
+      const image = await api.inspectImage(profile.runtimeImage);
+      if (image?.id !== config.runtimeImageId) {
+        log.error("runtime image does not match AIRLOCK_RUNTIME_IMAGE_ID; refusing to start", { profile: profile.id, runtimeImage: profile.runtimeImage, observed: image?.id ?? null, pinned: config.runtimeImageId });
+        process.exit(1);
+      }
+    }
   }
   if (config.devUnsafe) {
     log.warn("AIRLOCK_DEV_UNSAFE=1 with runtime runc: every record is labelled dev-unsafe. This is never a deployment configuration.");

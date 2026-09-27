@@ -29,8 +29,11 @@ RUN_FLAGS = [
     "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
     "--pids-limit", "64", "--memory", "512m", "--cpus", "1",
     "--ipc", "private", "--restart", "no",
+    "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=67108864,mode=1777",
     "--label", "airlock.test=dev-unsafe-runc",
 ]
+# The supervisor's workspace: a local volume backed by a size-capped tmpfs (runtime.ts workspaceDriverOpts).
+TMPFS_VOLUME_OPTS = ["--driver", "local", "--opt", "type=tmpfs", "--opt", "device=tmpfs", "--opt", "o=size=134217728,uid=1000,gid=1000,mode=0755"]
 
 
 def docker(*args: str, input: bytes | None = None, timeout: int = 120, check: bool = True) -> subprocess.CompletedProcess:
@@ -65,17 +68,22 @@ def tar_bytes(files: dict[str, bytes]) -> bytes:
 
 
 class Sandbox:
-    """One author-style sandbox: named volume at /workspace, idle sleep entrypoint, exec as 1000:1000."""
+    """One author-style sandbox: the supervisor's tmpfs-backed volume at /workspace, idle sleep
+    entrypoint, exec as 1000:1000. `disk_workspace=True` uses a plain (disk) volume instead, for the
+    collector test that reads the volume after the container stopped (the supervisor instead holds
+    the tmpfs volume with the collector before it stops the author); the probe reports such a
+    workspace as a host-backed mount."""
 
-    def __init__(self, image: str, extra_run_flags: list[str] | None = None):
+    def __init__(self, image: str, extra_run_flags: list[str] | None = None, disk_workspace: bool = False):
         suffix = uuid.uuid4().hex[:12]
         self.name = f"airlock-test-{suffix}"
         self.volume = f"airlock-test-vol-{suffix}"
         self.image = image
         self.extra = extra_run_flags or []
+        self.disk_workspace = disk_workspace
 
     def __enter__(self) -> "Sandbox":
-        docker("volume", "create", self.volume)
+        docker("volume", "create", *([] if self.disk_workspace else TMPFS_VOLUME_OPTS), self.volume)
         docker("run", "-d", "--name", self.name, *RUN_FLAGS, *self.extra, "-v", f"{self.volume}:/workspace", self.image)
         return self
 
@@ -170,12 +178,20 @@ def test_probe_detects_a_host_mount(image: str, tmp_path: Path):
         probe = sb.exec("bash", "/opt/airlock/probe.sh")
         result = json.loads(probe.stdout.decode().strip())
         assert result["hostMounts"] == "REACHED" and result["allBlocked"] is False
-        assert "/hostleak" in result["details"]["hostMounts"]
+        assert any("/hostleak" in problem for problem in result["details"]["hostMounts"])
         assert probe.returncode == 3
 
 
+def test_probe_reports_a_disk_backed_workspace(image: str):
+    # D12: /workspace is no longer exempt. A plain Docker volume there is host disk, not the owned tmpfs.
+    with Sandbox(image, disk_workspace=True) as sb:
+        result = json.loads(sb.exec("bash", "/opt/airlock/probe.sh").stdout.decode().strip())
+        assert result["hostMounts"] == "REACHED" and result["allBlocked"] is False
+        assert any(problem.startswith("workspace /workspace") for problem in result["details"]["hostMounts"])
+
+
 def test_freeze_collects_only_allowed_paths_from_stopped_volume(image: str, contract: dict, profile: dict):
-    with Sandbox(image) as sb:
+    with Sandbox(image, disk_workspace=True) as sb:
         sb.exec("python", "/opt/airlock/materialize.py", check=True)
         # Author edits the allowed file, adds junk and a symlink; only the allowed file is collected.
         sb.exec("bash", "-c",
