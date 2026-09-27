@@ -1,0 +1,693 @@
+{
+  "id": "V-A-analysis-live",
+  "requirement": "Analysis (A): fresh CSV upload → live analysis task → RESULT_VERIFIED with the correct answer (computed here); outputs download and match sha256",
+  "command": "bun scripts/acceptance/vultr.ts V-A-analysis-live",
+  "category": "real Vultr compute + live model",
+  "environment": "real Vultr compute (control vc2-2c-4gb @ 155.138.198.12, sandbox vx1-g-4c-16g-240s @ 144.202.28.80, region atl, Kata) + live model (glm-5.3 via Vultr Serverless Inference); public HTTPS API https://155-138-198-12.sslip.io",
+  "startedAt": "2026-09-27T16:54:35.092Z",
+  "timestamp": "2026-09-27T16:56:17.685Z",
+  "revision": "f223c19aa19d0429c0d51dd033fca61e9ac8baea",
+  "result": "PASS",
+  "checks": [
+    {
+      "ok": true,
+      "what": "upload → 201, recorded sha256 = sha256(bytes sent)"
+    },
+    {
+      "ok": true,
+      "what": "create live analysis task → 201 task-17e6c6f804086963"
+    },
+    {
+      "ok": true,
+      "what": "live model run (12 model events, glm-5.3-normalize)"
+    },
+    {
+      "ok": true,
+      "what": "outcome done/RESULT_VERIFIED"
+    },
+    {
+      "ok": true,
+      "what": "cleanup confirmed"
+    },
+    {
+      "ok": true,
+      "what": "analysis: output chart.png (44294 B) downloaded via /api/artifacts and /api/tasks/:id/artifacts, sha256 = recorded 27c1a4522855"
+    },
+    {
+      "ok": true,
+      "what": "analysis: output summary.json (1739 B) downloaded via /api/artifacts and /api/tasks/:id/artifacts, sha256 = recorded 576f321eed59"
+    },
+    {
+      "ok": true,
+      "what": "answer \"Birch: 16931.66\" names Birch with 16931.66 (computed here)"
+    },
+    {
+      "ok": true,
+      "what": "total_revenue 24385.75 = 24385.75 (computed here)"
+    },
+    {
+      "ok": true,
+      "what": "chart.png valid PNG 1050x675"
+    }
+  ],
+  "evidence": {
+    "input": {
+      "csv": "store,region,units,unit_price\ns1,Birch,93,29.6\ns2,Birch,100,47.52\ns3,Aster,124,2.42\ns4,Aster,169,11.27\ns5,Cedar,139,9.9\ns6,Birch,79,18.19\ns7,Birch,197,24.35\ns8,Birch,58,47.55\ns9,Birch,15,29\ns10,Dogwood,178,21.76\n",
+      "sha256": "e6dc0a5c499994823f55a37e025e0e36f22b61c7b60470c75b15d081787fcb63",
+      "expected": {
+        "topRegion": "Birch",
+        "topRevenue": 16931.66,
+        "revenueByRegion": {
+          "Birch": 16931.66,
+          "Dogwood": 3873.28,
+          "Aster": 2204.71,
+          "Cedar": 1376.1
+        },
+        "total": 24385.75
+      }
+    },
+    "summary": {
+      "answer": "Birch: 16931.66",
+      "top_region": "Birch",
+      "top_region_revenue": 16931.66,
+      "revenue_by_region": {
+        "Birch": 16931.66,
+        "Aster": 2204.71,
+        "Cedar": 1376.1,
+        "Dogwood": 3873.28
+      },
+      "total_revenue": 24385.75,
+      "region_order": [
+        "Birch",
+        "Aster",
+        "Cedar",
+        "Dogwood"
+      ],
+      "row_count": 10,
+      "columns": [
+        "store",
+        "region",
+        "units",
+        "unit_price"
+      ],
+      "revenue_per_row": [
+        {
+          "store": "s1",
+          "region": "Birch",
+          "units": 93,
+          "unit_price": 29.6,
+          "revenue": 2752.8
+        },
+        {
+          "store": "s2",
+          "region": "Birch",
+          "units": 100,
+          "unit_price": 47.52,
+          "revenue": 4752
+        },
+        {
+          "store": "s3",
+          "region": "Aster",
+          "units": 124,
+          "unit_price": 2.42,
+          "revenue": 300.08
+        },
+        {
+          "store": "s4",
+          "region": "Aster",
+          "units": 169,
+          "unit_price": 11.27,
+          "revenue": 1904.63
+        },
+        {
+          "store": "s5",
+          "region": "Cedar",
+          "units": 139,
+          "unit_price": 9.9,
+          "revenue": 1376.1
+        },
+        {
+          "store": "s6",
+          "region": "Birch",
+          "units": 79,
+          "unit_price": 18.19,
+          "revenue": 1437.01
+        },
+        {
+          "store": "s7",
+          "region": "Birch",
+          "units": 197,
+          "unit_price": 24.35,
+          "revenue": 4796.95
+        },
+        {
+          "store": "s8",
+          "region": "Birch",
+          "units": 58,
+          "unit_price": 47.55,
+          "revenue": 2757.9
+        },
+        {
+          "store": "s9",
+          "region": "Birch",
+          "units": 15,
+          "unit_price": 29,
+          "revenue": 435
+        },
+        {
+          "store": "s10",
+          "region": "Dogwood",
+          "units": 178,
+          "unit_price": 21.76,
+          "revenue": 3873.28
+        }
+      ]
+    },
+    "task": {
+      "id": "task-17e6c6f804086963",
+      "profileId": "analysis",
+      "status": "done",
+      "outcome": "RESULT_VERIFIED",
+      "phase": "ready",
+      "budget": {
+        "codeRuns": 5,
+        "sessions": 1,
+        "browserOps": 0,
+        "tokensUsed": 64142,
+        "modelCallsUsed": 12,
+        "repairAttemptsUsed": 0
+      },
+      "cleanup": {
+        "at": "2026-09-27T16:56:12.570Z",
+        "detail": "supervisor confirmed teardown of 1 attempt(s)",
+        "status": "confirmed"
+      },
+      "result": {
+        "checks": [
+          {
+            "name": "outputs-claimed",
+            "detail": "2 output(s) claimed",
+            "passed": true
+          },
+          {
+            "name": "outputs-valid",
+            "detail": "all 2 claimed output(s) collected and valid",
+            "passed": true
+          },
+          {
+            "name": "output:summary.json",
+            "detail": "valid JSON, 1739 bytes",
+            "passed": true
+          },
+          {
+            "name": "output:chart.png",
+            "detail": "PNG 1050x675, 44294 bytes",
+            "passed": true
+          },
+          {
+            "name": "summary-schema",
+            "detail": "answer: Birch: 16931.66",
+            "passed": true
+          }
+        ],
+        "sources": [],
+        "summary": "Analyzed inputs/store-sales.csv (10 rows: s1–s10 across 4 regions). Computed revenue = units × unit_price per row using exact Decimal arithmetic, summed per region, and identified the top region. Results: Birch = 16931.66, Dogwood = 3873.28, Aster = 2204.71, Cedar = 1376.10; total revenue = 24385.75. The highest-revenue region is **Birch** with **16931.66**. Wrote outputs/summary.json (answer, top_region, top_region_revenue, revenue_by_region, total_revenue, plus per-row revenue detail) and outputs/chart.png (bar chart of revenue by region, top region highlighted, value labels). Verified: JSON parses with a non-empty `answer`, per-row sums match region totals, region totals sum to total_revenue, and the PNG is a valid non-blank image (1050×675, 19.3% inked pixels).",
+        "outputArtifactIds": [
+          "art-e5cd7bf7aeb7586b5289",
+          "art-5cb07d1c647c1d89bc6c"
+        ]
+      },
+      "createdAt": "2026-09-27T16:54:38.168Z",
+      "updatedAt": "2026-09-27T16:56:12.572Z",
+      "completion": null
+    },
+    "provenance": {
+      "modelEvents": 12,
+      "models": [
+        "glm-5.3-normalize"
+      ],
+      "hosts": [
+        "https://api.vultrinference.com/v1"
+      ],
+      "scripted": false
+    },
+    "artifacts": [
+      {
+        "id": "art-90990b48f174835e926e",
+        "kind": "upload",
+        "filename": "store-sales.csv",
+        "sha256": "e6dc0a5c499994823f55a37e025e0e36f22b61c7b60470c75b15d081787fcb63",
+        "byteLength": 212,
+        "mediaType": "text/csv"
+      },
+      {
+        "id": "art-e5cd7bf7aeb7586b5289",
+        "kind": "output",
+        "filename": "chart.png",
+        "sha256": "27c1a4522855a5a3e13c3206be3d86202b244f2d7a8edd92b679b6a0ba5cd6b2",
+        "byteLength": 44294,
+        "mediaType": "image/png"
+      },
+      {
+        "id": "art-5cb07d1c647c1d89bc6c",
+        "kind": "output",
+        "filename": "summary.json",
+        "sha256": "576f321eed5932fa1f3411867407677207c6da2b889b5505c666fe49c36c7606",
+        "byteLength": 1739,
+        "mediaType": "application/json"
+      }
+    ],
+    "events": [
+      {
+        "seq": 1,
+        "at": "2026-09-27T16:54:38.168Z",
+        "kind": "lifecycle",
+        "title": "Task created",
+        "detail": "general task, profile analysis v1; 1 input file(s)"
+      },
+      {
+        "seq": 2,
+        "at": "2026-09-27T16:55:15.957Z",
+        "kind": "phase",
+        "title": "prepare",
+        "detail": "general task profile analysis v1; tools: code_write, code_run, code_read, files_list, submit_result"
+      },
+      {
+        "seq": 3,
+        "at": "2026-09-27T16:55:15.961Z",
+        "kind": "phase",
+        "title": "execute",
+        "detail": "model loop for goal under profile analysis"
+      },
+      {
+        "seq": 4,
+        "at": "2026-09-27T16:55:16.851Z",
+        "kind": "model",
+        "title": "Model turn 1",
+        "detail": "I'll start by examining the input CSV to understand its structure."
+      },
+      {
+        "seq": 5,
+        "at": "2026-09-27T16:55:16.855Z",
+        "kind": "tool",
+        "title": "files_list",
+        "detail": "1 input(s); no code sandbox yet",
+        "tool": "files_list",
+        "opState": "completed"
+      },
+      {
+        "seq": 6,
+        "at": "2026-09-27T16:55:19.892Z",
+        "kind": "model",
+        "title": "Model turn 2",
+        "detail": "The sandbox isn't started yet. Let me write a probe script to check the environment and view the CSV."
+      },
+      {
+        "seq": 7,
+        "at": "2026-09-27T16:55:19.898Z",
+        "kind": "lifecycle",
+        "title": "Creating analysis sandbox",
+        "detail": "attempt att-22e55a41c71d547151b0, generation 1, deadline 2026-09-27T17:10:19.896Z; no network"
+      },
+      {
+        "seq": 8,
+        "at": "2026-09-27T16:55:22.899Z",
+        "kind": "lifecycle",
+        "title": "analysis sandbox created",
+        "detail": "container airlock-analysis-task-17e6c6f804086963-att-22e55a41c71d547151b0; runtime kata; probe all BLOCKED",
+        "opState": "completed"
+      },
+      {
+        "seq": 9,
+        "at": "2026-09-27T16:55:22.903Z",
+        "kind": "tool",
+        "title": "inputs started",
+        "tool": "inputs",
+        "opState": "started"
+      },
+      {
+        "seq": 10,
+        "at": "2026-09-27T16:55:22.916Z",
+        "kind": "tool",
+        "title": "Input inputs/store-sales.csv placed",
+        "detail": "212 bytes, sha256 e6dc0a5c499994823f55a37e025e0e36f22b61c7b60470c75b15d081787fcb63",
+        "tool": "inputs",
+        "opState": "completed"
+      },
+      {
+        "seq": 11,
+        "at": "2026-09-27T16:55:22.922Z",
+        "kind": "tool",
+        "title": "code_write started",
+        "tool": "code_write",
+        "opState": "started"
+      },
+      {
+        "seq": 12,
+        "at": "2026-09-27T16:55:22.934Z",
+        "kind": "tool",
+        "title": "code_write code/probe.py",
+        "detail": "729 bytes (sha256 4ae31443625599860f49b56a7b6e3aaf80b2a692607f6d700ad7d42745e8ce6e)\nimport sys, csv, os\n\nprint(\"python:\", sys.version)\nprint(\"cwd:\", os.getcwd())\nprint(\"inputs exists:\", os.path.exists(\"inputs\"), os.listdir(\"inputs\") if os.path.exists(\"inputs\") else None)\n\nwith open(\"inputs/store-sal",
+        "tool": "code_write",
+        "opState": "completed"
+      },
+      {
+        "seq": 13,
+        "at": "2026-09-27T16:55:23.699Z",
+        "kind": "model",
+        "title": "Model turn 3",
+        "detail": "(no text)"
+      },
+      {
+        "seq": 14,
+        "at": "2026-09-27T16:55:23.705Z",
+        "kind": "tool",
+        "title": "code_run started",
+        "tool": "code_run",
+        "opState": "started"
+      },
+      {
+        "seq": 15,
+        "at": "2026-09-27T16:55:25.590Z",
+        "kind": "exec",
+        "title": "code_run code/probe.py: succeeded",
+        "detail": "succeeded exit=0 1876ms\nstdout:\npython: 3.12.14 (main, Sep 19 2026, 01:04:57) [GCC 14.2.0]\ncwd: /workspace\ninputs exists: True ['store-sales.csv']\n---- RAW CSV ----\nstore,region,units,unit_price\ns1,Birch,93,29.6\ns2,Birch,100,47.52\ns3,Aster,124,2.42\ns4,Aster,169,11.27\ns5,Cedar,139,9.9\ns6,Birch,79,18.",
+        "tool": "code_run",
+        "opState": "completed"
+      },
+      {
+        "seq": 16,
+        "at": "2026-09-27T16:55:44.601Z",
+        "kind": "model",
+        "title": "Model turn 4",
+        "detail": "The CSV is small and readable. Now I'll write the analysis script that computes revenue per row, aggregates by region, writes the JSON summary, and produces the bar chart."
+      },
+      {
+        "seq": 17,
+        "at": "2026-09-27T16:55:44.606Z",
+        "kind": "tool",
+        "title": "code_write started",
+        "tool": "code_write",
+        "opState": "started"
+      },
+      {
+        "seq": 18,
+        "at": "2026-09-27T16:55:44.627Z",
+        "kind": "tool",
+        "title": "code_write code/analysis.py",
+        "detail": "6891 bytes (sha256 a505f50238ec293e8a5ead08cdf55d98f89270e313537dd9b5cf3e204e6c7dae)\n\"\"\"\nOffline analysis of inputs/store-sales.csv.\n\nComputes revenue = units * unit_price per row, totals revenue per region,\nfinds the region with the highest total revenue, writes:\n  - outputs/summary.json  (answer, ",
+        "tool": "code_write",
+        "opState": "completed"
+      },
+      {
+        "seq": 19,
+        "at": "2026-09-27T16:55:45.429Z",
+        "kind": "model",
+        "title": "Model turn 5",
+        "detail": "(no text)"
+      },
+      {
+        "seq": 20,
+        "at": "2026-09-27T16:55:45.438Z",
+        "kind": "tool",
+        "title": "code_run started",
+        "tool": "code_run",
+        "opState": "started"
+      },
+      {
+        "seq": 21,
+        "at": "2026-09-27T16:55:46.470Z",
+        "kind": "exec",
+        "title": "code_run code/analysis.py: succeeded",
+        "detail": "succeeded exit=0 1023ms\nstdout:\nregions (order): ['Birch', 'Aster', 'Cedar', 'Dogwood']\nrevenue_by_region: {'Birch': 16931.66, 'Aster': 2204.71, 'Cedar': 1376.1, 'Dogwood': 3873.28}\ntotal_revenue: 24385.75\nsum check: True\nbest_region: Birch best_total: 16931.66\nanswer: Birch — 16931.66\nsummary.json ",
+        "tool": "code_run",
+        "opState": "completed"
+      },
+      {
+        "seq": 22,
+        "at": "2026-09-27T16:55:53.988Z",
+        "kind": "model",
+        "title": "Model turn 6",
+        "detail": "The math checks out (I verified by hand: Birch = 2752.80 + 4752.00 + 1437.01 + 4796.95 + 2757.90 + 435.00 = 16931.66). Let me inspect the written outputs and validate the PNG is a properly rendered, non-blank image."
+      },
+      {
+        "seq": 23,
+        "at": "2026-09-27T16:55:53.992Z",
+        "kind": "tool",
+        "title": "code_read started",
+        "tool": "code_read",
+        "opState": "started"
+      },
+      {
+        "seq": 24,
+        "at": "2026-09-27T16:55:54.047Z",
+        "kind": "tool",
+        "title": "code_read outputs/summary.json",
+        "detail": "1745 chars",
+        "tool": "code_read",
+        "opState": "completed"
+      },
+      {
+        "seq": 25,
+        "at": "2026-09-27T16:55:54.051Z",
+        "kind": "tool",
+        "title": "code_write started",
+        "tool": "code_write",
+        "opState": "started"
+      },
+      {
+        "seq": 26,
+        "at": "2026-09-27T16:55:54.065Z",
+        "kind": "tool",
+        "title": "code_write code/verify.py",
+        "detail": "1821 bytes (sha256 9a5c79bbbc043a2a73df86acb6356236352ab9c3f53269080d5744465c231b52)\n\"\"\"Validate the produced outputs: JSON schema + a real, non-blank rendered chart.\"\"\"\nimport json\nimport os\nfrom PIL import Image\n\nwith open(\"outputs/summary.json\", encoding=\"utf-8\") as f:\n    s = json.load(f)\n\nprint",
+        "tool": "code_write",
+        "opState": "completed"
+      },
+      {
+        "seq": 27,
+        "at": "2026-09-27T16:55:57.011Z",
+        "kind": "model",
+        "title": "Model turn 7",
+        "detail": "JSON looks good. Now let me validate the chart renders properly and isn't blank."
+      },
+      {
+        "seq": 28,
+        "at": "2026-09-27T16:55:57.016Z",
+        "kind": "tool",
+        "title": "code_run started",
+        "tool": "code_run",
+        "opState": "started"
+      },
+      {
+        "seq": 29,
+        "at": "2026-09-27T16:55:57.236Z",
+        "kind": "exec",
+        "title": "code_run code/verify.py: succeeded",
+        "detail": "succeeded exit=0 211ms\nstdout:\nkeys: ['answer', 'columns', 'region_order', 'revenue_by_region', 'revenue_per_row', 'row_count', 'top_region', 'top_region_revenue', 'total_revenue']\nanswer: 'Birch — 16931.66'\nrevenue_by_region: {'Birch': 16931.66, 'Aster': 2204.71, 'Cedar': 1376.1, 'Dogwood': 3873.28",
+        "tool": "code_run",
+        "opState": "completed"
+      },
+      {
+        "seq": 30,
+        "at": "2026-09-27T16:56:03.604Z",
+        "kind": "model",
+        "title": "Model turn 8",
+        "detail": "All checks passed. One refinement: I'll make the `answer` field use a plain ASCII format (`Birch: 16931.66`) for maximum compatibility with downstream checkers, then re-run and re-verify."
+      },
+      {
+        "seq": 31,
+        "at": "2026-09-27T16:56:03.609Z",
+        "kind": "tool",
+        "title": "code_write started",
+        "tool": "code_write",
+        "opState": "started"
+      },
+      {
+        "seq": 32,
+        "at": "2026-09-27T16:56:03.631Z",
+        "kind": "tool",
+        "title": "code_write code/analysis.py",
+        "detail": "6886 bytes (sha256 a6fb1db0d0ecdede16338e2f3a2053344601a1f8e6377855a9b389d228d18e4f)\n\"\"\"\nOffline analysis of inputs/store-sales.csv.\n\nComputes revenue = units * unit_price per row, totals revenue per region,\nfinds the region with the highest total revenue, writes:\n  - outputs/summary.json  (answer, ",
+        "tool": "code_write",
+        "opState": "completed"
+      },
+      {
+        "seq": 33,
+        "at": "2026-09-27T16:56:04.397Z",
+        "kind": "model",
+        "title": "Model turn 9",
+        "detail": "(no text)"
+      },
+      {
+        "seq": 34,
+        "at": "2026-09-27T16:56:04.406Z",
+        "kind": "tool",
+        "title": "code_run started",
+        "tool": "code_run",
+        "opState": "started"
+      },
+      {
+        "seq": 35,
+        "at": "2026-09-27T16:56:05.722Z",
+        "kind": "exec",
+        "title": "code_run code/analysis.py: succeeded",
+        "detail": "succeeded exit=0 1307ms\nstdout:\nregions (order): ['Birch', 'Aster', 'Cedar', 'Dogwood']\nrevenue_by_region: {'Birch': 16931.66, 'Aster': 2204.71, 'Cedar': 1376.1, 'Dogwood': 3873.28}\ntotal_revenue: 24385.75\nsum check: True\nbest_region: Birch best_total: 16931.66\nanswer: Birch: 16931.66\nsummary.json b",
+        "tool": "code_run",
+        "opState": "completed"
+      },
+      {
+        "seq": 36,
+        "at": "2026-09-27T16:56:06.405Z",
+        "kind": "model",
+        "title": "Model turn 10",
+        "detail": "(no text)"
+      },
+      {
+        "seq": 37,
+        "at": "2026-09-27T16:56:06.411Z",
+        "kind": "tool",
+        "title": "code_run started",
+        "tool": "code_run",
+        "opState": "started"
+      },
+      {
+        "seq": 38,
+        "at": "2026-09-27T16:56:06.716Z",
+        "kind": "exec",
+        "title": "code_run code/verify.py: succeeded",
+        "detail": "succeeded exit=0 298ms\nstdout:\nkeys: ['answer', 'columns', 'region_order', 'revenue_by_region', 'revenue_per_row', 'row_count', 'top_region', 'top_region_revenue', 'total_revenue']\nanswer: 'Birch: 16931.66'\nrevenue_by_region: {'Birch': 16931.66, 'Aster': 2204.71, 'Cedar': 1376.1, 'Dogwood': 3873.28}",
+        "tool": "code_run",
+        "opState": "completed"
+      },
+      {
+        "seq": 39,
+        "at": "2026-09-27T16:56:07.534Z",
+        "kind": "model",
+        "title": "Model turn 11",
+        "detail": "All checks pass. Final confirmation of the output files before submitting:"
+      },
+      {
+        "seq": 40,
+        "at": "2026-09-27T16:56:07.538Z",
+        "kind": "tool",
+        "title": "files_list started",
+        "tool": "files_list",
+        "opState": "started"
+      },
+      {
+        "seq": 41,
+        "at": "2026-09-27T16:56:07.611Z",
+        "kind": "tool",
+        "title": "files_list",
+        "detail": "6 file(s) in the sandbox",
+        "tool": "files_list",
+        "opState": "completed"
+      },
+      {
+        "seq": 42,
+        "at": "2026-09-27T16:56:09.142Z",
+        "kind": "model",
+        "title": "Model turn 12",
+        "detail": "(no text)"
+      },
+      {
+        "seq": 43,
+        "at": "2026-09-27T16:56:09.145Z",
+        "kind": "tool",
+        "title": "submit_result",
+        "detail": "Analyzed inputs/store-sales.csv (10 rows: s1–s10 across 4 regions). Computed revenue = units × unit_price per row using exact Decimal arithmetic, summed per region, and identified the top region. Results: Birch = 16931.66, Dogwood = 3873.28, Aster = 2204.71, Cedar = 1376.10; total revenue = 24385.75",
+        "tool": "submit_result",
+        "opState": "completed"
+      },
+      {
+        "seq": 44,
+        "at": "2026-09-27T16:56:09.148Z",
+        "kind": "phase",
+        "title": "freeze",
+        "detail": "stopping the sandboxes and collecting outputs/ read-only"
+      },
+      {
+        "seq": 45,
+        "at": "2026-09-27T16:56:09.151Z",
+        "kind": "tool",
+        "title": "submit_result started",
+        "tool": "submit_result",
+        "opState": "started"
+      },
+      {
+        "seq": 46,
+        "at": "2026-09-27T16:56:12.495Z",
+        "kind": "lifecycle",
+        "title": "Code sandbox stopped and outputs collected",
+        "detail": "stopConfirmed=true files=2 rejected=0",
+        "tool": "collect-outputs",
+        "opState": "completed"
+      },
+      {
+        "seq": 47,
+        "at": "2026-09-27T16:56:12.501Z",
+        "kind": "artifact",
+        "title": "Output stored outputs/chart.png",
+        "detail": "art-e5cd7bf7aeb7586b5289: 44294 bytes, sha256 27c1a4522855a5a3e13c3206be3d86202b244f2d7a8edd92b679b6a0ba5cd6b2"
+      },
+      {
+        "seq": 48,
+        "at": "2026-09-27T16:56:12.506Z",
+        "kind": "artifact",
+        "title": "Output stored outputs/summary.json",
+        "detail": "art-5cb07d1c647c1d89bc6c: 1739 bytes, sha256 576f321eed5932fa1f3411867407677207c6da2b889b5505c666fe49c36c7606"
+      },
+      {
+        "seq": 49,
+        "at": "2026-09-27T16:56:12.555Z",
+        "kind": "lifecycle",
+        "title": "analysis sandbox destroyed (result submitted)",
+        "detail": "revoked; destroyed; remaining containers=0 volumes=0",
+        "opState": "completed"
+      },
+      {
+        "seq": 50,
+        "at": "2026-09-27T16:56:12.563Z",
+        "kind": "check",
+        "title": "passed: outputs-claimed",
+        "detail": "2 output(s) claimed"
+      },
+      {
+        "seq": 51,
+        "at": "2026-09-27T16:56:12.564Z",
+        "kind": "check",
+        "title": "passed: outputs-valid",
+        "detail": "all 2 claimed output(s) collected and valid"
+      },
+      {
+        "seq": 52,
+        "at": "2026-09-27T16:56:12.566Z",
+        "kind": "check",
+        "title": "passed: output:summary.json",
+        "detail": "valid JSON, 1739 bytes"
+      },
+      {
+        "seq": 53,
+        "at": "2026-09-27T16:56:12.567Z",
+        "kind": "check",
+        "title": "passed: output:chart.png",
+        "detail": "PNG 1050x675, 44294 bytes"
+      },
+      {
+        "seq": 54,
+        "at": "2026-09-27T16:56:12.568Z",
+        "kind": "check",
+        "title": "passed: summary-schema",
+        "detail": "answer: Birch: 16931.66"
+      },
+      {
+        "seq": 55,
+        "at": "2026-09-27T16:56:12.570Z",
+        "kind": "phase",
+        "title": "Outcome RESULT_VERIFIED",
+        "detail": "all 5 completion checks of profile analysis passed"
+      }
+    ]
+  }
+}

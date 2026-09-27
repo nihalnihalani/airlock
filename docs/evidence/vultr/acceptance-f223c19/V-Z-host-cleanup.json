@@ -1,0 +1,113 @@
+{
+  "id": "V-Z-host-cleanup",
+  "requirement": "Cleanup: after everything, the host-wide listing on VM B (label airlock.supervisor=true) is empty: containers, networks, volumes; supervisor host listing empty",
+  "command": "bun scripts/acceptance/vultr.ts V-Z-host-cleanup",
+  "category": "real Vultr compute + live model",
+  "environment": "real Vultr compute (control vc2-2c-4gb @ 155.138.198.12, sandbox vx1-g-4c-16g-240s @ 144.202.28.80, region atl, Kata) + live model (glm-5.3 via Vultr Serverless Inference); public HTTPS API https://155-138-198-12.sslip.io",
+  "startedAt": "2026-09-27T17:03:25.927Z",
+  "timestamp": "2026-09-27T17:03:31.753Z",
+  "revision": "f223c19aa19d0429c0d51dd033fca61e9ac8baea",
+  "result": "PASS",
+  "checks": [
+    {
+      "ok": true,
+      "what": "no task is still running (none)"
+    },
+    {
+      "ok": true,
+      "what": "ssh VM B (144.202.28.80) listing exit 0 "
+    },
+    {
+      "ok": true,
+      "what": "containers with label airlock.supervisor=true: 0 "
+    },
+    {
+      "ok": true,
+      "what": "networks: 0 "
+    },
+    {
+      "ok": true,
+      "what": "volumes: 0 "
+    }
+  ],
+  "evidence": {
+    "vmB": {
+      "ip": "144.202.28.80",
+      "containers": [],
+      "networks": [],
+      "volumes": [],
+      "allContainersOnHost": []
+    },
+    "host": {
+      "selectedRuntime": "kata",
+      "devUnsafe": false,
+      "runtimeImageId": "sha256:9952f7eb8b4830391bddfcd2ec81207bfcd02dc8280bab0b8b8f25e9a19ec238"
+    },
+    "tasksSeenByOperator": [
+      {
+        "id": "task-18f2abb96399bad1",
+        "profileId": "web-research",
+        "status": "done",
+        "outcome": "RESULT_VERIFIED",
+        "cleanup": "confirmed",
+        "createdAt": "2026-09-27T16:58:20.210Z"
+      },
+      {
+        "id": "task-3577b126555442f2",
+        "profileId": "web-research",
+        "status": "done",
+        "outcome": "RESULT_VERIFIED",
+        "cleanup": "confirmed",
+        "createdAt": "2026-09-27T16:56:42.583Z"
+      },
+      {
+        "id": "task-76f85ada24560880",
+        "profileId": "web-research",
+        "status": "done",
+        "outcome": "RESULT_VERIFIED",
+        "cleanup": "confirmed",
+        "createdAt": "2026-09-27T16:56:38.945Z"
+      },
+      {
+        "id": "task-f262993e7dfeca51",
+        "profileId": "web-analysis",
+        "status": "done",
+        "outcome": "RESULT_VERIFIED",
+        "cleanup": "confirmed",
+        "createdAt": "2026-09-27T16:55:25.249Z"
+      },
+      {
+        "id": "task-8c04acc7d173484d",
+        "profileId": "tabulate-365",
+        "status": "done",
+        "outcome": "CANDIDATE_PASSED_CHECKS",
+        "cleanup": "confirmed",
+        "createdAt": "2026-09-27T16:54:38.626Z"
+      },
+      {
+        "id": "task-17e6c6f804086963",
+        "profileId": "analysis",
+        "status": "done",
+        "outcome": "RESULT_VERIFIED",
+        "cleanup": "confirmed",
+        "createdAt": "2026-09-27T16:54:38.168Z"
+      },
+      {
+        "id": "task-0c7ff1a7a202dc83",
+        "profileId": "web-research",
+        "status": "done",
+        "outcome": "RESULT_VERIFIED",
+        "cleanup": "confirmed",
+        "createdAt": "2026-09-27T16:54:37.861Z"
+      },
+      {
+        "id": "task-e36fb5d7541976ec",
+        "profileId": "web-analysis",
+        "status": "done",
+        "outcome": "RESULT_VERIFIED",
+        "cleanup": "confirmed",
+        "createdAt": "2026-09-27T16:54:37.828Z"
+      }
+    ]
+  }
+}

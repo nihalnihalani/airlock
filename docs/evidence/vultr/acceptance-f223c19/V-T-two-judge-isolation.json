@@ -1,0 +1,675 @@
+{
+  "id": "V-T-two-judge-isolation",
+  "requirement": "Two judge sessions cannot see each other's tasks, events, artifacts, approvals, control, exports (404) on the deployed stack",
+  "command": "bun scripts/acceptance/vultr.ts V-T-two-judge-isolation",
+  "category": "real Vultr compute + live model",
+  "environment": "real Vultr compute (control vc2-2c-4gb @ 155.138.198.12, sandbox vx1-g-4c-16g-240s @ 144.202.28.80, region atl, Kata) + live model (glm-5.3 via Vultr Serverless Inference); public HTTPS API https://155-138-198-12.sslip.io",
+  "startedAt": "2026-09-27T17:00:55.379Z",
+  "timestamp": "2026-09-27T17:01:28.964Z",
+  "revision": "f223c19aa19d0429c0d51dd033fca61e9ac8baea",
+  "result": "PASS",
+  "checks": [
+    {
+      "ok": true,
+      "what": "both sessions are judge, different owners"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-17e6c6f804086963 → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-17e6c6f804086963/events?lastEventId=0 → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-17e6c6f804086963/artifacts → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/artifacts/art-90990b48f174835e926e → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-17e6c6f804086963/artifacts/art-90990b48f174835e926e → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B POST /api/tasks/task-17e6c6f804086963/export → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B POST /api/tasks/task-17e6c6f804086963/cancel → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-e36fb5d7541976ec → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-e36fb5d7541976ec/events?lastEventId=0 → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-e36fb5d7541976ec/artifacts → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/artifacts/art-2641b3c1869308cf1128 → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-e36fb5d7541976ec/artifacts/art-2641b3c1869308cf1128 → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-e36fb5d7541976ec/approvals → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-e36fb5d7541976ec/control → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B POST /api/tasks/task-e36fb5d7541976ec/control/take → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B POST /api/tasks/task-e36fb5d7541976ec/approvals/prop-00000000/decide → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B POST /api/tasks/task-e36fb5d7541976ec/export → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B POST /api/tasks/task-e36fb5d7541976ec/cancel → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-f262993e7dfeca51 → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-f262993e7dfeca51/events?lastEventId=0 → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-f262993e7dfeca51/artifacts → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/artifacts/art-a1b033acee520b2905a5 → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-f262993e7dfeca51/artifacts/art-a1b033acee520b2905a5 → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-f262993e7dfeca51/approvals → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-f262993e7dfeca51/control → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B POST /api/tasks/task-f262993e7dfeca51/control/take → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B POST /api/tasks/task-f262993e7dfeca51/approvals/prop-00000000/decide → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B POST /api/tasks/task-f262993e7dfeca51/export → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B POST /api/tasks/task-f262993e7dfeca51/cancel → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-0c7ff1a7a202dc83 → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-0c7ff1a7a202dc83/events?lastEventId=0 → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-0c7ff1a7a202dc83/artifacts → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/artifacts/art-44737dbc2424d0a08b81 → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-0c7ff1a7a202dc83/artifacts/art-44737dbc2424d0a08b81 → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-0c7ff1a7a202dc83/approvals → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-0c7ff1a7a202dc83/control → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B POST /api/tasks/task-0c7ff1a7a202dc83/control/take → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B POST /api/tasks/task-0c7ff1a7a202dc83/approvals/prop-00000000/decide → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B POST /api/tasks/task-0c7ff1a7a202dc83/export → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B POST /api/tasks/task-0c7ff1a7a202dc83/cancel → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-18f2abb96399bad1 → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-18f2abb96399bad1/events?lastEventId=0 → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-18f2abb96399bad1/artifacts → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/artifacts/art-905e7757c7bab89f3269 → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-18f2abb96399bad1/artifacts/art-905e7757c7bab89f3269 → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-18f2abb96399bad1/approvals → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-18f2abb96399bad1/control → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B POST /api/tasks/task-18f2abb96399bad1/control/take → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B POST /api/tasks/task-18f2abb96399bad1/approvals/prop-00000000/decide → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B POST /api/tasks/task-18f2abb96399bad1/export → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B POST /api/tasks/task-18f2abb96399bad1/cancel → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-3577b126555442f2 → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-3577b126555442f2/events?lastEventId=0 → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-3577b126555442f2/artifacts → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/artifacts/art-9be24a497f5473acf6cf → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-3577b126555442f2/artifacts/art-9be24a497f5473acf6cf → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-3577b126555442f2/approvals → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-3577b126555442f2/control → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B POST /api/tasks/task-3577b126555442f2/control/take → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B POST /api/tasks/task-3577b126555442f2/approvals/prop-00000000/decide → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B POST /api/tasks/task-3577b126555442f2/export → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B POST /api/tasks/task-3577b126555442f2/cancel → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-8c04acc7d173484d → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-8c04acc7d173484d/events?lastEventId=0 → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-8c04acc7d173484d/artifacts → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B POST /api/tasks/task-8c04acc7d173484d/export → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B POST /api/tasks/task-8c04acc7d173484d/cancel → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B's task list (0) excludes the other sessions' 7 tasks"
+    },
+    {
+      "ok": true,
+      "what": "the owning judge session still reads its task (200)"
+    },
+    {
+      "ok": true,
+      "what": "anonymous → 401"
+    }
+  ],
+  "evidence": {
+    "probes": [
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-17e6c6f804086963",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-17e6c6f804086963/events?lastEventId=0",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-17e6c6f804086963/artifacts",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/artifacts/art-90990b48f174835e926e",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-17e6c6f804086963/artifacts/art-90990b48f174835e926e",
+        "status": 404
+      },
+      {
+        "method": "POST",
+        "path": "/api/tasks/task-17e6c6f804086963/export",
+        "status": 404
+      },
+      {
+        "method": "POST",
+        "path": "/api/tasks/task-17e6c6f804086963/cancel",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-e36fb5d7541976ec",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-e36fb5d7541976ec/events?lastEventId=0",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-e36fb5d7541976ec/artifacts",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/artifacts/art-2641b3c1869308cf1128",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-e36fb5d7541976ec/artifacts/art-2641b3c1869308cf1128",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-e36fb5d7541976ec/approvals",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-e36fb5d7541976ec/control",
+        "status": 404
+      },
+      {
+        "method": "POST",
+        "path": "/api/tasks/task-e36fb5d7541976ec/control/take",
+        "status": 404
+      },
+      {
+        "method": "POST",
+        "path": "/api/tasks/task-e36fb5d7541976ec/approvals/prop-00000000/decide",
+        "status": 404
+      },
+      {
+        "method": "POST",
+        "path": "/api/tasks/task-e36fb5d7541976ec/export",
+        "status": 404
+      },
+      {
+        "method": "POST",
+        "path": "/api/tasks/task-e36fb5d7541976ec/cancel",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-f262993e7dfeca51",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-f262993e7dfeca51/events?lastEventId=0",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-f262993e7dfeca51/artifacts",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/artifacts/art-a1b033acee520b2905a5",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-f262993e7dfeca51/artifacts/art-a1b033acee520b2905a5",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-f262993e7dfeca51/approvals",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-f262993e7dfeca51/control",
+        "status": 404
+      },
+      {
+        "method": "POST",
+        "path": "/api/tasks/task-f262993e7dfeca51/control/take",
+        "status": 404
+      },
+      {
+        "method": "POST",
+        "path": "/api/tasks/task-f262993e7dfeca51/approvals/prop-00000000/decide",
+        "status": 404
+      },
+      {
+        "method": "POST",
+        "path": "/api/tasks/task-f262993e7dfeca51/export",
+        "status": 404
+      },
+      {
+        "method": "POST",
+        "path": "/api/tasks/task-f262993e7dfeca51/cancel",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-0c7ff1a7a202dc83",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-0c7ff1a7a202dc83/events?lastEventId=0",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-0c7ff1a7a202dc83/artifacts",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/artifacts/art-44737dbc2424d0a08b81",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-0c7ff1a7a202dc83/artifacts/art-44737dbc2424d0a08b81",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-0c7ff1a7a202dc83/approvals",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-0c7ff1a7a202dc83/control",
+        "status": 404
+      },
+      {
+        "method": "POST",
+        "path": "/api/tasks/task-0c7ff1a7a202dc83/control/take",
+        "status": 404
+      },
+      {
+        "method": "POST",
+        "path": "/api/tasks/task-0c7ff1a7a202dc83/approvals/prop-00000000/decide",
+        "status": 404
+      },
+      {
+        "method": "POST",
+        "path": "/api/tasks/task-0c7ff1a7a202dc83/export",
+        "status": 404
+      },
+      {
+        "method": "POST",
+        "path": "/api/tasks/task-0c7ff1a7a202dc83/cancel",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-18f2abb96399bad1",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-18f2abb96399bad1/events?lastEventId=0",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-18f2abb96399bad1/artifacts",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/artifacts/art-905e7757c7bab89f3269",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-18f2abb96399bad1/artifacts/art-905e7757c7bab89f3269",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-18f2abb96399bad1/approvals",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-18f2abb96399bad1/control",
+        "status": 404
+      },
+      {
+        "method": "POST",
+        "path": "/api/tasks/task-18f2abb96399bad1/control/take",
+        "status": 404
+      },
+      {
+        "method": "POST",
+        "path": "/api/tasks/task-18f2abb96399bad1/approvals/prop-00000000/decide",
+        "status": 404
+      },
+      {
+        "method": "POST",
+        "path": "/api/tasks/task-18f2abb96399bad1/export",
+        "status": 404
+      },
+      {
+        "method": "POST",
+        "path": "/api/tasks/task-18f2abb96399bad1/cancel",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-3577b126555442f2",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-3577b126555442f2/events?lastEventId=0",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-3577b126555442f2/artifacts",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/artifacts/art-9be24a497f5473acf6cf",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-3577b126555442f2/artifacts/art-9be24a497f5473acf6cf",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-3577b126555442f2/approvals",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-3577b126555442f2/control",
+        "status": 404
+      },
+      {
+        "method": "POST",
+        "path": "/api/tasks/task-3577b126555442f2/control/take",
+        "status": 404
+      },
+      {
+        "method": "POST",
+        "path": "/api/tasks/task-3577b126555442f2/approvals/prop-00000000/decide",
+        "status": 404
+      },
+      {
+        "method": "POST",
+        "path": "/api/tasks/task-3577b126555442f2/export",
+        "status": 404
+      },
+      {
+        "method": "POST",
+        "path": "/api/tasks/task-3577b126555442f2/cancel",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-8c04acc7d173484d",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-8c04acc7d173484d/events?lastEventId=0",
+        "status": 404
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-8c04acc7d173484d/artifacts",
+        "status": 404
+      },
+      {
+        "method": "POST",
+        "path": "/api/tasks/task-8c04acc7d173484d/export",
+        "status": 404
+      },
+      {
+        "method": "POST",
+        "path": "/api/tasks/task-8c04acc7d173484d/cancel",
+        "status": 404
+      }
+    ],
+    "sessionsProbed": [
+      {
+        "name": "analysis",
+        "taskIds": [
+          "task-17e6c6f804086963"
+        ]
+      },
+      {
+        "name": "hero",
+        "taskIds": [
+          "task-e36fb5d7541976ec",
+          "task-f262993e7dfeca51"
+        ]
+      },
+      {
+        "name": "web",
+        "taskIds": [
+          "task-0c7ff1a7a202dc83"
+        ]
+      },
+      {
+        "name": "takeover",
+        "taskIds": [
+          "task-18f2abb96399bad1"
+        ]
+      },
+      {
+        "name": "approvals",
+        "taskIds": [
+          "task-3577b126555442f2"
+        ]
+      },
+      {
+        "name": "repair",
+        "taskIds": [
+          "task-8c04acc7d173484d"
+        ]
+      }
+    ]
+  }
+}

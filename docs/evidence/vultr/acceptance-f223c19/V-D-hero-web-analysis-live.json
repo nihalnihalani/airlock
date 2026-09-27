@@ -1,0 +1,1524 @@
+{
+  "id": "V-D-hero-web-analysis-live",
+  "requirement": "Combined hero (D): live web-analysis on https://forms.155-138-198-12.sslip.io/data/regional-sales (allowlist forms.155-138-198-12.sslip.io only; disclosed synthetic fixture) → download CSV, offline analysis, chart, cite → RESULT_VERIFIED (South); ?variant=b → different correct answer (North)",
+  "command": "bun scripts/acceptance/vultr.ts V-D-hero-web-analysis-live",
+  "category": "real Vultr compute + live model",
+  "environment": "real Vultr compute (control vc2-2c-4gb @ 155.138.198.12, sandbox vx1-g-4c-16g-240s @ 144.202.28.80, region atl, Kata) + live model (glm-5.3 via Vultr Serverless Inference); public HTTPS API https://155-138-198-12.sslip.io",
+  "startedAt": "2026-09-27T16:54:35.092Z",
+  "timestamp": "2026-09-27T16:57:04.106Z",
+  "revision": "f223c19aa19d0429c0d51dd033fca61e9ac8baea",
+  "result": "PASS",
+  "checks": [
+    {
+      "ok": true,
+      "what": "variant a: create live web-analysis task → 201 task-e36fb5d7541976ec"
+    },
+    {
+      "ok": true,
+      "what": "variant a: live model run (11 model events)"
+    },
+    {
+      "ok": true,
+      "what": "variant a: outcome done/RESULT_VERIFIED"
+    },
+    {
+      "ok": true,
+      "what": "variant a: screenshot screenshot-003-1.png (87018 B) downloaded via /api/artifacts and /api/tasks/:id/artifacts, sha256 = recorded 30befdfb5e35"
+    },
+    {
+      "ok": true,
+      "what": "variant a: download regional-sales.csv (74 B) downloaded via /api/artifacts and /api/tasks/:id/artifacts, sha256 = recorded 3e4765316eef"
+    },
+    {
+      "ok": true,
+      "what": "variant a: output chart.png (34468 B) downloaded via /api/artifacts and /api/tasks/:id/artifacts, sha256 = recorded 8775463f08cc"
+    },
+    {
+      "ok": true,
+      "what": "variant a: output summary.json (280 B) downloaded via /api/artifacts and /api/tasks/:id/artifacts, sha256 = recorded 4ed560cb10f5"
+    },
+    {
+      "ok": true,
+      "what": "variant a: the saved CSV (download:regional-sales.csv) is byte-identical to the served dataset (sha256 3e4765316eef)"
+    },
+    {
+      "ok": true,
+      "what": "variant a: data crossed browser → code sandbox via browser_download_save"
+    },
+    {
+      "ok": true,
+      "what": "variant a: offline code ran (2 code_run events)"
+    },
+    {
+      "ok": true,
+      "what": "variant a: answer \"South (attainment 0.727)\" = South 0.727 (computed here)"
+    },
+    {
+      "ok": true,
+      "what": "variant a: chart.png valid PNG 840x540"
+    },
+    {
+      "ok": true,
+      "what": "variant a: 1 screenshot(s), valid PNG"
+    },
+    {
+      "ok": true,
+      "what": "variant b: create live web-analysis task → 201 task-f262993e7dfeca51"
+    },
+    {
+      "ok": true,
+      "what": "variant b: live model run (11 model events)"
+    },
+    {
+      "ok": true,
+      "what": "variant b: outcome done/RESULT_VERIFIED"
+    },
+    {
+      "ok": true,
+      "what": "variant b: screenshot screenshot-003-1.png (86372 B) downloaded via /api/artifacts and /api/tasks/:id/artifacts, sha256 = recorded 3eefb1fe292c"
+    },
+    {
+      "ok": true,
+      "what": "variant b: download regional-sales.csv (75 B) downloaded via /api/artifacts and /api/tasks/:id/artifacts, sha256 = recorded 677656757736"
+    },
+    {
+      "ok": true,
+      "what": "variant b: output chart.png (30404 B) downloaded via /api/artifacts and /api/tasks/:id/artifacts, sha256 = recorded f92310c95918"
+    },
+    {
+      "ok": true,
+      "what": "variant b: output summary.json (325 B) downloaded via /api/artifacts and /api/tasks/:id/artifacts, sha256 = recorded bdef1c869288"
+    },
+    {
+      "ok": true,
+      "what": "variant b: the saved CSV (download:regional-sales.csv) is byte-identical to the served dataset (sha256 677656757736)"
+    },
+    {
+      "ok": true,
+      "what": "variant b: data crossed browser → code sandbox via browser_download_save"
+    },
+    {
+      "ok": true,
+      "what": "variant b: offline code ran (2 code_run events)"
+    },
+    {
+      "ok": true,
+      "what": "variant b: answer \"North (0.750)\" = North 0.750 (computed here)"
+    },
+    {
+      "ok": true,
+      "what": "variant b: chart.png valid PNG 960x600"
+    },
+    {
+      "ok": true,
+      "what": "variant b: 1 screenshot(s), valid PNG"
+    },
+    {
+      "ok": true,
+      "what": "changed input → changed answer (\"South (attainment 0.727)\" vs \"North (0.750)\")"
+    }
+  ],
+  "evidence": {
+    "variant_a": {
+      "task": {
+        "id": "task-e36fb5d7541976ec",
+        "profileId": "web-analysis",
+        "status": "done",
+        "outcome": "RESULT_VERIFIED",
+        "phase": "ready",
+        "budget": {
+          "codeRuns": 1,
+          "sessions": 2,
+          "browserOps": 6,
+          "tokensUsed": 43794,
+          "modelCallsUsed": 11,
+          "repairAttemptsUsed": 0
+        },
+        "cleanup": {
+          "at": "2026-09-27T16:55:15.485Z",
+          "detail": "supervisor confirmed teardown of 2 attempt(s)",
+          "status": "confirmed"
+        },
+        "result": {
+          "checks": [
+            {
+              "name": "outputs-claimed",
+              "detail": "2 output(s) claimed",
+              "passed": true
+            },
+            {
+              "name": "outputs-valid",
+              "detail": "all 2 claimed output(s) collected and valid",
+              "passed": true
+            },
+            {
+              "name": "output:summary.json",
+              "detail": "valid JSON, 280 bytes",
+              "passed": true
+            },
+            {
+              "name": "output:chart.png",
+              "detail": "PNG 840x540, 34468 bytes",
+              "passed": true
+            },
+            {
+              "name": "required-outputs",
+              "detail": "present and valid: summary.json",
+              "passed": true
+            },
+            {
+              "name": "summary-schema",
+              "detail": "answer: South (attainment 0.727)",
+              "passed": true
+            },
+            {
+              "name": "screenshot-evidence",
+              "detail": "1 screenshot(s) stored; cited source(s) shown: https://forms.155-138-198-12.sslip.io/data/regional-sales",
+              "passed": true
+            },
+            {
+              "name": "sources-cited",
+              "detail": "1 source(s) cited",
+              "passed": true
+            },
+            {
+              "name": "sources-visited",
+              "detail": "every cited source was reached by this task's browser",
+              "passed": true
+            },
+            {
+              "name": "sources-in-policy",
+              "detail": "every cited source is inside the allowed destinations",
+              "passed": true
+            }
+          ],
+          "sources": [
+            {
+              "url": "https://forms.155-138-198-12.sslip.io/data/regional-sales",
+              "screenshotArtifactId": "art-2641b3c1869308cf1128"
+            }
+          ],
+          "summary": "Visited the disclosed synthetic dataset page at forms.155-138-198-12.sslip.io/data/regional-sales (screenshot taken as evidence) and downloaded its linked CSV (regional-sales-a.csv), saving it via browser_download_save to inputs/regional-sales.csv. Offline analysis computed attainment = revenue / target per region: North 1.2, South 0.727, East 0.95, West 1.083. The region with the LOWEST attainment is South at 0.727 (80 / 110), which is named in outputs/summary.json along with the full attainment_by_region map; a bar chart of attainment by region was written to outputs/chart.png.",
+          "outputArtifactIds": [
+            "art-65fe9d9d5457777cbaca",
+            "art-1fc1d867cfd2a0550633"
+          ]
+        },
+        "createdAt": "2026-09-27T16:54:37.828Z",
+        "updatedAt": "2026-09-27T16:55:15.489Z",
+        "completion": null
+      },
+      "provenance": {
+        "modelEvents": 11,
+        "models": [
+          "glm-5.3-normalize"
+        ],
+        "hosts": [
+          "https://api.vultrinference.com/v1"
+        ],
+        "scripted": false
+      },
+      "summary": {
+        "answer": "South (attainment 0.727)",
+        "lowest_region": "South",
+        "lowest_attainment": 0.727,
+        "attainment_by_region": {
+          "North": 1.2,
+          "South": 0.727,
+          "East": 0.95,
+          "West": 1.083
+        },
+        "source": "https://forms.155-138-198-12.sslip.io/data/regional-sales"
+      },
+      "expected": {
+        "region": "South",
+        "ratio": 0.7272727272727273
+      },
+      "servedCsvSha256": "3e4765316eef7e2223843e3345d40c0d530d6a915998de1470a4d72e8300ace5",
+      "artifacts": [
+        {
+          "id": "art-2641b3c1869308cf1128",
+          "kind": "screenshot",
+          "filename": "screenshot-003-1.png",
+          "sha256": "30befdfb5e35df43dd69a176d7774630c31ba0955fa5ff605bc3d9ebf41cb563",
+          "byteLength": 87018,
+          "source": {
+            "url": "https://forms.155-138-198-12.sslip.io/data/regional-sales",
+            "step": 3,
+            "tool": "browser_screenshot",
+            "attemptId": "att-14a07336cf277c2ae604"
+          }
+        },
+        {
+          "id": "art-e365ae5c0b7d732a8ca5",
+          "kind": "download",
+          "filename": "regional-sales.csv",
+          "sha256": "3e4765316eef7e2223843e3345d40c0d530d6a915998de1470a4d72e8300ace5",
+          "byteLength": 74,
+          "source": {
+            "url": "https://forms.155-138-198-12.sslip.io/data/regional-sales.csv",
+            "step": 6,
+            "tool": "browser_download_save",
+            "attemptId": "att-14a07336cf277c2ae604"
+          }
+        },
+        {
+          "id": "art-65fe9d9d5457777cbaca",
+          "kind": "output",
+          "filename": "chart.png",
+          "sha256": "8775463f08cc6826ebd3c9033b39a7bdf6877d1d429f97e0dfca9e1150445dc3",
+          "byteLength": 34468,
+          "source": {
+            "tool": "collect-outputs",
+            "attemptId": "att-9bbc46db7889ac35ed7e"
+          }
+        },
+        {
+          "id": "art-1fc1d867cfd2a0550633",
+          "kind": "output",
+          "filename": "summary.json",
+          "sha256": "4ed560cb10f5b2f9b8d4897a14d5be0bcee266fb2064e0297391c6948e4bb5fc",
+          "byteLength": 280,
+          "source": {
+            "tool": "collect-outputs",
+            "attemptId": "att-9bbc46db7889ac35ed7e"
+          }
+        }
+      ],
+      "completion": [
+        {
+          "name": "outputs-claimed",
+          "detail": "2 output(s) claimed",
+          "passed": true
+        },
+        {
+          "name": "outputs-valid",
+          "detail": "all 2 claimed output(s) collected and valid",
+          "passed": true
+        },
+        {
+          "name": "output:summary.json",
+          "detail": "valid JSON, 280 bytes",
+          "passed": true
+        },
+        {
+          "name": "output:chart.png",
+          "detail": "PNG 840x540, 34468 bytes",
+          "passed": true
+        },
+        {
+          "name": "required-outputs",
+          "detail": "present and valid: summary.json",
+          "passed": true
+        },
+        {
+          "name": "summary-schema",
+          "detail": "answer: South (attainment 0.727)",
+          "passed": true
+        },
+        {
+          "name": "screenshot-evidence",
+          "detail": "1 screenshot(s) stored; cited source(s) shown: https://forms.155-138-198-12.sslip.io/data/regional-sales",
+          "passed": true
+        },
+        {
+          "name": "sources-cited",
+          "detail": "1 source(s) cited",
+          "passed": true
+        },
+        {
+          "name": "sources-visited",
+          "detail": "every cited source was reached by this task's browser",
+          "passed": true
+        },
+        {
+          "name": "sources-in-policy",
+          "detail": "every cited source is inside the allowed destinations",
+          "passed": true
+        }
+      ],
+      "events": [
+        {
+          "seq": 1,
+          "at": "2026-09-27T16:54:37.828Z",
+          "kind": "lifecycle",
+          "title": "Task created",
+          "detail": "general task, profile web-analysis v1; destinations forms.155-138-198-12.sslip.io"
+        },
+        {
+          "seq": 2,
+          "at": "2026-09-27T16:54:38.727Z",
+          "kind": "phase",
+          "title": "prepare",
+          "detail": "general task profile web-analysis v1; tools: browser_navigate, browser_observe, browser_click, browser_type, browser_key, browser_scroll, browser_screenshot, browser_tabs, browser_save_text, browser_download_list, browser_download_save, browser_propose_submit, code_write, code_run, code_read, files_"
+        },
+        {
+          "seq": 3,
+          "at": "2026-09-27T16:54:38.734Z",
+          "kind": "phase",
+          "title": "execute",
+          "detail": "model loop for goal under profile web-analysis"
+        },
+        {
+          "seq": 4,
+          "at": "2026-09-27T16:54:39.812Z",
+          "kind": "model",
+          "title": "Model turn 1",
+          "detail": "I'll start by opening the disclosed dataset page."
+        },
+        {
+          "seq": 5,
+          "at": "2026-09-27T16:54:39.822Z",
+          "kind": "tool",
+          "title": "browser_navigate allowed",
+          "detail": "forms.155-138-198-12.sslip.io is inside the task's destinations",
+          "tool": "browser_navigate",
+          "opState": "allowed",
+          "actor": "agent"
+        },
+        {
+          "seq": 6,
+          "at": "2026-09-27T16:54:39.831Z",
+          "kind": "lifecycle",
+          "title": "Creating browser sandbox",
+          "detail": "attempt att-14a07336cf277c2ae604, generation 1, deadline 2026-09-27T17:14:39.828Z; egress allowed to forms.155-138-198-12.sslip.io"
+        },
+        {
+          "seq": 7,
+          "at": "2026-09-27T16:54:54.392Z",
+          "kind": "lifecycle",
+          "title": "browser sandbox created",
+          "detail": "container airlock-browser-task-e36fb5d7541976ec-att-14a07336cf277c2ae604; runtime kata",
+          "opState": "completed"
+        },
+        {
+          "seq": 8,
+          "at": "2026-09-27T16:54:54.402Z",
+          "kind": "tool",
+          "title": "browser_navigate started",
+          "tool": "browser_navigate",
+          "opState": "started"
+        },
+        {
+          "seq": 9,
+          "at": "2026-09-27T16:54:54.971Z",
+          "kind": "tool",
+          "title": "browser_navigate https://forms.155-138-198-12.sslip.io/data/regional-sales",
+          "detail": "status 200",
+          "tool": "browser_navigate",
+          "opState": "completed"
+        },
+        {
+          "seq": 10,
+          "at": "2026-09-27T16:54:55.715Z",
+          "kind": "model",
+          "title": "Model turn 2",
+          "detail": "(no text)"
+        },
+        {
+          "seq": 11,
+          "at": "2026-09-27T16:54:55.726Z",
+          "kind": "tool",
+          "title": "browser_observe started",
+          "tool": "browser_observe",
+          "opState": "started"
+        },
+        {
+          "seq": 12,
+          "at": "2026-09-27T16:54:55.965Z",
+          "kind": "tool",
+          "title": "browser_observe https://forms.155-138-198-12.sslip.io/data/regional-sales",
+          "detail": "Regional sales, Q3 2026 (Airlock demo fixture) — 790 chars, 2 controls, 1 tab(s)\n\nAIRLOCK DEMO FIXTURE. This is a disclosed test service run by the Airlock project for its hackathon demo. Data here is synthetic and form submissions are recorded only by this service; nothing is sent, shipped or conta",
+          "tool": "browser_observe",
+          "opState": "completed"
+        },
+        {
+          "seq": 13,
+          "at": "2026-09-27T16:54:56.637Z",
+          "kind": "model",
+          "title": "Model turn 3",
+          "detail": "(no text)"
+        },
+        {
+          "seq": 14,
+          "at": "2026-09-27T16:54:56.644Z",
+          "kind": "tool",
+          "title": "browser_screenshot started",
+          "tool": "browser_screenshot",
+          "opState": "started"
+        },
+        {
+          "seq": 15,
+          "at": "2026-09-27T16:54:56.974Z",
+          "kind": "artifact",
+          "title": "Screenshot stored art-2641b3c1869308cf1128",
+          "detail": "https://forms.155-138-198-12.sslip.io/data/regional-sales (1280x800, sha256 30befdfb5e35df43dd69a176d7774630c31ba0955fa5ff605bc3d9ebf41cb563)",
+          "tool": "browser_screenshot",
+          "actor": "agent"
+        },
+        {
+          "seq": 16,
+          "at": "2026-09-27T16:54:56.976Z",
+          "kind": "tool",
+          "title": "browser_screenshot https://forms.155-138-198-12.sslip.io/data/regional-sales",
+          "detail": "stored as art-2641b3c1869308cf1128",
+          "tool": "browser_screenshot",
+          "opState": "completed"
+        },
+        {
+          "seq": 17,
+          "at": "2026-09-27T16:54:57.600Z",
+          "kind": "model",
+          "title": "Model turn 4",
+          "detail": "(no text)"
+        },
+        {
+          "seq": 18,
+          "at": "2026-09-27T16:54:57.605Z",
+          "kind": "tool",
+          "title": "browser_click started",
+          "tool": "browser_click",
+          "opState": "started"
+        },
+        {
+          "seq": 19,
+          "at": "2026-09-27T16:54:58.084Z",
+          "kind": "tool",
+          "title": "browser_click ref e37",
+          "detail": "generation 2; https://forms.155-138-198-12.sslip.io/data/regional-sales",
+          "tool": "browser_click",
+          "opState": "completed"
+        },
+        {
+          "seq": 20,
+          "at": "2026-09-27T16:54:58.624Z",
+          "kind": "model",
+          "title": "Model turn 5",
+          "detail": "(no text)"
+        },
+        {
+          "seq": 21,
+          "at": "2026-09-27T16:54:58.630Z",
+          "kind": "tool",
+          "title": "browser_download_list started",
+          "tool": "browser_download_list",
+          "opState": "started"
+        },
+        {
+          "seq": 22,
+          "at": "2026-09-27T16:54:58.769Z",
+          "kind": "tool",
+          "title": "browser_download_list",
+          "detail": "1 download(s)",
+          "tool": "browser_download_list",
+          "opState": "completed"
+        },
+        {
+          "seq": 23,
+          "at": "2026-09-27T16:54:59.578Z",
+          "kind": "model",
+          "title": "Model turn 6",
+          "detail": "(no text)"
+        },
+        {
+          "seq": 24,
+          "at": "2026-09-27T16:54:59.587Z",
+          "kind": "tool",
+          "title": "browser_download_save started",
+          "tool": "browser_download_save",
+          "opState": "started"
+        },
+        {
+          "seq": 25,
+          "at": "2026-09-27T16:54:59.725Z",
+          "kind": "artifact",
+          "title": "Download stored art-e365ae5c0b7d732a8ca5",
+          "detail": "regional-sales.csv (74 bytes, text/csv) from https://forms.155-138-198-12.sslip.io/data/regional-sales.csv; inputs/regional-sales.csv",
+          "tool": "browser_download_save",
+          "actor": "agent"
+        },
+        {
+          "seq": 26,
+          "at": "2026-09-27T16:54:59.729Z",
+          "kind": "tool",
+          "title": "browser_download_save regional-sales.csv",
+          "detail": "kept for the code sandbox (placed when it starts)",
+          "tool": "browser_download_save",
+          "opState": "completed"
+        },
+        {
+          "seq": 27,
+          "at": "2026-09-27T16:55:02.641Z",
+          "kind": "model",
+          "title": "Model turn 7",
+          "detail": "The CSV is saved. Now let me write the analysis code."
+        },
+        {
+          "seq": 28,
+          "at": "2026-09-27T16:55:02.656Z",
+          "kind": "lifecycle",
+          "title": "Creating analysis sandbox",
+          "detail": "attempt att-9bbc46db7889ac35ed7e, generation 2, deadline 2026-09-27T17:15:02.649Z; no network"
+        },
+        {
+          "seq": 29,
+          "at": "2026-09-27T16:55:05.106Z",
+          "kind": "lifecycle",
+          "title": "analysis sandbox created",
+          "detail": "container airlock-analysis-task-e36fb5d7541976ec-att-9bbc46db7889ac35ed7e; runtime kata; probe all BLOCKED",
+          "opState": "completed"
+        },
+        {
+          "seq": 30,
+          "at": "2026-09-27T16:55:05.111Z",
+          "kind": "tool",
+          "title": "inputs started",
+          "tool": "inputs",
+          "opState": "started"
+        },
+        {
+          "seq": 31,
+          "at": "2026-09-27T16:55:05.123Z",
+          "kind": "tool",
+          "title": "Input inputs/regional-sales.csv placed",
+          "detail": "74 bytes, sha256 3e4765316eef7e2223843e3345d40c0d530d6a915998de1470a4d72e8300ace5",
+          "tool": "inputs",
+          "opState": "completed"
+        },
+        {
+          "seq": 32,
+          "at": "2026-09-27T16:55:05.128Z",
+          "kind": "tool",
+          "title": "code_write started",
+          "tool": "code_write",
+          "opState": "started"
+        },
+        {
+          "seq": 33,
+          "at": "2026-09-27T16:55:05.141Z",
+          "kind": "tool",
+          "title": "code_write code/analyze.py",
+          "detail": "1967 bytes (sha256 0daf68221ef4b3db241e6726385574d710ef44d6080f7fd146844e038493a52b)\nimport csv, json, os\n\nrows = []\nwith open('inputs/regional-sales.csv', newline='') as f:\n    for row in csv.DictReader(f):\n        region = row['region'].strip()\n        revenue = float(row['revenue'])\n        targe",
+          "tool": "code_write",
+          "opState": "completed"
+        },
+        {
+          "seq": 34,
+          "at": "2026-09-27T16:55:05.849Z",
+          "kind": "model",
+          "title": "Model turn 8",
+          "detail": "(no text)"
+        },
+        {
+          "seq": 35,
+          "at": "2026-09-27T16:55:05.858Z",
+          "kind": "tool",
+          "title": "code_run started",
+          "tool": "code_run",
+          "opState": "started"
+        },
+        {
+          "seq": 36,
+          "at": "2026-09-27T16:55:07.269Z",
+          "kind": "exec",
+          "title": "code_run code/analyze.py: succeeded",
+          "detail": "succeeded exit=0 1401ms\nstdout:\nrows: [{'region': 'North', 'revenue': 120.0, 'target': 100.0}, {'region': 'South', 'revenue': 80.0, 'target': 110.0}, {'region': 'East', 'revenue': 95.0, 'target': 100.0}, {'region': 'West', 'revenue': 130.0, 'target': 120.0}]\nattainment: {'North': 1.2, 'South': 0.727",
+          "tool": "code_run",
+          "opState": "completed"
+        },
+        {
+          "seq": 37,
+          "at": "2026-09-27T16:55:08.502Z",
+          "kind": "model",
+          "title": "Model turn 9",
+          "detail": "(no text)"
+        },
+        {
+          "seq": 38,
+          "at": "2026-09-27T16:55:08.507Z",
+          "kind": "tool",
+          "title": "files_list started",
+          "tool": "files_list",
+          "opState": "started"
+        },
+        {
+          "seq": 39,
+          "at": "2026-09-27T16:55:08.783Z",
+          "kind": "tool",
+          "title": "files_list",
+          "detail": "4 file(s) in the sandbox",
+          "tool": "files_list",
+          "opState": "completed"
+        },
+        {
+          "seq": 40,
+          "at": "2026-09-27T16:55:09.444Z",
+          "kind": "model",
+          "title": "Model turn 10",
+          "detail": "(no text)"
+        },
+        {
+          "seq": 41,
+          "at": "2026-09-27T16:55:09.449Z",
+          "kind": "tool",
+          "title": "code_read started",
+          "tool": "code_read",
+          "opState": "started"
+        },
+        {
+          "seq": 42,
+          "at": "2026-09-27T16:55:09.497Z",
+          "kind": "tool",
+          "title": "code_read outputs/summary.json",
+          "detail": "280 chars",
+          "tool": "code_read",
+          "opState": "completed"
+        },
+        {
+          "seq": 43,
+          "at": "2026-09-27T16:55:11.656Z",
+          "kind": "model",
+          "title": "Model turn 11",
+          "detail": "Everything is complete: the page was visited and screenshotted, the CSV was downloaded and saved, the analysis ran offline, and both output files exist."
+        },
+        {
+          "seq": 44,
+          "at": "2026-09-27T16:55:11.662Z",
+          "kind": "tool",
+          "title": "submit_result",
+          "detail": "Visited the disclosed synthetic dataset page at forms.155-138-198-12.sslip.io/data/regional-sales (screenshot taken as evidence) and downloaded its linked CSV (regional-sales-a.csv), saving it via browser_download_save to inputs/regional-sales.csv. Offline analysis computed attainment = revenue / ta",
+          "tool": "submit_result",
+          "opState": "completed"
+        },
+        {
+          "seq": 45,
+          "at": "2026-09-27T16:55:11.668Z",
+          "kind": "phase",
+          "title": "freeze",
+          "detail": "stopping the sandboxes and collecting outputs/ read-only"
+        },
+        {
+          "seq": 46,
+          "at": "2026-09-27T16:55:11.675Z",
+          "kind": "tool",
+          "title": "submit_result started",
+          "tool": "submit_result",
+          "opState": "started"
+        },
+        {
+          "seq": 47,
+          "at": "2026-09-27T16:55:14.474Z",
+          "kind": "lifecycle",
+          "title": "Code sandbox stopped and outputs collected",
+          "detail": "stopConfirmed=true files=2 rejected=0",
+          "tool": "collect-outputs",
+          "opState": "completed"
+        },
+        {
+          "seq": 48,
+          "at": "2026-09-27T16:55:14.484Z",
+          "kind": "artifact",
+          "title": "Output stored outputs/chart.png",
+          "detail": "art-65fe9d9d5457777cbaca: 34468 bytes, sha256 8775463f08cc6826ebd3c9033b39a7bdf6877d1d429f97e0dfca9e1150445dc3"
+        },
+        {
+          "seq": 49,
+          "at": "2026-09-27T16:55:14.488Z",
+          "kind": "artifact",
+          "title": "Output stored outputs/summary.json",
+          "detail": "art-1fc1d867cfd2a0550633: 280 bytes, sha256 4ed560cb10f5b2f9b8d4897a14d5be0bcee266fb2064e0297391c6948e4bb5fc"
+        },
+        {
+          "seq": 50,
+          "at": "2026-09-27T16:55:15.419Z",
+          "kind": "lifecycle",
+          "title": "browser sandbox destroyed (result submitted)",
+          "detail": "revoked; destroyed; remaining containers=0 volumes=0",
+          "opState": "completed"
+        },
+        {
+          "seq": 51,
+          "at": "2026-09-27T16:55:15.453Z",
+          "kind": "lifecycle",
+          "title": "analysis sandbox destroyed (result submitted)",
+          "detail": "revoked; destroyed; remaining containers=0 volumes=0",
+          "opState": "completed"
+        },
+        {
+          "seq": 52,
+          "at": "2026-09-27T16:55:15.465Z",
+          "kind": "check",
+          "title": "passed: outputs-claimed",
+          "detail": "2 output(s) claimed"
+        },
+        {
+          "seq": 53,
+          "at": "2026-09-27T16:55:15.467Z",
+          "kind": "check",
+          "title": "passed: outputs-valid",
+          "detail": "all 2 claimed output(s) collected and valid"
+        },
+        {
+          "seq": 54,
+          "at": "2026-09-27T16:55:15.469Z",
+          "kind": "check",
+          "title": "passed: output:summary.json",
+          "detail": "valid JSON, 280 bytes"
+        },
+        {
+          "seq": 55,
+          "at": "2026-09-27T16:55:15.472Z",
+          "kind": "check",
+          "title": "passed: output:chart.png",
+          "detail": "PNG 840x540, 34468 bytes"
+        },
+        {
+          "seq": 56,
+          "at": "2026-09-27T16:55:15.474Z",
+          "kind": "check",
+          "title": "passed: required-outputs",
+          "detail": "present and valid: summary.json"
+        },
+        {
+          "seq": 57,
+          "at": "2026-09-27T16:55:15.476Z",
+          "kind": "check",
+          "title": "passed: summary-schema",
+          "detail": "answer: South (attainment 0.727)"
+        },
+        {
+          "seq": 58,
+          "at": "2026-09-27T16:55:15.478Z",
+          "kind": "check",
+          "title": "passed: screenshot-evidence",
+          "detail": "1 screenshot(s) stored; cited source(s) shown: https://forms.155-138-198-12.sslip.io/data/regional-sales"
+        },
+        {
+          "seq": 59,
+          "at": "2026-09-27T16:55:15.480Z",
+          "kind": "check",
+          "title": "passed: sources-cited",
+          "detail": "1 source(s) cited"
+        },
+        {
+          "seq": 60,
+          "at": "2026-09-27T16:55:15.482Z",
+          "kind": "check",
+          "title": "passed: sources-visited",
+          "detail": "every cited source was reached by this task's browser"
+        },
+        {
+          "seq": 61,
+          "at": "2026-09-27T16:55:15.483Z",
+          "kind": "check",
+          "title": "passed: sources-in-policy",
+          "detail": "every cited source is inside the allowed destinations"
+        },
+        {
+          "seq": 62,
+          "at": "2026-09-27T16:55:15.486Z",
+          "kind": "phase",
+          "title": "Outcome RESULT_VERIFIED",
+          "detail": "all 10 completion checks of profile web-analysis passed"
+        }
+      ]
+    },
+    "variant_b": {
+      "task": {
+        "id": "task-f262993e7dfeca51",
+        "profileId": "web-analysis",
+        "status": "done",
+        "outcome": "RESULT_VERIFIED",
+        "phase": "ready",
+        "budget": {
+          "codeRuns": 1,
+          "sessions": 2,
+          "browserOps": 6,
+          "tokensUsed": 69257,
+          "modelCallsUsed": 11,
+          "repairAttemptsUsed": 0
+        },
+        "cleanup": {
+          "at": "2026-09-27T16:57:00.063Z",
+          "detail": "supervisor confirmed teardown of 2 attempt(s)",
+          "status": "confirmed"
+        },
+        "result": {
+          "checks": [
+            {
+              "name": "outputs-claimed",
+              "detail": "2 output(s) claimed",
+              "passed": true
+            },
+            {
+              "name": "outputs-valid",
+              "detail": "all 2 claimed output(s) collected and valid",
+              "passed": true
+            },
+            {
+              "name": "output:summary.json",
+              "detail": "valid JSON, 325 bytes",
+              "passed": true
+            },
+            {
+              "name": "output:chart.png",
+              "detail": "PNG 960x600, 30404 bytes",
+              "passed": true
+            },
+            {
+              "name": "required-outputs",
+              "detail": "present and valid: summary.json",
+              "passed": true
+            },
+            {
+              "name": "summary-schema",
+              "detail": "answer: North (0.750)",
+              "passed": true
+            },
+            {
+              "name": "screenshot-evidence",
+              "detail": "1 screenshot(s) stored; cited source(s) shown: https://forms.155-138-198-12.sslip.io/data/regional-sales?variant=b",
+              "passed": true
+            },
+            {
+              "name": "sources-cited",
+              "detail": "1 source(s) cited",
+              "passed": true
+            },
+            {
+              "name": "sources-visited",
+              "detail": "every cited source was reached by this task's browser",
+              "passed": true
+            },
+            {
+              "name": "sources-in-policy",
+              "detail": "every cited source is inside the allowed destinations",
+              "passed": true
+            }
+          ],
+          "sources": [
+            {
+              "url": "https://forms.155-138-198-12.sslip.io/data/regional-sales?variant=b",
+              "screenshotArtifactId": "art-a1b033acee520b2905a5"
+            }
+          ],
+          "summary": "Opened the variant B regional sales dataset page, screenshotted it, clicked its CSV download link (regional-sales-b.csv, 75 bytes) and saved it with browser_download_save as inputs/regional-sales.csv. Offline analysis computed attainment = revenue / target for each region: North 90/120 = 0.750, South 115/100 = 1.150, East 105/100 = 1.050, West 125/120 = 1.042. The region with the LOWEST attainment is North at 0.750. Wrote outputs/summary.json (answer: \"North (0.750)\", plus attainment_by_region) and outputs/chart.png, a matplotlib bar chart of attainment by region with the lowest region (North) highlighted and a reference line at 1.0. Source: https://forms.155-138-198-12.sslip.io/data/regional-sales?variant=b",
+          "outputArtifactIds": [
+            "art-7e7c5bf61ce47a08168f",
+            "art-affc3fbb9eaf5b9bce3d"
+          ]
+        },
+        "createdAt": "2026-09-27T16:55:25.249Z",
+        "updatedAt": "2026-09-27T16:57:00.066Z",
+        "completion": null
+      },
+      "provenance": {
+        "modelEvents": 11,
+        "models": [
+          "glm-5.3-normalize"
+        ],
+        "hosts": [
+          "https://api.vultrinference.com/v1"
+        ],
+        "scripted": false
+      },
+      "summary": {
+        "answer": "North (0.750)",
+        "lowest_region": "North",
+        "lowest_attainment": 0.75,
+        "attainment_by_region": {
+          "North": 0.75,
+          "South": 1.15,
+          "East": 1.05,
+          "West": 1.042
+        },
+        "source": "https://forms.155-138-198-12.sslip.io/data/regional-sales?variant=b",
+        "dataset_file": "inputs/regional-sales.csv"
+      },
+      "expected": {
+        "region": "North",
+        "ratio": 0.75
+      },
+      "servedCsvSha256": "6776567577362187a242d3f5b8d3eee8b8dc0944b54fd09bb41d3d88e65258d8",
+      "artifacts": [
+        {
+          "id": "art-a1b033acee520b2905a5",
+          "kind": "screenshot",
+          "filename": "screenshot-003-1.png",
+          "sha256": "3eefb1fe292ce114283e25df9a18279588b720ea6d24c14c121b06d3badf8334",
+          "byteLength": 86372,
+          "source": {
+            "url": "https://forms.155-138-198-12.sslip.io/data/regional-sales?variant=b",
+            "step": 3,
+            "tool": "browser_screenshot",
+            "attemptId": "att-437aa80779a8be0709a9"
+          }
+        },
+        {
+          "id": "art-9d666b44ad7dffdd92bf",
+          "kind": "download",
+          "filename": "regional-sales.csv",
+          "sha256": "6776567577362187a242d3f5b8d3eee8b8dc0944b54fd09bb41d3d88e65258d8",
+          "byteLength": 75,
+          "source": {
+            "url": "https://forms.155-138-198-12.sslip.io/data/regional-sales.csv?variant=b",
+            "step": 6,
+            "tool": "browser_download_save",
+            "attemptId": "att-437aa80779a8be0709a9"
+          }
+        },
+        {
+          "id": "art-7e7c5bf61ce47a08168f",
+          "kind": "output",
+          "filename": "chart.png",
+          "sha256": "f92310c95918edcf7d5bf663d71b2f53d43c7f500b739691d9b9575e51619740",
+          "byteLength": 30404,
+          "source": {
+            "tool": "collect-outputs",
+            "attemptId": "att-66214ab5baf9ce3d3725"
+          }
+        },
+        {
+          "id": "art-affc3fbb9eaf5b9bce3d",
+          "kind": "output",
+          "filename": "summary.json",
+          "sha256": "bdef1c869288d06f2961cd82eb74ab04470817f23d796a378b6912d07bbd1326",
+          "byteLength": 325,
+          "source": {
+            "tool": "collect-outputs",
+            "attemptId": "att-66214ab5baf9ce3d3725"
+          }
+        }
+      ],
+      "completion": [
+        {
+          "name": "outputs-claimed",
+          "detail": "2 output(s) claimed",
+          "passed": true
+        },
+        {
+          "name": "outputs-valid",
+          "detail": "all 2 claimed output(s) collected and valid",
+          "passed": true
+        },
+        {
+          "name": "output:summary.json",
+          "detail": "valid JSON, 325 bytes",
+          "passed": true
+        },
+        {
+          "name": "output:chart.png",
+          "detail": "PNG 960x600, 30404 bytes",
+          "passed": true
+        },
+        {
+          "name": "required-outputs",
+          "detail": "present and valid: summary.json",
+          "passed": true
+        },
+        {
+          "name": "summary-schema",
+          "detail": "answer: North (0.750)",
+          "passed": true
+        },
+        {
+          "name": "screenshot-evidence",
+          "detail": "1 screenshot(s) stored; cited source(s) shown: https://forms.155-138-198-12.sslip.io/data/regional-sales?variant=b",
+          "passed": true
+        },
+        {
+          "name": "sources-cited",
+          "detail": "1 source(s) cited",
+          "passed": true
+        },
+        {
+          "name": "sources-visited",
+          "detail": "every cited source was reached by this task's browser",
+          "passed": true
+        },
+        {
+          "name": "sources-in-policy",
+          "detail": "every cited source is inside the allowed destinations",
+          "passed": true
+        }
+      ],
+      "events": [
+        {
+          "seq": 1,
+          "at": "2026-09-27T16:55:25.249Z",
+          "kind": "lifecycle",
+          "title": "Task created",
+          "detail": "general task, profile web-analysis v1; destinations forms.155-138-198-12.sslip.io"
+        },
+        {
+          "seq": 2,
+          "at": "2026-09-27T16:56:17.819Z",
+          "kind": "phase",
+          "title": "prepare",
+          "detail": "general task profile web-analysis v1; tools: browser_navigate, browser_observe, browser_click, browser_type, browser_key, browser_scroll, browser_screenshot, browser_tabs, browser_save_text, browser_download_list, browser_download_save, browser_propose_submit, code_write, code_run, code_read, files_"
+        },
+        {
+          "seq": 3,
+          "at": "2026-09-27T16:56:17.823Z",
+          "kind": "phase",
+          "title": "execute",
+          "detail": "model loop for goal under profile web-analysis"
+        },
+        {
+          "seq": 4,
+          "at": "2026-09-27T16:56:18.552Z",
+          "kind": "model",
+          "title": "Model turn 1",
+          "detail": "(no text)"
+        },
+        {
+          "seq": 5,
+          "at": "2026-09-27T16:56:18.555Z",
+          "kind": "tool",
+          "title": "browser_navigate allowed",
+          "detail": "forms.155-138-198-12.sslip.io is inside the task's destinations",
+          "tool": "browser_navigate",
+          "opState": "allowed",
+          "actor": "agent"
+        },
+        {
+          "seq": 6,
+          "at": "2026-09-27T16:56:18.559Z",
+          "kind": "lifecycle",
+          "title": "Creating browser sandbox",
+          "detail": "attempt att-437aa80779a8be0709a9, generation 1, deadline 2026-09-27T17:16:18.557Z; egress allowed to forms.155-138-198-12.sslip.io"
+        },
+        {
+          "seq": 7,
+          "at": "2026-09-27T16:56:32.471Z",
+          "kind": "lifecycle",
+          "title": "browser sandbox created",
+          "detail": "container airlock-browser-task-f262993e7dfeca51-att-437aa80779a8be0709a9; runtime kata",
+          "opState": "completed"
+        },
+        {
+          "seq": 8,
+          "at": "2026-09-27T16:56:32.477Z",
+          "kind": "tool",
+          "title": "browser_navigate started",
+          "tool": "browser_navigate",
+          "opState": "started"
+        },
+        {
+          "seq": 9,
+          "at": "2026-09-27T16:56:32.781Z",
+          "kind": "tool",
+          "title": "browser_navigate https://forms.155-138-198-12.sslip.io/data/regional-sales?variant=b",
+          "detail": "status 200",
+          "tool": "browser_navigate",
+          "opState": "completed"
+        },
+        {
+          "seq": 10,
+          "at": "2026-09-27T16:56:33.370Z",
+          "kind": "model",
+          "title": "Model turn 2",
+          "detail": "(no text)"
+        },
+        {
+          "seq": 11,
+          "at": "2026-09-27T16:56:33.375Z",
+          "kind": "tool",
+          "title": "browser_observe started",
+          "tool": "browser_observe",
+          "opState": "started"
+        },
+        {
+          "seq": 12,
+          "at": "2026-09-27T16:56:33.575Z",
+          "kind": "tool",
+          "title": "browser_observe https://forms.155-138-198-12.sslip.io/data/regional-sales?variant=b",
+          "detail": "Regional sales, Q3 2026 (Airlock demo fixture) — 846 chars, 2 controls, 1 tab(s)\n\nAIRLOCK DEMO FIXTURE. This is a disclosed test service run by the Airlock project for its hackathon demo. Data here is synthetic and form submissions are recorded only by this service; nothing is sent, shipped or conta",
+          "tool": "browser_observe",
+          "opState": "completed"
+        },
+        {
+          "seq": 13,
+          "at": "2026-09-27T16:56:34.370Z",
+          "kind": "model",
+          "title": "Model turn 3",
+          "detail": "The page loaded with the dataset. Let me take a screenshot for evidence, then download the CSV."
+        },
+        {
+          "seq": 14,
+          "at": "2026-09-27T16:56:34.376Z",
+          "kind": "tool",
+          "title": "browser_screenshot started",
+          "tool": "browser_screenshot",
+          "opState": "started"
+        },
+        {
+          "seq": 15,
+          "at": "2026-09-27T16:56:34.610Z",
+          "kind": "artifact",
+          "title": "Screenshot stored art-a1b033acee520b2905a5",
+          "detail": "https://forms.155-138-198-12.sslip.io/data/regional-sales?variant=b (1280x800, sha256 3eefb1fe292ce114283e25df9a18279588b720ea6d24c14c121b06d3badf8334)",
+          "tool": "browser_screenshot",
+          "actor": "agent"
+        },
+        {
+          "seq": 16,
+          "at": "2026-09-27T16:56:34.612Z",
+          "kind": "tool",
+          "title": "browser_screenshot https://forms.155-138-198-12.sslip.io/data/regional-sales?variant=b",
+          "detail": "stored as art-a1b033acee520b2905a5",
+          "tool": "browser_screenshot",
+          "opState": "completed"
+        },
+        {
+          "seq": 17,
+          "at": "2026-09-27T16:56:35.193Z",
+          "kind": "model",
+          "title": "Model turn 4",
+          "detail": "(no text)"
+        },
+        {
+          "seq": 18,
+          "at": "2026-09-27T16:56:35.198Z",
+          "kind": "tool",
+          "title": "browser_click started",
+          "tool": "browser_click",
+          "opState": "started"
+        },
+        {
+          "seq": 19,
+          "at": "2026-09-27T16:56:35.649Z",
+          "kind": "tool",
+          "title": "browser_click ref e37",
+          "detail": "generation 2; https://forms.155-138-198-12.sslip.io/data/regional-sales?variant=b",
+          "tool": "browser_click",
+          "opState": "completed"
+        },
+        {
+          "seq": 20,
+          "at": "2026-09-27T16:56:36.303Z",
+          "kind": "model",
+          "title": "Model turn 5",
+          "detail": "(no text)"
+        },
+        {
+          "seq": 21,
+          "at": "2026-09-27T16:56:36.309Z",
+          "kind": "tool",
+          "title": "browser_download_list started",
+          "tool": "browser_download_list",
+          "opState": "started"
+        },
+        {
+          "seq": 22,
+          "at": "2026-09-27T16:56:36.435Z",
+          "kind": "tool",
+          "title": "browser_download_list",
+          "detail": "1 download(s)",
+          "tool": "browser_download_list",
+          "opState": "completed"
+        },
+        {
+          "seq": 23,
+          "at": "2026-09-27T16:56:37.094Z",
+          "kind": "model",
+          "title": "Model turn 6",
+          "detail": "(no text)"
+        },
+        {
+          "seq": 24,
+          "at": "2026-09-27T16:56:37.103Z",
+          "kind": "tool",
+          "title": "browser_download_save started",
+          "tool": "browser_download_save",
+          "opState": "started"
+        },
+        {
+          "seq": 25,
+          "at": "2026-09-27T16:56:37.269Z",
+          "kind": "artifact",
+          "title": "Download stored art-9d666b44ad7dffdd92bf",
+          "detail": "regional-sales.csv (75 bytes, text/csv) from https://forms.155-138-198-12.sslip.io/data/regional-sales.csv?variant=b; inputs/regional-sales.csv",
+          "tool": "browser_download_save",
+          "actor": "agent"
+        },
+        {
+          "seq": 26,
+          "at": "2026-09-27T16:56:37.272Z",
+          "kind": "tool",
+          "title": "browser_download_save regional-sales.csv",
+          "detail": "kept for the code sandbox (placed when it starts)",
+          "tool": "browser_download_save",
+          "opState": "completed"
+        },
+        {
+          "seq": 27,
+          "at": "2026-09-27T16:56:37.939Z",
+          "kind": "model",
+          "title": "Model turn 7",
+          "detail": "(no text)"
+        },
+        {
+          "seq": 28,
+          "at": "2026-09-27T16:56:37.943Z",
+          "kind": "tool",
+          "title": "files_list",
+          "detail": "1 input(s); no code sandbox yet",
+          "tool": "files_list",
+          "opState": "completed"
+        },
+        {
+          "seq": 29,
+          "at": "2026-09-27T16:56:47.978Z",
+          "kind": "model",
+          "title": "Model turn 8",
+          "detail": "Now let me write the analysis code."
+        },
+        {
+          "seq": 30,
+          "at": "2026-09-27T16:56:47.984Z",
+          "kind": "lifecycle",
+          "title": "Creating analysis sandbox",
+          "detail": "attempt att-66214ab5baf9ce3d3725, generation 2, deadline 2026-09-27T17:16:47.982Z; no network"
+        },
+        {
+          "seq": 31,
+          "at": "2026-09-27T16:56:50.397Z",
+          "kind": "lifecycle",
+          "title": "analysis sandbox created",
+          "detail": "container airlock-analysis-task-f262993e7dfeca51-att-66214ab5baf9ce3d3725; runtime kata; probe all BLOCKED",
+          "opState": "completed"
+        },
+        {
+          "seq": 32,
+          "at": "2026-09-27T16:56:50.403Z",
+          "kind": "tool",
+          "title": "inputs started",
+          "tool": "inputs",
+          "opState": "started"
+        },
+        {
+          "seq": 33,
+          "at": "2026-09-27T16:56:50.414Z",
+          "kind": "tool",
+          "title": "Input inputs/regional-sales.csv placed",
+          "detail": "75 bytes, sha256 6776567577362187a242d3f5b8d3eee8b8dc0944b54fd09bb41d3d88e65258d8",
+          "tool": "inputs",
+          "opState": "completed"
+        },
+        {
+          "seq": 34,
+          "at": "2026-09-27T16:56:50.423Z",
+          "kind": "tool",
+          "title": "code_write started",
+          "tool": "code_write",
+          "opState": "started"
+        },
+        {
+          "seq": 35,
+          "at": "2026-09-27T16:56:50.439Z",
+          "kind": "tool",
+          "title": "code_write code/analyze.py",
+          "detail": "9068 bytes (sha256 d92cde8483a94fbc434720acc2c46df9a055cdced9c9aa937b6d0c0ad601785f)\nimport csv, json, os, zlib, struct\n\nIN = \"inputs/regional-sales.csv\"\nOUT = \"outputs\"\n\nrows = []\nwith open(IN, newline=\"\") as f:\n    reader = csv.DictReader(f)\n    for r in reader:\n        region = r[\"region\"].strip(",
+          "tool": "code_write",
+          "opState": "completed"
+        },
+        {
+          "seq": 36,
+          "at": "2026-09-27T16:56:51.090Z",
+          "kind": "model",
+          "title": "Model turn 9",
+          "detail": "(no text)"
+        },
+        {
+          "seq": 37,
+          "at": "2026-09-27T16:56:51.095Z",
+          "kind": "tool",
+          "title": "code_run started",
+          "tool": "code_run",
+          "opState": "started"
+        },
+        {
+          "seq": 38,
+          "at": "2026-09-27T16:56:52.526Z",
+          "kind": "exec",
+          "title": "code_run code/analyze.py: succeeded",
+          "detail": "succeeded exit=0 1423ms\nstdout:\nrows: [('North', 90.0, 120.0), ('South', 115.0, 100.0), ('East', 105.0, 100.0), ('West', 125.0, 120.0)]\nattainment: {'North': 0.75, 'South': 1.15, 'East': 1.05, 'West': 1.0416666666666667}\nlowest: North 0.75\nsummary written\nchart written to outputs/chart.png with matp",
+          "tool": "code_run",
+          "opState": "completed"
+        },
+        {
+          "seq": 39,
+          "at": "2026-09-27T16:56:53.464Z",
+          "kind": "model",
+          "title": "Model turn 10",
+          "detail": "The analysis succeeded with matplotlib. Let me verify the outputs are valid."
+        },
+        {
+          "seq": 40,
+          "at": "2026-09-27T16:56:53.469Z",
+          "kind": "tool",
+          "title": "code_read started",
+          "tool": "code_read",
+          "opState": "started"
+        },
+        {
+          "seq": 41,
+          "at": "2026-09-27T16:56:53.516Z",
+          "kind": "tool",
+          "title": "code_read outputs/chart.png",
+          "detail": "28429 chars (truncated)",
+          "tool": "code_read",
+          "opState": "completed"
+        },
+        {
+          "seq": 42,
+          "at": "2026-09-27T16:56:56.144Z",
+          "kind": "model",
+          "title": "Model turn 11",
+          "detail": "Both outputs are written and valid. The chart is a real PNG (matplotlib-rendered bar chart), and the summary JSON contains the answer and per-region attainment. Let me finalize."
+        },
+        {
+          "seq": 43,
+          "at": "2026-09-27T16:56:56.147Z",
+          "kind": "tool",
+          "title": "submit_result",
+          "detail": "Opened the variant B regional sales dataset page, screenshotted it, clicked its CSV download link (regional-sales-b.csv, 75 bytes) and saved it with browser_download_save as inputs/regional-sales.csv. Offline analysis computed attainment = revenue / target for each region: North 90/120 = 0.750, Sout",
+          "tool": "submit_result",
+          "opState": "completed"
+        },
+        {
+          "seq": 44,
+          "at": "2026-09-27T16:56:56.151Z",
+          "kind": "phase",
+          "title": "freeze",
+          "detail": "stopping the sandboxes and collecting outputs/ read-only"
+        },
+        {
+          "seq": 45,
+          "at": "2026-09-27T16:56:56.154Z",
+          "kind": "tool",
+          "title": "submit_result started",
+          "tool": "submit_result",
+          "opState": "started"
+        },
+        {
+          "seq": 46,
+          "at": "2026-09-27T16:56:59.047Z",
+          "kind": "lifecycle",
+          "title": "Code sandbox stopped and outputs collected",
+          "detail": "stopConfirmed=true files=2 rejected=0",
+          "tool": "collect-outputs",
+          "opState": "completed"
+        },
+        {
+          "seq": 47,
+          "at": "2026-09-27T16:56:59.052Z",
+          "kind": "artifact",
+          "title": "Output stored outputs/chart.png",
+          "detail": "art-7e7c5bf61ce47a08168f: 30404 bytes, sha256 f92310c95918edcf7d5bf663d71b2f53d43c7f500b739691d9b9575e51619740"
+        },
+        {
+          "seq": 48,
+          "at": "2026-09-27T16:56:59.056Z",
+          "kind": "artifact",
+          "title": "Output stored outputs/summary.json",
+          "detail": "art-affc3fbb9eaf5b9bce3d: 325 bytes, sha256 bdef1c869288d06f2961cd82eb74ab04470817f23d796a378b6912d07bbd1326"
+        },
+        {
+          "seq": 49,
+          "at": "2026-09-27T16:57:00.011Z",
+          "kind": "lifecycle",
+          "title": "browser sandbox destroyed (result submitted)",
+          "detail": "revoked; destroyed; remaining containers=0 volumes=0",
+          "opState": "completed"
+        },
+        {
+          "seq": 50,
+          "at": "2026-09-27T16:57:00.039Z",
+          "kind": "lifecycle",
+          "title": "analysis sandbox destroyed (result submitted)",
+          "detail": "revoked; destroyed; remaining containers=0 volumes=0",
+          "opState": "completed"
+        },
+        {
+          "seq": 51,
+          "at": "2026-09-27T16:57:00.049Z",
+          "kind": "check",
+          "title": "passed: outputs-claimed",
+          "detail": "2 output(s) claimed"
+        },
+        {
+          "seq": 52,
+          "at": "2026-09-27T16:57:00.050Z",
+          "kind": "check",
+          "title": "passed: outputs-valid",
+          "detail": "all 2 claimed output(s) collected and valid"
+        },
+        {
+          "seq": 53,
+          "at": "2026-09-27T16:57:00.052Z",
+          "kind": "check",
+          "title": "passed: output:summary.json",
+          "detail": "valid JSON, 325 bytes"
+        },
+        {
+          "seq": 54,
+          "at": "2026-09-27T16:57:00.053Z",
+          "kind": "check",
+          "title": "passed: output:chart.png",
+          "detail": "PNG 960x600, 30404 bytes"
+        },
+        {
+          "seq": 55,
+          "at": "2026-09-27T16:57:00.055Z",
+          "kind": "check",
+          "title": "passed: required-outputs",
+          "detail": "present and valid: summary.json"
+        },
+        {
+          "seq": 56,
+          "at": "2026-09-27T16:57:00.056Z",
+          "kind": "check",
+          "title": "passed: summary-schema",
+          "detail": "answer: North (0.750)"
+        },
+        {
+          "seq": 57,
+          "at": "2026-09-27T16:57:00.057Z",
+          "kind": "check",
+          "title": "passed: screenshot-evidence",
+          "detail": "1 screenshot(s) stored; cited source(s) shown: https://forms.155-138-198-12.sslip.io/data/regional-sales?variant=b"
+        },
+        {
+          "seq": 58,
+          "at": "2026-09-27T16:57:00.059Z",
+          "kind": "check",
+          "title": "passed: sources-cited",
+          "detail": "1 source(s) cited"
+        },
+        {
+          "seq": 59,
+          "at": "2026-09-27T16:57:00.060Z",
+          "kind": "check",
+          "title": "passed: sources-visited",
+          "detail": "every cited source was reached by this task's browser"
+        },
+        {
+          "seq": 60,
+          "at": "2026-09-27T16:57:00.061Z",
+          "kind": "check",
+          "title": "passed: sources-in-policy",
+          "detail": "every cited source is inside the allowed destinations"
+        },
+        {
+          "seq": 61,
+          "at": "2026-09-27T16:57:00.063Z",
+          "kind": "phase",
+          "title": "Outcome RESULT_VERIFIED",
+          "detail": "all 10 completion checks of profile web-analysis passed"
+        }
+      ]
+    }
+  }
+}
