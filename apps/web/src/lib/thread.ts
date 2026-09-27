@@ -147,7 +147,8 @@ function toMark(ev: RunEvent): Extract<ThreadItem, { type: "mark" }> {
     seq: ev.seq,
     at: ev.at,
     kind: ev.kind,
-    title: phase ? PHASE_LABEL[phase] : ev.title,
+    // A check recorded on a dev-unsafe runtime says so in its title, not only in its colour.
+    title: phase ? PHASE_LABEL[phase] : ev.kind === "check" && record(ev.data)?.["devUnsafe"] === true && !/dev-unsafe/i.test(ev.title) ? `${ev.title} (dev-unsafe)` : ev.title,
     detail: ev.detail,
     tone: markTone(ev),
     phase,

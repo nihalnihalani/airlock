@@ -19,7 +19,7 @@
 ![Hono](https://img.shields.io/badge/Hono-API-E36002?style=flat-square&logo=hono&logoColor=white)
 ![React](https://img.shields.io/badge/React-Vite-61DAFB?style=flat-square&logo=react&logoColor=black)
 ![Python](https://img.shields.io/badge/Python-3.12%20runtime-3776AB?style=flat-square&logo=python&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-186%20control%20%C2%B7%2064%20supervisor%20%C2%B7%2041%20web%20%C2%B7%2071%20runtime-16a34a?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-186%20control%20%C2%B7%2064%20supervisor%20%C2%B7%2045%20web%20%C2%B7%2071%20runtime-16a34a?style=flat-square)
 
 <br />
 <br />
