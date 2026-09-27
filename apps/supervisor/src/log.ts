@@ -30,6 +30,11 @@ const ORDER: Record<LogLevel, number> = { error: 0, warn: 1, info: 2, debug: 3 }
 export const LOG_LEVELS = Object.keys(ORDER) as LogLevel[];
 
 const SECRET_KEY = /(token|authorization|cookie|passw|secret|api[-_]?key|credential|set-cookie|bearer)/i;
+/** Plural *Tokens fields (maxTokens, promptTokens, reasoningTokens) are counts, not credentials. */
+const COUNT_KEY = /tokens$/i;
+export function isSecretKey(name: string): boolean {
+  return SECRET_KEY.test(name) && !COUNT_KEY.test(name);
+}
 const SECRET_VALUE = /^(bearer\s+\S+|airlock_session=\S+)/i;
 const MAX_DEPTH = 6;
 const MAX_STRING = 4096;
@@ -54,7 +59,7 @@ export function redact(value: unknown, depth = 0): unknown {
   if (typeof value === "object") {
     const out: Record<string, unknown> = {};
     for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
-      out[key] = SECRET_KEY.test(key) ? (v === undefined || v === null || v === "" ? v : "[redacted]") : redact(v, depth + 1);
+      out[key] = isSecretKey(key) ? (v === undefined || v === null || v === "" ? v : "[redacted]") : redact(v, depth + 1);
     }
     return out;
   }

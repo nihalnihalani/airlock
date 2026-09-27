@@ -52,6 +52,8 @@ describe("logger", () => {
       list: [{ apiKey: TOKEN }],
       safe: "kept",
       emptyToken: "",
+      maxTokens: 16384,
+      usage: { promptTokens: 10, reasoningTokens: 5 },
     });
     const line = lines[0]!.line;
     expect(line).not.toContain(TOKEN);
@@ -67,6 +69,8 @@ describe("logger", () => {
     expect(r.list[0].apiKey).toBe("[redacted]");
     expect(r.safe).toBe("kept");
     expect(r.emptyToken).toBe("");
+    expect(r.maxTokens).toBe(16384);
+    expect(r.usage).toEqual({ promptTokens: 10, reasoningTokens: 5 });
   });
 
   test("redact bounds strings, arrays and depth, and survives cycles", () => {
