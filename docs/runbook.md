@@ -64,5 +64,6 @@ Production refuses dev-unsafe hosts, runc, and unpinned images on both planes. R
 | Runtime tier measured (Kata on VX1) | **blocked** | `deploy/preflight.sh` with Vultr access |
 | Live Vultr inference (repair, general, vision) | **blocked** | `VULTR_INFERENCE_API_KEY` |
 | Public demo URL on this revision | **blocked** | `deploy/deploy.sh` with Vultr access |
-| Demo video (useful work + containment + teardown) | **blocked** on the deployment; a local recording can be made meanwhile | — |
+| Demo video (useful work + containment + teardown) | local labelled recording done; **Vultr recording blocked** | [docs/demo/local-demo.mp4](demo/local-demo.mp4) (LOCAL DEV-UNSAFE, scripted); the deployment recording needs Vultr access |
+| Independent review | verifier: local acceptance, C41 crash/restart 7/7; devil's advocate: R1, S1–S4, L1, N1 closed; L2, L3, N2 documented limitations | [acceptance-matrix.md](acceptance-matrix.md), ledger |
 | NetBird bonus | not attempted (optional) | — |
