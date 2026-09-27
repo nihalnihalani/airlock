@@ -29,7 +29,7 @@ unreachable; the configured runtime is not listed by `docker info`; `AIRLOCK_RUN
 | `SUPERVISOR_BIND` | `127.0.0.1` | Bind address. A deployment sets the **VPC** address of VM B; never a public interface. |
 | `AIRLOCK_RUNTIME` | `kata` | `kata` \| `runsc` \| `runc`. Which OCI runtime every sandbox is created with, and what is checked on inspection. |
 | `AIRLOCK_DEV_UNSAFE` | unset | Must be `1` to allow `runc`. Then every inspection and attempt record carries `devUnsafe: true`. |
-| `AIRLOCK_DOCKER_RUNTIME_NAME` | `kata`/`runsc`/`runc` | Override for the name Docker lists the runtime under (e.g. `io.containerd.kata.v2`). |
+| `AIRLOCK_DOCKER_RUNTIME_NAME` | `kata`/`runsc`/`runc` | Override for the name Docker lists the runtime under (e.g. `io.containerd.kata.v2`). Refused at start when the name belongs to a different tier than `AIRLOCK_RUNTIME` (a name matching `runc`/`crun`/`youki` is runc, `kata` is kata, `runsc`/`gvisor` is runsc). Inspection classifies the effective name the same way before it trusts the configured tier, so a container that actually runs on runc is always recorded `runc` + `devUnsafe`. |
 | `AIRLOCK_PROFILES_DIR` | `<repo>/profiles` | Directory of `<id>/profile.json` manifests. |
 | `AIRLOCK_DATA_DIR` | `<repo>/data/supervisor` | Journal and host sentinel. |
 | `AIRLOCK_JOURNAL_PATH` | `<data dir>/supervisor-journal.sqlite` | `bun:sqlite` execution journal. |

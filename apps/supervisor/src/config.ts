@@ -30,6 +30,17 @@ export type ConfigResult = { ok: true; config: SupervisorConfig } | { ok: false;
 
 const DOCKER_RUNTIME_NAME: Record<RuntimeName, string> = { kata: "kata", runsc: "runsc", runc: "runc" };
 
+/**
+ * Classify a runtime name by what it says about itself, or `undefined` for a name that says nothing.
+ * Shared-kernel OCI runtimes (runc, crun, youki) are the lowest tier and are recognised first.
+ */
+export function runtimeTierOfName(name: string): RuntimeName | undefined {
+  if (/runc|crun|youki/i.test(name)) return "runc";
+  if (/kata/i.test(name)) return "kata";
+  if (/runsc|gvisor/i.test(name)) return "runsc";
+  return undefined;
+}
+
 function parsePort(raw: string | undefined, fallback: number): number | undefined {
   if (raw === undefined || raw.trim() === "") return fallback;
   if (!/^\d{1,5}$/.test(raw.trim())) return undefined;
@@ -65,6 +76,17 @@ export function loadConfig(env: Record<string, string | undefined>, repoRoot: st
   const dockerRuntimeOverride = env.AIRLOCK_DOCKER_RUNTIME_NAME?.trim();
   if (dockerRuntimeOverride && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(dockerRuntimeOverride)) {
     return { ok: false, reason: "AIRLOCK_DOCKER_RUNTIME_NAME is not a runtime name." };
+  }
+  if (dockerRuntimeOverride) {
+    // The override names the runtime Docker lists; it cannot name a runtime of a different tier
+    // than AIRLOCK_RUNTIME, or every inspection would carry an assumed tier (CLAUDE.md §3.8).
+    const tierByName = runtimeTierOfName(dockerRuntimeOverride);
+    if (tierByName !== undefined && tierByName !== runtime.data) {
+      return {
+        ok: false,
+        reason: `AIRLOCK_DOCKER_RUNTIME_NAME=${dockerRuntimeOverride} names a ${tierByName} runtime but AIRLOCK_RUNTIME=${runtime.data}. The recorded tier is inspected, never assumed; fix one of them.`,
+      };
+    }
   }
   const dataDir = resolve(repoRoot, env.AIRLOCK_DATA_DIR?.trim() || "data/supervisor");
   const journalPath = resolve(repoRoot, env.AIRLOCK_JOURNAL_PATH?.trim() || `${dataDir}/supervisor-journal.sqlite`);

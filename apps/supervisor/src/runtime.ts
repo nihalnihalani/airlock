@@ -27,6 +27,7 @@ import type {
   ExecSpec,
   VolumeDetail,
 } from "./docker-api";
+import { runtimeTierOfName } from "./config";
 import { SupervisorError, describe, dockerUnavailable, statusOf } from "./errors";
 import { SANDBOX_USER, runExec, timedCommand } from "./exec";
 import { ours } from "./names";
@@ -183,12 +184,18 @@ export function checkEffective(detail: ContainerDetail, expected: ExpectedSandbo
   return { checks, runtimeMatches, identityMatches, allPassed, failures };
 }
 
-/** Docker's effective runtime string → contract RuntimeName. Unknown names never map to a safer tier. */
+/**
+ * Docker's effective runtime string → contract RuntimeName. The name is classified BEFORE the
+ * configured tier is consulted, so a container that actually runs on `runc` is recorded as `runc`
+ * (and therefore dev-unsafe) even when the configuration claims kata or gVisor (CLAUDE.md §3.8).
+ * Only a name that says nothing about its tier is taken as the configured one, and only when it is
+ * exactly the docker name this supervisor was configured to create containers with.
+ */
 export function runtimeNameOf(effective: string, configured: RuntimeName, dockerRuntime: string, defaultRuntime: string): RuntimeName {
   const name = effective === "" ? defaultRuntime : effective;
+  const byName = runtimeTierOfName(name);
+  if (byName !== undefined) return byName;
   if (name === dockerRuntime) return configured;
-  if (/kata/i.test(name)) return "kata";
-  if (/runsc|gvisor/i.test(name)) return "runsc";
   return "runc";
 }
 
