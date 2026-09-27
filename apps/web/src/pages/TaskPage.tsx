@@ -324,14 +324,14 @@ export function TaskPage({ id }: { id: string }) {
               <div className="min-w-0 flex-1 text-sm">
                 {task ? (
                   task.outcome ? (
-                    <span className="flex min-w-0 items-center gap-2">
+                    <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                       <OutcomeBadge outcome={task.outcome} />
-                      <span className="truncate text-muted-foreground">Finished in the {PHASE_LABEL[task.phase].toLowerCase()} phase</span>
+                      <span className="text-pretty text-muted-foreground">Finished in the {PHASE_LABEL[task.phase].toLowerCase()} phase</span>
                     </span>
                   ) : terminal ? (
-                    <span className="flex items-center gap-2">
+                    <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
                       <Badge tone={task.status === "cancelled" ? "neutral" : "bad"}>{STATUS_LABEL[task.status]}</Badge>
-                      <span className="truncate text-muted-foreground">No outcome was recorded</span>
+                      <span className="text-pretty text-muted-foreground">No outcome was recorded</span>
                     </span>
                   ) : (
                     <span className="tool-line-running text-muted-foreground">
