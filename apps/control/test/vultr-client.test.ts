@@ -273,11 +273,25 @@ describe("listModels", () => {
           { id: "bge-reranker-v2-m3", supported_parameters: ["top_n"] },
           { nope: true },
           { id: "z", capabilities: ["function_calling"] },
+          // Live Vultr schema 2.4 (observed 2026-09-26): a parameter descriptor nested under output_modalities.
+          {
+            id: "live-glm",
+            schema_version: "2.4",
+            output_modalities: [{ type: "text", supported_parameters: { max_tokens: { type: "integer" }, tools: { type: "boolean" } } }],
+          },
+          { id: "live-reranker", schema_version: "2.4", output_modalities: [{ type: "text", supported_parameters: { top_n: { type: "integer" } } }] },
         ],
       }),
     ]);
     const models = await listModels(BASE, undefined, { fetch });
-    expect(models.map((m) => [m.id, m.tools])).toEqual([["glm-5.3", true], ["other", true], ["bge-reranker-v2-m3", false], ["z", true]]);
+    expect(models.map((m) => [m.id, m.tools])).toEqual([
+      ["glm-5.3", true],
+      ["other", true],
+      ["bge-reranker-v2-m3", false],
+      ["z", true],
+      ["live-glm", true],
+      ["live-reranker", false],
+    ]);
     expect(calls[0]?.url).toBe(`${BASE}/models`);
     expect((calls[0]?.init.headers as Record<string, string>).authorization).toBeUndefined();
     await expect(listModels(BASE, KEY, { fetch: fakeFetch([json({ nope: 1 })]).fetch })).rejects.toMatchObject({ kind: "protocol" });

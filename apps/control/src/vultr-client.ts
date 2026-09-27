@@ -398,13 +398,35 @@ export interface ModelEntry {
   raw: Record<string, unknown>;
 }
 
-/** Reads `supported_parameters` in either its array or object form. */
-function advertisesTools(entry: Record<string, unknown>): boolean {
-  const sp = entry.supported_parameters;
+/**
+ * Reads a `supported_parameters` value in its array form, its `{tools: true}` object form, or the
+ * live Vultr schema-2.4 form `{tools: {type: "boolean"}}` (a parameter descriptor, not a flag).
+ */
+function supportedParametersAdvertiseTools(sp: unknown): boolean | undefined {
   if (Array.isArray(sp)) return sp.some((v) => v === "tools" || v === "tool_choice");
   if (sp && typeof sp === "object") {
     const o = sp as Record<string, unknown>;
-    return o.tools === true || o.tool_choice === true;
+    const has = (v: unknown) => v === true || (v !== null && typeof v === "object");
+    return has(o.tools) || has(o.tool_choice);
+  }
+  return undefined;
+}
+
+/**
+ * Whether the catalog advertises tool calling. The live Vultr catalog (schema 2.4, observed
+ * 2026-09-26) nests it at `output_modalities[].supported_parameters.tools`; older/alternative
+ * shapes put `supported_parameters` or `capabilities` at the top level.
+ */
+function advertisesTools(entry: Record<string, unknown>): boolean {
+  const top = supportedParametersAdvertiseTools(entry.supported_parameters);
+  if (top !== undefined) return top;
+  const outputs = entry.output_modalities;
+  if (Array.isArray(outputs)) {
+    for (const o of outputs) {
+      if (!o || typeof o !== "object") continue;
+      const nested = supportedParametersAdvertiseTools((o as Record<string, unknown>).supported_parameters);
+      if (nested) return true;
+    }
   }
   const caps = entry.capabilities;
   if (Array.isArray(caps)) return caps.some((v) => v === "tools" || v === "function_calling");
