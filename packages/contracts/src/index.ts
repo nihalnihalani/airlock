@@ -62,7 +62,13 @@ export const Phase = z.enum([
 ]);
 export type Phase = z.infer<typeof Phase>;
 
-/** Terminal outcomes (35 §3). "CANDIDATE_PASSED_CHECKS" means exactly the frozen cases passed. */
+/**
+ * Terminal outcomes. Repair (35 §3): "CANDIDATE_PASSED_CHECKS" means exactly the frozen cases passed.
+ * General tasks (40 §6): RESULT_VERIFIED = every completion check of the task profile passed;
+ * RESULT_PARTIAL = some required checks failed but outputs exist; RESULT_FAILED = no acceptable
+ * result; UNSUPPORTED = the goal needs a capability this deployment does not offer.
+ * INCONCLUSIVE and STOPPED_LIMIT apply to both.
+ */
 export const Outcome = z.enum([
   "NOT_REPRODUCED",
   "REPRODUCED_UNRESOLVED",
@@ -70,6 +76,10 @@ export const Outcome = z.enum([
   "CHECKS_FAILED",
   "INCONCLUSIVE",
   "STOPPED_LIMIT",
+  "RESULT_VERIFIED",
+  "RESULT_PARTIAL",
+  "RESULT_FAILED",
+  "UNSUPPORTED",
 ]);
 export type Outcome = z.infer<typeof Outcome>;
 
@@ -85,7 +95,11 @@ export const TaskStatus = z.enum([
 export type TaskStatus = z.infer<typeof TaskStatus>;
 
 /** Container roles the supervisor may create. Each is disposable and per attempt. */
-export const SandboxRole = z.enum(["author", "baseline", "candidate", "preview", "hostile", "browser"]);
+/**
+ * `analysis` (offline Python data image) and `node` (offline Node image) are general code sandboxes:
+ * they receive input bytes, run model-written code without network, and hand back bounded outputs.
+ */
+export const SandboxRole = z.enum(["author", "baseline", "candidate", "preview", "hostile", "browser", "analysis", "node"]);
 export type SandboxRole = z.infer<typeof SandboxRole>;
 
 // ---------------------------------------------------------------------------------------------
@@ -444,6 +458,8 @@ export const AttemptState = z.object({
 export type AttemptState = z.infer<typeof AttemptState>;
 
 export const AuthorToolArgs = z.discriminatedUnion("kind", [
+  /** Binary placement for analysis/node inputs; the supervisor allows it only under `inputs/`. */
+  z.object({ kind: z.literal("put"), path: relPath, contentBase64: z.string().max(11_184_812) }),
   z.object({ kind: z.literal("read"), path: relPath }),
   z.object({ kind: z.literal("write"), path: relPath, content: z.string().max(1_048_576) }),
   z.object({ kind: z.literal("exec"), command: z.string().min(1).max(4096) }),
@@ -458,6 +474,7 @@ export const AuthorToolRequest = z.object({
 export const AuthorToolResult = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("read"), content: z.string(), truncated: z.boolean() }),
   z.object({ kind: z.literal("write"), byteLength: z.number().int().nonnegative() }),
+  z.object({ kind: z.literal("put"), byteLength: z.number().int().nonnegative(), sha256: sha256Hex }),
   z.object({ kind: z.literal("exec"), result: ExecResult }),
   z.object({ kind: z.literal("refused"), reason: z.string() }),
 ]);
@@ -473,6 +490,26 @@ export const FreezeResult = z.object({
 export type FreezeResult = z.infer<typeof FreezeResult>;
 
 /** Baseline: pristine tree. Candidate/preview: pristine tree plus the bundle's replacements. */
+/** One output file from a stopped analysis/node workspace (runtime/outputs/collect_outputs.py). */
+export const OutputFile = z.object({
+  path: relPath,
+  byteLength: z.number().int().nonnegative(),
+  sha256: sha256Hex,
+  mediaType: z.string().max(64),
+  contentBase64: z.string(),
+});
+export type OutputFile = z.infer<typeof OutputFile>;
+export const OutputEnvelope = z.object({
+  schemaVersion: z.literal(SCHEMA_VERSION),
+  files: z.array(OutputFile),
+  rejected: z.array(z.object({ path: z.string().max(512), reason: z.string().max(256) })),
+});
+export type OutputEnvelope = z.infer<typeof OutputEnvelope>;
+/** Stop the analysis/node sandbox (revoke → stop → settle → inspect) and collect `outputs/` read-only. */
+export const CollectOutputsRequest = z.object({ ref: AttemptRef, operation: Operation });
+export const CollectOutputsResult = z.object({ stoppedAt: isoDate, stopConfirmed: z.boolean(), envelope: OutputEnvelope });
+export type CollectOutputsResult = z.infer<typeof CollectOutputsResult>;
+
 export const InvokeRequest = z.object({
   operation: Operation,
   taskId: plainId,
@@ -638,6 +675,45 @@ export const Budget = z.object({
 });
 
 /** One sealed candidate and its external comparison; a task may produce one per repair attempt. */
+/**
+ * An immutable, content-addressed file the control plane holds for a task: an owner upload, a
+ * collected output, a screenshot or a browser download. Bytes are served only to the owner (or an
+ * operator), with a safe disposition and nosniff; never rendered as active content on the app origin.
+ */
+export const ArtifactKind = z.enum(["upload", "output", "screenshot", "download"]);
+export const Artifact = z.object({
+  schemaVersion: z.literal(SCHEMA_VERSION),
+  id: plainId,
+  owner: z.string(),
+  taskId: plainId.optional(),
+  kind: ArtifactKind,
+  filename: z.string().min(1).max(255),
+  mediaType: z.string().max(128),
+  byteLength: z.number().int().nonnegative(),
+  sha256: sha256Hex,
+  createdAt: isoDate,
+  /** Provenance: the page it came from, the step and tool that produced it. Untrusted text, bounded. */
+  source: z.object({ url: z.string().max(2048).optional(), step: z.number().int().nonnegative().optional(), tool: z.string().max(64).optional(), attemptId: plainId.optional() }).optional(),
+});
+export type Artifact = z.infer<typeof Artifact>;
+
+/** Where cleanup stands, separately from the workflow status and the result (40 §6). */
+export const CleanupState = z.object({
+  status: z.enum(["none", "pending", "confirmed", "failed", "retrying"]),
+  detail: z.string().max(1024).optional(),
+  at: isoDate.optional(),
+});
+export type CleanupState = z.infer<typeof CleanupState>;
+
+/** A general task's result: what it produced and the controller's completion checks (never the model's claim). */
+export const TaskResult = z.object({
+  summary: z.string().max(8000),
+  outputArtifactIds: z.array(plainId).max(50),
+  sources: z.array(z.object({ url: z.string().max(2048), title: z.string().max(512).optional(), screenshotArtifactId: plainId.optional() })).max(50),
+  checks: z.array(z.object({ name: z.string().max(128), passed: z.boolean(), detail: z.string().max(1024) })),
+});
+export type TaskResult = z.infer<typeof TaskResult>;
+
 export const CandidateAttempt = z.object({
   attemptId: plainId,
   candidateDigest: sha256Hex,
@@ -679,6 +755,13 @@ export const Task = z.object({
   repairDisabledReason: z.string().max(1024).optional(),
   /** Created by the live-repair gate (operator only); see CreateTaskRequest.liveGate. */
   liveGate: z.boolean().optional(),
+  /** Absent or "repair": the code-repair profile flow. "general": a goal run by a general task profile. */
+  kind: z.enum(["repair", "general"]).optional(),
+  /** General tasks: the owner's input artifacts and the destinations the browser may reach. */
+  inputArtifactIds: z.array(plainId).max(10).optional(),
+  egressAllow: z.array(z.string().max(253)).max(16).optional(),
+  result: TaskResult.optional(),
+  cleanup: CleanupState.optional(),
   createdAt: isoDate,
   updatedAt: isoDate,
 });
@@ -759,6 +842,15 @@ export const CreateTaskRequest = z.object({
    * control plane runs with `AIRLOCK_MODEL_DRIVER=scripted:<directory>` and the script exists.
    */
   scriptedDriver: plainId.optional(),
+  /** "general" runs a goal under a general task profile (profileId names it); default "repair". */
+  kind: z.enum(["repair", "general"]).optional(),
+  /** General tasks: uploaded artifact ids (owner's own) the task may read. */
+  inputArtifactIds: z.array(plainId).max(10).optional(),
+  /**
+   * General tasks: destinations the browser may reach (exact hostnames, or `.suffix` for
+   * subdomains). Set by the owner here, never by a page or the model; bounded by the profile.
+   */
+  egressAllow: z.array(z.string().min(1).max(253).regex(/^\.?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/)).max(16).optional(),
   /**
    * Operator only: this task is an attempt of the live-repair gate, the run that produces the
    * evidence repair availability requires, so it is not repair-disabled for lacking that evidence.

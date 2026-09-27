@@ -218,6 +218,11 @@ export class FakeSupervisor implements SupervisorClient {
       attempt.files.set(args.path, args.content);
       return { kind: "write", byteLength: Buffer.byteLength(args.content, "utf8") };
     }
+    if (args.kind === "put") {
+      const bytes = Buffer.from(args.contentBase64, "base64");
+      attempt.files.set(args.path, bytes.toString("utf8"));
+      return { kind: "put", byteLength: bytes.byteLength, sha256: createHash("sha256").update(bytes).digest("hex") };
+    }
     const exec = this.options.exec ?? (async (command: string) => okExec({ stdout: `ran ${command}` }));
     return { kind: "exec", result: await exec(args.command, attempt.files, opts?.signal) };
   }
