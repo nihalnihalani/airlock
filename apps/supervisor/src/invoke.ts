@@ -20,6 +20,7 @@ import {
 import { SupervisorError } from "./errors";
 import { SANDBOX_USER, SUPERVISOR_GRACE_MS, runExec, timedCommand } from "./exec";
 import { type OperationResponse, type Supervisor } from "./lifecycle";
+import { log } from "./log";
 import { oneShotLabels, oneShotNames, ownedFilter } from "./names";
 import { ancestorDirs, createTar } from "./tar";
 import type { InvokeRequest } from "./types";
@@ -190,6 +191,7 @@ export async function invoke(core: Supervisor, body: InvokeRequest): Promise<Ope
       }
       await core.removeResources(names.value.container, names.value.volume);
       const teardown = await core.teardownRecord(filter);
+      log.info("one-shot invocation finished", { operationId: body.operation.operationId, taskId: names.value.taskId, role: body.role, container: names.value.container, cases: body.request.cases.length, replacementFiles: files.length, exec: exec.status, exitCode: exec.exitCode, execMs: exec.durationMs, observations: observations.length, protocolErrors: protocolErrors.length, teardownClean: teardown.clean });
       const result: InvokeResult = {
         operationId: body.operation.operationId,
         role: body.role,

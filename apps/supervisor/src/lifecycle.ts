@@ -33,6 +33,7 @@ import { SANDBOX_USER, SUPERVISOR_GRACE_MS, authorCommand, runExec, timedCommand
 import type { HostReport } from "./host";
 import { type AttemptNames, attemptLabels, attemptNames, ours, ownedFilter, ATTEMPT_LABEL, OPERATION_LABEL, ROLE_LABEL, TASK_LABEL } from "./names";
 import { type AttemptRecord, Journal, attemptStateOf } from "./operations";
+import { createLogger, log, type Logger } from "./log";
 import { runProbe } from "./probe";
 import { type ExpectedSandbox, InspectionFailed, type SandboxSpec, inspectSandbox, sandboxCreateSpec, workspaceDriverOpts, workspaceVolumeBounded } from "./runtime";
 import { ancestorDirs, createTar } from "./tar";
@@ -55,7 +56,8 @@ export interface CoreDeps {
   config: SupervisorConfig;
   profiles: Map<string, ProfileManifest>;
   host: HostReport;
-  log?: (message: string) => void;
+  /** Test seam: a Logger, or a plain sink that receives each finished JSON line. Default: the process logger. */
+  log?: Logger | ((line: string) => void);
 }
 
 export interface ProvisionRequest {
@@ -81,7 +83,7 @@ export class Supervisor {
   readonly config: SupervisorConfig;
   readonly profiles: Map<string, ProfileManifest>;
   readonly host: HostReport;
-  private readonly log: (message: string) => void;
+  private readonly log: Logger;
   private readonly outstanding = new Map<string, Set<Promise<unknown>>>();
   private readonly locks = new Map<string, Promise<void>>();
   private readonly revokeSignals = new Map<string, AbortController>();
@@ -95,7 +97,7 @@ export class Supervisor {
     this.config = deps.config;
     this.profiles = deps.profiles;
     this.host = deps.host;
-    this.log = deps.log ?? ((m) => console.info(`[supervisor] ${m}`));
+    this.log = typeof deps.log === "function" ? createLogger({ app: "supervisor", level: "debug", write: (line) => (deps.log as (line: string) => void)(line) }) : (deps.log ?? log);
   }
 
   // -------------------------------------------------------------------------------------------
@@ -104,11 +106,11 @@ export class Supervisor {
 
   async start(): Promise<void> {
     const interrupted = this.journal.interruptPendingOperations();
-    if (interrupted > 0) this.log(`marked ${interrupted} pending operation(s) as interrupted after restart`);
+    if (interrupted > 0) this.log.warn("marked pending operations as interrupted after restart", { interrupted });
     await this.reconcile();
     await this.janitor();
     this.janitorTimer = setInterval(() => {
-      this.janitor().catch((error) => this.log(`janitor failed: ${describe(error)}`));
+      this.janitor().catch((error) => this.log.error("janitor failed", { error }));
     }, this.config.janitorIntervalMs);
   }
 
@@ -121,26 +123,34 @@ export class Supervisor {
 
   /** Journal vs Docker: a live attempt whose container is gone becomes unknown; revoked ones are stopped. */
   private async reconcile(): Promise<void> {
+    const startedAt = Date.now();
+    const seen = { attempts: 0, missing: 0, stopped: 0, rearmed: 0 };
     for (const record of this.journal.listAttempts()) {
       if (record.status === "destroyed") continue;
+      seen.attempts += 1;
       const detail = await this.api.inspectContainer(record.container);
       if (!detail) {
         this.journal.updateAttempt(record.attemptId, { status: "unknown", revoked: true });
-        this.log(`attempt ${record.attemptId}: container missing after restart; marked unknown`);
+        this.log.warn("attempt container missing after restart; marked unknown", { attemptId: record.attemptId, container: record.container });
+        seen.missing += 1;
         continue;
       }
       if (record.revoked || record.deadline < new Date().toISOString()) {
         if (detail.state.running) await this.api.stopContainer(record.container, STOP_SECONDS);
         if (!record.revoked) this.journal.revoke(record.attemptId, "revoked");
+        seen.stopped += 1;
         continue;
       }
       if (record.status === "running" && !detail.state.running) {
         // It stopped while nobody was watching: nothing may dispatch into it again.
         this.journal.revoke(record.attemptId, "unknown");
+        this.log.warn("attempt container stopped while unobserved; dispatch closed", { attemptId: record.attemptId, container: record.container });
         continue;
       }
       this.armDeadline(record);
+      seen.rearmed += 1;
     }
+    this.log.debug("reconcile pass", { ...seen, durationMs: Date.now() - startedAt });
   }
 
   // -------------------------------------------------------------------------------------------
@@ -155,18 +165,23 @@ export class Supervisor {
 
   /** Idempotent operation wrapper: same id + digest replays; different digest conflicts. */
   async withOperation(operation: Operation, kind: string, fn: () => Promise<OperationResponse>): Promise<OperationResponse> {
+    const startedAt = Date.now();
     const begin = this.journal.beginOperation(operation, kind);
+    if (begin.kind !== "new") this.log.debug("journal: operation not new", { operationId: operation.operationId, kind, outcome: begin.kind, ...(begin.kind === "replay" ? { httpStatus: begin.httpStatus } : {}) });
     if (begin.kind === "replay") return { status: begin.httpStatus, body: begin.result };
     if (begin.kind === "conflict") throw new SupervisorError("operation_conflict", `Operation ${operation.operationId} already exists with a different request digest.`);
     if (begin.kind === "in_progress") throw new SupervisorError("operation_in_progress", `Operation ${operation.operationId} is still in progress.`);
+    this.log.debug("journal: operation begun", { operationId: operation.operationId, kind });
     try {
       const response = await fn();
       this.journal.completeOperation(operation.operationId, response.status, response.body);
+      this.log.debug("journal: operation completed", { operationId: operation.operationId, kind, status: response.status, durationMs: Date.now() - startedAt });
       return response;
     } catch (error) {
       const status = error instanceof SupervisorError ? error.status : 500;
       const body = { error: describe(error), code: error instanceof SupervisorError ? error.code : "internal" };
       this.journal.completeOperation(operation.operationId, status, body);
+      this.log.debug("journal: operation failed", { operationId: operation.operationId, kind, status, code: body.code, durationMs: Date.now() - startedAt, error });
       throw error;
     }
   }
@@ -246,8 +261,10 @@ export class Supervisor {
       await this.api.createContainer(sandboxCreateSpec(expected));
       await this.api.startContainer(request.container);
       const { inspection } = await this.inspect(expected, { requireRunning: true });
+      this.log.debug("sandbox provisioned", { container: request.container, volume: request.volume, image: request.profile.runtimeImage, runtime: inspection.runtime, devUnsafe: inspection.devUnsafe, allPassed: inspection.allPassed, guestHostname: inspection.guestHostname, mount: request.mount });
       return { inspection, expected, guest: { uname: inspection.guestUname, hostname: inspection.guestHostname } };
     } catch (error) {
+      this.log.warn("sandbox provisioning failed; removing its resources", { container: request.container, volume: request.volume, error });
       await this.removeResources(request.container, volumeCreated ? request.volume : undefined);
       throw error;
     }
@@ -269,23 +286,26 @@ export class Supervisor {
 
   /** Force-remove a container and (optionally) a volume; never throws. */
   async removeResources(container: string, volume?: string): Promise<void> {
+    const startedAt = Date.now();
     try {
       await this.api.removeContainer(container, true);
     } catch (error) {
-      this.log(`remove container ${container} failed: ${describe(error)}`);
+      this.log.warn("remove container failed", { container, error });
     }
     if (volume) {
       // Volume removal races the container's own removal; retry briefly.
       for (let i = 0; i < 5; i++) {
         try {
           await this.api.removeVolume(volume);
+          this.log.debug("resources removed", { container, volume, attempts: i + 1, durationMs: Date.now() - startedAt });
           return;
         } catch (error) {
-          if (i === 4) this.log(`remove volume ${volume} failed: ${describe(error)}`);
+          if (i === 4) this.log.warn("remove volume failed", { volume, error });
           await new Promise((r) => setTimeout(r, 200 * (i + 1)));
         }
       }
     }
+    this.log.debug("resources removed", { container, volume: volume ?? null, durationMs: Date.now() - startedAt });
   }
 
   /** Checkpoint 5: list what the supervisor still owns under these labels. */
@@ -327,9 +347,11 @@ export class Supervisor {
     if (existing) clearTimeout(existing);
     const delay = Math.min(Math.max(0, Date.parse(record.deadline) - Date.now()), MAX_TIMER_MS);
     const timer = setTimeout(() => {
-      this.expire(record.attemptId).catch((error) => this.log(`expire ${record.attemptId} failed: ${describe(error)}`));
+      this.log.debug("deadline timer fired", { attemptId: record.attemptId, deadline: record.deadline });
+      this.expire(record.attemptId).catch((error) => this.log.error("expire failed", { attemptId: record.attemptId, error }));
     }, delay);
     this.deadlineTimers.set(record.attemptId, timer);
+    this.log.debug("deadline armed", { attemptId: record.attemptId, deadline: record.deadline, delayMs: delay });
   }
 
   /**
@@ -341,7 +363,7 @@ export class Supervisor {
     await this.withLock(attemptId, async () => {
       const record = this.journal.getAttempt(attemptId);
       if (!record || record.status === "destroyed" || record.revoked) return;
-      this.log(`attempt ${attemptId}: deadline reached; revoking and stopping`);
+      this.log.info("attempt deadline reached; revoking and stopping", { attemptId, container: record.container, deadline: record.deadline });
       this.journal.revoke(attemptId, "revoked");
       this.closeDispatch(attemptId);
       await this.stopAndConfirm(record, "deadline");
@@ -355,13 +377,14 @@ export class Supervisor {
       const detail = await this.api.inspectContainer(record.container);
       if (detail?.state.running) {
         this.journal.updateAttempt(record.attemptId, { status: "unknown" });
-        this.log(`attempt ${record.attemptId}: container still running after ${reason} stop; marked unknown`);
+        this.log.warn("container still running after stop; marked unknown", { attemptId: record.attemptId, container: record.container, reason });
         return false;
       }
+      this.log.debug("stop confirmed", { attemptId: record.attemptId, container: record.container, reason });
       return true;
     } catch (error) {
       this.journal.updateAttempt(record.attemptId, { status: "unknown" });
-      this.log(`attempt ${record.attemptId}: stop after ${reason} failed: ${describe(error)}; marked unknown`);
+      this.log.warn("stop failed; marked unknown", { attemptId: record.attemptId, container: record.container, reason, error });
       return false;
     }
   }
@@ -429,6 +452,7 @@ export class Supervisor {
           await fail("internal", `Materializing the pristine source tree failed (${materialized.result.status}): ${materialized.result.stderr.slice(0, 400)}`);
         }
         const probe = await runProbe(this.api, names.container, "/workspace", signal);
+        this.log.debug("isolation probe", { attemptId: names.attemptId, container: names.container, allBlocked: probe.allBlocked, metadataEndpoint: probe.metadataEndpoint, dns: probe.dns, outboundTcp: probe.outboundTcp, dockerSocket: probe.dockerSocket, hostMounts: probe.hostMounts });
         if (!probe.allBlocked) {
           await fail("probe_failed", `Isolation probe not fully BLOCKED (${probeSummary(probe)}); sandbox destroyed and run refused.`, probe);
         }
@@ -439,6 +463,7 @@ export class Supervisor {
         }
         this.journal.updateAttempt(names.attemptId, { status: "running", inspection: provisioned.inspection, probe });
         this.armDeadline({ ...record, status: "running" });
+        this.log.info("attempt running", { attemptId: names.attemptId, taskId: names.taskId, role: body.role, container: names.container, runtime: provisioned.inspection.runtime, devUnsafe: provisioned.inspection.devUnsafe, deadline });
         const state = this.journal.getAttempt(names.attemptId);
         if (!state) throw new SupervisorError("internal", "Attempt vanished from the journal.");
         return { status: 200, body: attemptStateOf(state) };
@@ -550,14 +575,14 @@ export class Supervisor {
       const current = this.journal.getAttempt(record.attemptId);
       // Already revoked (freeze/revoke/deadline): whoever closed dispatch also stopped the container.
       if (!current || current.status === "destroyed" || current.revoked) return;
-      this.log(`attempt ${record.attemptId}: quarantine (${reason})`);
+      this.log.warn("attempt quarantined", { attemptId: record.attemptId, container: record.container, reason });
       this.journal.revoke(record.attemptId, "revoked");
       this.closeDispatch(record.attemptId);
       try {
         await this.api.stopContainer(record.container, STOP_SECONDS);
       } catch (error) {
         this.journal.updateAttempt(record.attemptId, { status: "unknown" });
-        this.log(`attempt ${record.attemptId}: stop after quarantine failed: ${describe(error)}`);
+        this.log.warn("stop after quarantine failed", { attemptId: record.attemptId, container: record.container, error });
       }
     });
   }
@@ -612,6 +637,7 @@ export class Supervisor {
         });
         // 6. collected in the fresh container with the volume read-only
         const result: FreezeResult = { stoppedAt: held.stoppedAt, stopConfirmed: true, outstandingOperationsSettled: held.settled, envelope };
+        this.log.info("attempt frozen and collected", { attemptId: record.attemptId, container: record.container, collector: names.collector, stoppedAt: held.stoppedAt, settled: held.settled, files: envelope.files.length, rejected: envelope.rejected.length, bytes: envelope.files.reduce((n, f) => n + f.byteLength, 0) });
         return { status: 200, body: result };
       }),
     );
@@ -690,9 +716,11 @@ export class Supervisor {
         const detail = await this.api.inspectContainer(record.container);
         if (detail?.state.running) {
           this.journal.updateAttempt(record.attemptId, { status: "unknown" });
+          this.log.warn("revoke: container did not stop; termination not confirmed", { attemptId: record.attemptId, container: record.container });
           throw new SupervisorError("docker_unavailable", `Container ${record.container} did not stop; termination is not confirmed.`);
         }
         const state = this.journal.getAttempt(record.attemptId);
+        this.log.info("attempt revoked and stopped", { attemptId: record.attemptId, container: record.container, status: state?.status ?? current.status });
         return { status: 200, body: attemptStateOf(state ?? current) };
       }),
     );
@@ -712,6 +740,7 @@ export class Supervisor {
         this.outstanding.delete(record.attemptId);
         this.revokeSignals.delete(record.attemptId);
         const result: DestroyResult = { teardown };
+        this.log.info(teardown.clean ? "attempt destroyed" : "attempt teardown incomplete", { attemptId: record.attemptId, container: names.container, volume: names.volume, containersRemaining: teardown.containersRemaining, volumesRemaining: teardown.volumesRemaining });
         return { status: 200, body: result };
       }),
     );
@@ -741,7 +770,7 @@ export class Supervisor {
         if (!current || current.status !== "unknown") return;
         const detail = await this.api.inspectContainer(current.container);
         if (!detail?.state.running) return;
-        this.log(`attempt ${current.attemptId}: unknown and still running; retrying the stop`);
+        this.log.info("janitor: attempt unknown and still running; retrying the stop", { attemptId: current.attemptId, container: current.container });
         if (await this.stopAndConfirm(current, "janitor")) {
           this.journal.updateAttempt(current.attemptId, { status: "stopped" });
           report.expired.push(current.attemptId);
@@ -788,7 +817,7 @@ export class Supervisor {
           ? ephemerals.has(container.name)
           : attempt !== undefined && live.has(attempt) && live.get(attempt)?.container === container.name;
       if (known) continue;
-      this.log(`janitor: removing unknown container ${container.name}`);
+      this.log.info("janitor: removing unknown container", { container: container.name, labels: container.labels });
       await this.removeResources(container.name);
       if (attempt && !operation && role !== "collector") this.journal.tombstone(attempt, container.labels[TASK_LABEL] ?? "unknown", "unknown container removed by janitor");
       report.removedUnknown.push(container.name);
@@ -800,14 +829,15 @@ export class Supervisor {
         ? [...ephemerals.values()].some((e) => e.volume === volume.name)
         : attempt !== undefined && live.get(attempt)?.volume === volume.name;
       if (known) continue;
-      this.log(`janitor: removing unknown volume ${volume.name}`);
+      this.log.info("janitor: removing unknown volume", { volume: volume.name });
       try {
         await this.api.removeVolume(volume.name);
       } catch (error) {
-        this.log(`janitor: remove volume ${volume.name} failed: ${describe(error)}`);
+        this.log.warn("janitor: remove volume failed", { volume: volume.name, error });
       }
       report.removedUnknown.push(volume.name);
     }
+    this.log.debug("janitor pass", { ...report, durationMs: Date.now() - nowMs });
     return report;
   }
 }

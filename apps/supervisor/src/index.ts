@@ -39,6 +39,7 @@ import { checkHost } from "./host";
 import { type Sentinel, createSentinel, hostileRun } from "./hostile";
 import { invoke } from "./invoke";
 import { Supervisor } from "./lifecycle";
+import { log } from "./log";
 import { validateId } from "./names";
 import { Journal } from "./operations";
 import { loadProfiles } from "./profiles";
@@ -64,19 +65,37 @@ export function createApp(deps: AppDeps): Hono {
   const app = new Hono();
   const { core } = deps;
 
+  // Every request is logged at debug with its outcome (method, path, status, duration, body sizes);
+  // never a body and never the bearer token.
   app.use("*", async (c, next) => {
-    if (c.req.path === "/health" && c.req.method === "GET") return next();
-    if (!tokenMatches(c.req.header("authorization"), deps.token)) {
-      return c.json({ error: "Unauthorized.", code: "unauthorized" }, 401);
+    const startedAt = Date.now();
+    try {
+      if (c.req.path === "/health" && c.req.method === "GET") return await next();
+      if (!tokenMatches(c.req.header("authorization"), deps.token)) {
+        log.warn("unauthorized request", { method: c.req.method, path: c.req.path });
+        return c.json({ error: "Unauthorized.", code: "unauthorized" }, 401);
+      }
+      return await next();
+    } finally {
+      if (log.enabled("debug")) {
+        log.debug("http", {
+          method: c.req.method,
+          path: c.req.path,
+          status: c.res.status,
+          durationMs: Date.now() - startedAt,
+          requestBytes: Number(c.req.header("content-length") ?? "0") || 0,
+          responseBytes: Number(c.res.headers.get("content-length") ?? "0") || 0,
+        });
+      }
     }
-    return next();
   });
 
   app.onError((error, c) => {
     if (error instanceof SupervisorError) {
+      log.debug("request refused", { method: c.req.method, path: c.req.path, status: error.status, code: error.code, error: error.message });
       return c.json({ error: error.message, code: error.code }, error.status as 400);
     }
-    console.error(`[supervisor] unhandled error on ${c.req.method} ${c.req.path}: ${describe(error)}`);
+    log.error("unhandled error", { method: c.req.method, path: c.req.path, error });
     return c.json({ error: "Internal supervisor error.", code: "internal" }, 500);
   });
 
@@ -186,7 +205,7 @@ async function main(): Promise<void> {
   const repoRoot = resolve(import.meta.dir, "../../..");
   const loaded = loadConfig(process.env, repoRoot);
   if (!loaded.ok) {
-    console.error(loaded.reason);
+    log.error("configuration error", { error: loaded.reason });
     process.exit(1);
   }
   const config = loaded.config;
@@ -194,25 +213,27 @@ async function main(): Promise<void> {
   try {
     profiles = loadProfiles(config.profilesDir);
   } catch (error) {
-    console.error(describe(error));
+    log.error("profiles failed to load", { profilesDir: config.profilesDir, error: describe(error) });
     process.exit(1);
   }
   if (profiles.size === 0) {
-    console.error(`No profiles found under ${config.profilesDir}.`);
+    log.error("no profiles found", { profilesDir: config.profilesDir });
     process.exit(1);
   }
+  log.info("supervisor starting", { logLevel: log.level, bind: config.bind, port: config.port, runtime: config.runtime, dockerRuntime: config.dockerRuntime, devUnsafe: config.devUnsafe, namespace: config.namespace, profilesDir: config.profilesDir, dataDir: config.dataDir, journalPath: config.journalPath, dockerSocket: config.dockerSocket ?? null });
   const api = createDockerode(config.dockerSocket);
   if (!(await api.ping())) {
-    console.error("Docker is not reachable. The supervisor cannot start without the engine it supervises.");
+    log.error("Docker is not reachable. The supervisor cannot start without the engine it supervises.", { dockerSocket: config.dockerSocket ?? null });
     process.exit(1);
   }
   const host = await checkHost(api, config);
+  log.info("host check", { ...host.check });
   if (!host.runtimeAvailable) {
-    console.error(`Runtime ${config.dockerRuntime} (${config.runtime}) is not listed by Docker: ${host.check.availableRuntimes.join(", ") || "(none)"}. Refusing to start.`);
+    log.error("configured runtime is not listed by Docker; refusing to start", { runtime: config.runtime, dockerRuntime: config.dockerRuntime, availableRuntimes: host.check.availableRuntimes });
     process.exit(1);
   }
   if (config.devUnsafe) {
-    console.warn("[supervisor] AIRLOCK_DEV_UNSAFE=1 with runtime runc: every record is labelled dev-unsafe. This is never a deployment configuration.");
+    log.warn("AIRLOCK_DEV_UNSAFE=1 with runtime runc: every record is labelled dev-unsafe. This is never a deployment configuration.");
   }
   const sentinel = await createSentinel(config.dataDir);
   const journal = new Journal(config.journalPath);
@@ -220,11 +241,9 @@ async function main(): Promise<void> {
   await core.start();
   const app = createApp({ core, token: config.token, sentinel });
   const server = Bun.serve({ hostname: config.bind, port: config.port, fetch: app.fetch, maxRequestBodySize: MAX_BODY_BYTES, idleTimeout: 255 });
-  console.info(
-    `[supervisor] listening on http://${config.bind}:${config.port} runtime=${config.runtime} (${config.dockerRuntime})${config.devUnsafe ? " DEV-UNSAFE" : ""} profiles=${[...profiles.keys()].join(",")} kvm=${host.check.kvmPresent}`,
-  );
+  log.info("supervisor listening", { url: `http://${config.bind}:${config.port}`, runtime: config.runtime, dockerRuntime: config.dockerRuntime, devUnsafe: config.devUnsafe, profiles: [...profiles.keys()], kvm: host.check.kvmPresent });
   const shutdown = () => {
-    console.info("[supervisor] shutting down");
+    log.info("shutting down");
     core.stop();
     server.stop(true);
     journal.close();
@@ -236,7 +255,7 @@ async function main(): Promise<void> {
 
 if (import.meta.main) {
   main().catch((error) => {
-    console.error(`[supervisor] fatal: ${describe(error)}`);
+    log.error("fatal", { error });
     process.exit(1);
   });
 }

@@ -12,6 +12,7 @@ import { type BlastRadiusCard, sha256 } from "@airlock/contracts";
 import { SupervisorError } from "./errors";
 import { SANDBOX_USER, SUPERVISOR_GRACE_MS, authorCommand, runExec } from "./exec";
 import type { OperationResponse, Supervisor } from "./lifecycle";
+import { log } from "./log";
 import { oneShotLabels, oneShotNames, ownedFilter } from "./names";
 import { runProbe } from "./probe";
 import type { HostileRunRequest } from "./types";
@@ -90,6 +91,7 @@ export async function hostileRun(core: Supervisor, body: HostileRunRequest, sent
 
       await core.removeResources(n.container, n.volume);
       const teardown = await core.teardownRecord(filter);
+      log.info("hostile run finished", { operationId: body.operation.operationId, container: n.container, exec: outcome.result.status, exitCode: outcome.result.exitCode, reason, supervisorHealthy, hostSentinelUnchanged, otherAttemptsRunning, teardownClean: teardown.clean });
       const card: BlastRadiusCard = {
         operationId: body.operation.operationId,
         container: n.container,

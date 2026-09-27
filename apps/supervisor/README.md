@@ -37,6 +37,7 @@ unreachable; the configured runtime is not listed by `docker info`; `AIRLOCK_RUN
 | `AIRLOCK_NAMESPACE` | `airlock` | Deployment namespace in every container/volume name and label; two supervisors on one host must differ. |
 | `AIRLOCK_RETENTION_MS` | `1800000` | How long a stopped attempt's volume survives past its deadline before the janitor destroys it. |
 | `AIRLOCK_JANITOR_INTERVAL_MS` | `30000` | Janitor period. |
+| `AIRLOCK_LOG_LEVEL` | `info` | `error`, `warn`, `info` or `debug`. One JSON object per line (`{ts, level, app: "supervisor", msg, ...}`). `debug` adds every HTTP request/response (never a body or the bearer token), every Docker verb with container/volume names and duration (create, inspect, start, stop, remove, list, putArchive, exec start/end with exit code and captured byte counts), probe results, provisioning, reconcile/janitor passes and what they removed, deadline timers being armed and firing, and journal operations (operation id, new/replay/conflict/in-progress, completion status). `./run.sh` defaults it to `debug`. |
 
 ## Runtime tiers and what dev-unsafe means
 

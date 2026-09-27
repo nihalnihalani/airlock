@@ -14,6 +14,7 @@
 import type { ExecResult } from "@airlock/contracts";
 import type { DockerApi, ExecSpec } from "./docker-api";
 import { describe, statusOf, dockerUnavailable } from "./errors";
+import { log } from "./log";
 
 export const SANDBOX_USER = "1000:1000";
 /** Grace added on top of the in-container timeout before the supervisor abandons the exec. */
@@ -157,10 +158,12 @@ export async function runExec(
   }
   options.signal?.addEventListener("abort", onExternalAbort, { once: true });
 
+  log.debug("exec start", { container, user: spec.user, workingDir: spec.workingDir, argv: spec.cmd.map((a) => a.slice(0, 200)).slice(0, 12), timeoutMs: options.timeoutMs, outputBytes: options.outputBytes });
   let session;
   try {
     session = await api.exec(container, spec, controller.signal);
   } catch (error) {
+    log.debug("exec could not start", { container, durationMs: Date.now() - startedAt, error });
     options.signal?.removeEventListener("abort", onExternalAbort);
     const status = statusOf(error);
     // 404 no such container, 409 container stopped, 500 "container not running": nothing is running.
@@ -255,11 +258,13 @@ export async function runExec(
     status = "failed";
   }
 
-  return {
+  const outcome: ExecOutcome = {
     // An unknown exit code after a normal stream end is also loss of control: something may still run.
     controlLost: controlLost || exitCode === null,
     result: { status, exitCode, stdout, stderr, truncated: capture.truncated, timedOut, durationMs },
   };
+  log.debug("exec end", { container, status, exitCode, durationMs, stdoutChars: stdout.length, stderrChars: stderr.length, truncated: capture.truncated, timedOut, controlLost: outcome.controlLost, ...(streamError ? { streamError } : {}) });
+  return outcome;
 }
 
 function appendNote(stderr: string, note: string): string {

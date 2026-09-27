@@ -29,6 +29,7 @@ import type {
 } from "./docker-api";
 import { runtimeTierOfName } from "./config";
 import { SupervisorError, describe, dockerUnavailable, statusOf } from "./errors";
+import { log } from "./log";
 import { SANDBOX_USER, runExec, timedCommand } from "./exec";
 import { ours } from "./names";
 
@@ -296,6 +297,60 @@ export class InspectionFailed extends SupervisorError {
 // ---------------------------------------------------------------------------------------------
 
 export function createDockerode(socketPath: string | undefined): DockerApi {
+  return traceDockerApi(createRawDockerode(socketPath));
+}
+
+/** Debug line per Docker verb: names, duration, a bounded summary of the result, never image bytes or stream content. */
+export function traceDockerApi(api: DockerApi): DockerApi {
+  const fields: { [K in keyof DockerApi]: (args: Parameters<DockerApi[K]>) => Record<string, unknown> } = {
+    ping: () => ({}),
+    version: () => ({}),
+    info: () => ({}),
+    inspectImage: ([ref]) => ({ image: ref }),
+    createVolume: ([name, , driverOpts]) => ({ volume: name, driverOpts }),
+    inspectVolume: ([name]) => ({ volume: name }),
+    removeVolume: ([name]) => ({ volume: name }),
+    listVolumes: ([filters]) => ({ filters }),
+    createContainer: ([spec]) => ({ container: spec.name, image: spec.image, runtime: spec.hostConfig.runtime, network: spec.hostConfig.networkMode, user: spec.user }),
+    startContainer: ([name]) => ({ container: name }),
+    stopContainer: ([name, timeoutSeconds]) => ({ container: name, timeoutSeconds }),
+    removeContainer: ([name, force]) => ({ container: name, force }),
+    inspectContainer: ([name]) => ({ container: name }),
+    listContainers: ([filters]) => ({ filters }),
+    putArchive: ([name, tar, path]) => ({ container: name, bytes: tar.byteLength, path }),
+    exec: ([name, spec]) => ({ container: name, user: spec.user, workingDir: spec.workingDir, argv: spec.cmd.map((a) => a.slice(0, 200)).slice(0, 12) }),
+  };
+  const summary: Partial<{ [K in keyof DockerApi]: (result: Awaited<ReturnType<DockerApi[K]>>) => Record<string, unknown> }> = {
+    ping: (ok) => ({ ok }),
+    version: (v) => ({ version: v }),
+    info: (i) => ({ runtimes: i.runtimes, defaultRuntime: i.defaultRuntime }),
+    inspectImage: (i) => ({ found: i !== null, ...(i ? { id: i.id, repoDigests: i.repoDigests } : {}) }),
+    inspectVolume: (v) => ({ found: v !== null }),
+    listVolumes: (v) => ({ count: v.length, names: v.map((x) => x.name).slice(0, 20) }),
+    inspectContainer: (c) => ({ found: c !== null, ...(c ? { running: c.state.running, status: c.state.status, exitCode: c.state.exitCode } : {}) }),
+    listContainers: (c) => ({ count: c.length, names: c.map((x) => x.name).slice(0, 20) }),
+  };
+  const traced = {} as DockerApi;
+  for (const key of Object.keys(fields) as (keyof DockerApi)[]) {
+    const original = api[key] as (...args: unknown[]) => Promise<unknown>;
+    (traced as unknown as Record<string, unknown>)[key] = async (...args: unknown[]) => {
+      const startedAt = Date.now();
+      const named = (fields[key] as (a: unknown[]) => Record<string, unknown>)(args);
+      try {
+        const result = await original.apply(api, args);
+        const extra = (summary[key] as ((r: unknown) => Record<string, unknown>) | undefined)?.(result) ?? {};
+        log.debug(`docker ${key}`, { ...named, durationMs: Date.now() - startedAt, ...extra });
+        return result;
+      } catch (error) {
+        log.debug(`docker ${key} failed`, { ...named, durationMs: Date.now() - startedAt, error });
+        throw error;
+      }
+    };
+  }
+  return traced;
+}
+
+function createRawDockerode(socketPath: string | undefined): DockerApi {
   const docker = new Docker(socketPath ? { socketPath } : undefined);
 
   const wrap = async <T>(fn: () => Promise<T>): Promise<T> => {
@@ -507,7 +562,7 @@ export function createDockerode(socketPath: string | undefined): DockerApi {
           try {
             (stream as unknown as { destroy(): void }).destroy();
           } catch (error) {
-            console.warn(`exec stream destroy failed: ${describe(error)}`);
+            log.warn("exec stream destroy failed", { container: name, error });
           }
         },
       };
