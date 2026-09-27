@@ -8,7 +8,8 @@ Durable state for the Airlock completion work (prompt in research/41 and the pas
 - Milestones 1–5 implemented and pushed; milestone 6 (independent verification, deployment) in progress.
 - Team (Claude Code subagents, Opus 5.5): control_developer, execution_developer, product_developer, verifier_tester, devils_advocate; the lead owns contracts, lockfile, integration and deploy scripts. The experimental "agent teams" feature was not used; each role ran as a separate subagent with file ownership.
 - **External blocker:** no Vultr access here (`VULTR_API_KEY` absent, no `data/deploy/` state, no inference key). Blocked: deployment, Kata/gVisor gates (D1, C4, G4, P1–P3), live repair gate and receipts (G2), vision round trip (C20), live-model evidence, demo recording. Local evidence is Colima runc, labelled dev-unsafe.
-- Open release work: devil's-advocate R1 (runner blocks non-GET mutations off adapter origins) and S1–S3 fixes in progress; verifier acceptance run in progress.
+- Independent review: devil's advocate R1 (non-GET mutations off the form destination) fixed and re-reviewed (31bf40f, 179542f — two further worker leaks found and closed); S1–S3, L1 fixed (ab34815, daea39e). Verifier: 20/20 local acceptance rows; F1 (fixture data untracked) a6f3b9f, F2 (non-hermetic upload test) 0d60e64, F3 (no cleanup retry for finished tasks) e38367d fixed after the run.
+- Remaining (blocked on Vultr): deployment of this branch, Kata/gVisor runtime gates, D1, live gate receipt, vision round trip, live-model evidence, demo recording. Documented limitation: GET requests to owner-allowlisted hosts can carry data; pages needing web workers do not run.
 
 Decisions: tmpfs workspace kept pending Kata measurement (D1); one live attempt per task per role family (browser, code); scripted drivers are labelled diagnostics everywhere and cannot produce live-gate receipts; RESULT_VERIFIED means the profile's structural checks passed, not that the answer is correct.
 
@@ -98,21 +99,21 @@ Status vocabulary: `open`, `in progress`, `implemented-unverified`, `verified (l
 | C24 | 5 | execution/control/web | verified (fakes) | human actions keep egress/deadline/budget; never approvals — 7c1ab8e |
 | C25 | 5 | execution/control/web | verified (fakes) | proposals + one-use CAS decide — 9d4b94b, 7c1ab8e |
 | C26 | 5 | execution/control/web | verified (fakes + real Chromium on fixtures) | controller-driven submit, destination enforces HMAC-bound payload — 0ff1e56, 7c1ab8e |
-| C27 | 5 | execution/control/web | verified (fakes) | click/Enter/type-submit gated on adapter forms; generic sites: runner blocks mutations (in progress) |
+| C27 | 5 | execution/control/web | verified (local, real Chromium) | runner refuses non-GET/HEAD/OPTIONS and WebSockets off configured origins; workers disabled; httpbin + in-image harness — 31bf40f, 179542f |
 | C28 | 4 | execution/control/web | verified (fakes) | uploads, artifacts, owner scope, quotas, nosniff — fde81e1 |
 | C29 | 4 | execution/control/web | verified (local, real Docker runc) | collector for CSV/JSON/PNG/code outputs — dffdc55, d8450d3 |
 | C30 | 4 | execution/control/web | verified (local, real Docker runc) | offline Node image + role — dffdc55, d8450d3 |
 | C31 | 4 | execution/control/web | verified (fakes) | general handler + profile registry at the worker seam — fde81e1 |
 | C32 | 4 | execution/control/web | verified (fakes) | completion checks per profile — fde81e1 |
 | C33 | 4 | execution/control/web | verified (fakes) | UNSUPPORTED outcome, no simulated capability — fde81e1, 7c1ab8e |
-| C34 | 4 | execution/control/web | in progress | hero: fixture page + download + analysis; real local run pending verifier; live model blocked |
+| C34 | 4 | execution/control/web | verified (local, real Docker runc; scripted) | hero pieces verified (fixture page, download, analysis sandbox); acceptance A1/B1; live-model run blocked — e6a4b9a |
 | C35 | 4 | execution/control/web | verified (fakes) | workflow/result/cleanup separated in contracts/API/UI — fde81e1, a2bc7d3 |
 | C36 | 4 | execution/control/web | verified (fakes) | opState allowed/started/completed/failed/unknown — fde81e1, 7c1ab8e |
 | C37 | 4 | execution/control/web | verified (fakes) | general sealed evidence bundle — fde81e1 |
-| C38 | 6 | execution/control/web | in progress | hostile-page and injection tests: verifier running |
+| C38 | 6 | execution/control/web | verified (local, real Chromium) | hostile targets refused (disallowed, metadata, private, POST); prompt-injection has no authority path (DA review) — e6a4b9a, 31bf40f |
 | C39 | 6 | execution/control/web | verified (local, real Docker runc) | teardown of containers/networks/profiles confirmed; janitor — b2de0d6, d8450d3 |
 | C40 | 6 | execution/control/web | verified (fakes) | two-owner authorization tests across task/event/artifact/control/approval APIs — 1fbeae2, fde81e1, 7c1ab8e |
-| C41 | 6 | execution/control/web | in progress | kill controller/supervisor/runner during actions: partially covered (runner loss → interrupted, restart reconcile); verifier running |
+| C41 | 6 | execution/control/web | verified (local) / partial | runner loss → interrupted, supervisor restart reconcile, cleanup-retry sweep; controller kill mid-action not measured — e6a4b9a, e38367d |
 
 ## Housekeeping
 

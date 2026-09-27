@@ -108,3 +108,16 @@ The fixtures in `scripts/acceptance/fixtures/general/` (`acc-*.json`, `acc_analy
   - Fix: anchor the ignore rule (`/data/`), or add `!apps/fixtures/data/`, then commit the two CSVs.
 - **F2: a supervisor integration test depends on a live third-party site.** `apps/supervisor/test/browser-files-integration.test.ts:149` uploads to `https://the-internet.herokuapp.com/upload` and expects `airlock-test.txt` on the result page. It now lands on `chrome-error://chromewebdata/`, and the site's POST returns 500 to curl. The test passed at `7c1ab8e`, and no supervisor or runtime code changed between the two revisions. This is not a product regression, but the suite is not hermetic. Fix: point it at the repo's own fixtures service, or gate it behind an explicit network-test flag.
 - **F3: a failed cleanup of a terminal task is never retried by the control plane.** Seen in A18: with the supervisor unreachable, the task honestly ended `INCONCLUSIVE` with `cleanup.status=failed`. After the supervisor was back, the control plane did not retry the teardown. The supervisor (restart path, `lifecycle.ts` about line 125) had revoked and stopped the attempt and marked it `unknown`. Its janitor (`lifecycle.ts` about line 1907) only destroys the container and workspace volume after `deadline + AIRLOCK_RETENTION_MS` (30 min default). Until then the host listing is not "(no sandboxes)" and the task's cleanup dimension stays `failed`: this is honest, but it is never resolved to `confirmed`. 40 §6 lists a "failed and retrying" cleanup state. At `42a41d4`, `retrying` is written only on the **cancel** path (`apps/control/src/repair-handler.ts:251`, `apps/control/src/general-handler.ts:229`). A run that ends with an unconfirmed teardown becomes terminal with `cleanup.status=failed`, and nothing retries it.
+
+## Post-run fixes (lead; not re-measured by this driver)
+
+The rows above are the verifier's results at the recorded revisions and are unchanged. Findings fixed afterwards:
+
+| Finding | Fix | Evidence |
+|---|---|---|
+| F1 fixture CSVs untracked (fresh checkout broke fixtures) | `!apps/fixtures/data/` + committed CSVs | a6f3b9f; fixtures suite 41/41 from the tree |
+| F2 upload integration test depended on a third-party site | hermetic in-image upload test; public variant prechecked | 0d60e64; supervisor 207/207, all integration tests ran |
+| F3 failed cleanup of a finished task never retried by control | bounded cleanup-retry sweep | e38367d; control 384/384 |
+| DA R1 form submissions on non-adapter sites not refused | runner mutation guard + worker removal | 31bf40f, 179542f; real Chromium on httpbin + in-image harness |
+
+A re-run of `scripts/acceptance/local.ts` at the final revision is the next local step; Vultr rows stay BLOCKED until access is available.
