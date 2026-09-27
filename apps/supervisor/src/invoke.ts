@@ -112,17 +112,19 @@ export function parseObservations(stdout: string, maxObservations: number): { ob
 }
 
 export async function invoke(core: Supervisor, body: InvokeRequest): Promise<OperationResponse> {
-  const profile = core.profile(body.profileId);
-  if (body.role === "baseline" && body.bundle) throw new SupervisorError("invalid_body", "A baseline invocation takes no bundle: it runs the pristine tree.");
-  if (body.role !== "baseline" && !body.bundle) throw new SupervisorError("invalid_body", `A ${body.role} invocation requires a bundle.`);
-  if (body.request.cases.length > MAX_CASES) throw new SupervisorError("invalid_body", `At most ${MAX_CASES} cases per invocation.`);
-  const requestJson = canonicalJson(body.request);
-  if (requestJson.length > MAX_REQUEST_JSON_BYTES) throw new SupervisorError("invalid_body", "The adapter request exceeds 1 MiB.");
-  const names = oneShotNames(core.config.namespace, body.taskId, body.operation.operationId, body.role);
-  if (!names.ok) throw new SupervisorError("invalid_body", names.reason);
-  const deadline = core.boundDeadline(body.absoluteDeadline, profile.caps);
-
+  // Every body validation runs INSIDE the operation so that a repeat with the same id and digest
+  // replays the recorded result even when the deadline it named has since passed.
   return core.withOperation(body.operation, `invoke:${body.role}`, async () => {
+    const profile = core.profile(body.profileId);
+    if (body.role === "baseline" && body.bundle) throw new SupervisorError("invalid_body", "A baseline invocation takes no bundle: it runs the pristine tree.");
+    if (body.role !== "baseline" && !body.bundle) throw new SupervisorError("invalid_body", `A ${body.role} invocation requires a bundle.`);
+    if (body.request.cases.length > MAX_CASES) throw new SupervisorError("invalid_body", `At most ${MAX_CASES} cases per invocation.`);
+    const requestJson = canonicalJson(body.request);
+    if (requestJson.length > MAX_REQUEST_JSON_BYTES) throw new SupervisorError("invalid_body", "The adapter request exceeds 1 MiB.");
+    const names = oneShotNames(core.config.namespace, body.taskId, body.operation.operationId, body.role);
+    if (!names.ok) throw new SupervisorError("invalid_body", names.reason);
+    const deadline = core.boundDeadline(body.absoluteDeadline, profile.caps);
+
     // Verify everything BEFORE creating anything.
     let files: { path: string; bytes: Uint8Array }[] = [];
     if (body.bundle) {

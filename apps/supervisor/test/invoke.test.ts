@@ -70,6 +70,23 @@ describe("invoke", () => {
     core.stop();
   });
 
+  test("a replay of a completed invoke after its deadline passed returns the recorded InvokeResult, not 400", async () => {
+    const docker = new FakeDocker(defaultHandler({ adapter: { stdout: `${JSON.stringify({ caseId: "c1", status: "ok", valueCanonical: '"x"' })}\n` } }));
+    const { core } = makeCore(docker);
+    const bundle = await bundleOf("def tabulate(): pass\n");
+    const base = { taskId: "task1", profileId: PROFILE.id, role: "candidate" as const, bundle, request: REQUEST, absoluteDeadline: future(300) };
+    const operation = await operationFor("inv-replay-late", base);
+    const first = await invoke(core, { ...base, operation });
+    expect(first.status).toBe(200);
+    await new Promise((r) => setTimeout(r, 500));
+    const calls = docker.calls.length;
+    const replay = await invoke(core, { ...base, operation });
+    expect(replay.status).toBe(200);
+    expect(replay.body).toEqual(first.body);
+    expect(docker.calls.length).toBe(calls);
+    core.stop();
+  });
+
   test("invoke delivers replacements + request by tar, runs materialize then adapter, parses observations, tears down", async () => {
     const adapterOut = `${JSON.stringify({ caseId: "c1", status: "ok", valueCanonical: '"x"' })}\nnot json\n${JSON.stringify({ caseId: "bad id!", status: "ok" })}\n`;
     const docker = new FakeDocker(defaultHandler({ adapter: { stdout: adapterOut } }));

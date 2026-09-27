@@ -247,6 +247,22 @@ describe("lifecycle", () => {
     core.stop();
   });
 
+  test("a replay of a completed createAttempt after its deadline passed returns the recorded receipt, not 400", async () => {
+    const docker = new FakeDocker(defaultHandler());
+    const { core } = makeCore(docker);
+    const base = { ref: REF, profileId: PROFILE.id, role: "author" as const, absoluteDeadline: future(300) };
+    const operation = await operationFor("create-replay-late", base);
+    const first = await core.createAttempt({ ...base, operation });
+    expect(first.status).toBe(200);
+    await new Promise((r) => setTimeout(r, 500));
+    const calls = docker.calls.length;
+    const replay = await core.createAttempt({ ...base, operation });
+    expect(replay.status).toBe(200);
+    expect(replay.body).toEqual(first.body);
+    expect(docker.calls.length).toBe(calls);
+    core.stop();
+  });
+
   test("the absolute deadline revokes and stops regardless of the caller", async () => {
     const docker = new FakeDocker(defaultHandler());
     const { core, journal } = makeCore(docker);

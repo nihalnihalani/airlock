@@ -367,15 +367,16 @@ export class Supervisor {
   }
 
   async createAttempt(body: CreateAttemptRequest): Promise<OperationResponse> {
-    if (body.role !== "author" && body.role !== "hostile") {
-      throw new SupervisorError("invalid_body", `Role ${body.role} is a one-shot role; use POST /invoke.`);
-    }
-    const profile = this.profile(body.profileId);
-    const names = this.names(body.ref, body.role);
-    const deadline = this.boundDeadline(body.absoluteDeadline, profile.caps);
-
-    return this.withOperation(body.operation, "createAttempt", () =>
-      this.withLock(names.attemptId, async () => {
+    // Every body validation runs INSIDE the operation so that a repeat with the same id and digest
+    // replays the recorded receipt even when a time-dependent check (the deadline) would fail now.
+    return this.withOperation(body.operation, "createAttempt", async () => {
+      if (body.role !== "author" && body.role !== "hostile") {
+        throw new SupervisorError("invalid_body", `Role ${body.role} is a one-shot role; use POST /invoke.`);
+      }
+      const profile = this.profile(body.profileId);
+      const names = this.names(body.ref, body.role);
+      const deadline = this.boundDeadline(body.absoluteDeadline, profile.caps);
+      return this.withLock(names.attemptId, async () => {
         if (this.journal.isTombstoned(names.attemptId)) {
           throw new SupervisorError("revoked", `Attempt ${names.attemptId} was destroyed earlier and cannot be resurrected.`);
         }
@@ -441,8 +442,8 @@ export class Supervisor {
         const state = this.journal.getAttempt(names.attemptId);
         if (!state) throw new SupervisorError("internal", "Attempt vanished from the journal.");
         return { status: 200, body: attemptStateOf(state) };
-      }),
-    );
+      });
+    });
   }
 
   getAttempt(attemptId: string): AttemptState | null {
