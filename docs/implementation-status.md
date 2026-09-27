@@ -40,7 +40,7 @@ Status vocabulary: `open`, `in progress`, `implemented-unverified`, `verified (l
 | M11 | 2 | control | verified (local) | VerificationRecord.outcome — cf86da6 |
 | M12 | 2 | supervisor | verified (local, real Docker) | readiness exec before dispatch — 2c662a8 |
 | M13 | 2 | control | conditional | no model case-proposal tool exists |
-| D1 | 6 | supervisor+lead | blocked (deployment) | durable quota storage must be proven on Kata; needs VM B access |
+| D1 | 6 | supervisor+lead | blocked (deployment); decision recorded | docs/decisions/D1-workspace-storage.md: tmpfs+hold kept provisionally, fails closed; closes on VX1 preflight D1 checks |
 | D2 | 2 | supervisor+runtime | verified (local, real Docker) | digest-pinned base; imageId enforced; retag test — 2c662a8 |
 | D3 | 2 | control | verified (local, real Docker) | one sandbox per case — cf86da6; smoke 66/66 |
 | D4 | 2 | supervisor+control | verified (local) | AIRLOCK_PRODUCTION on both planes; deploy sets it — 2c662a8, a5f9bce |
