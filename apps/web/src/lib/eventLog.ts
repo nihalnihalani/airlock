@@ -12,6 +12,16 @@ export const MAX_EVENTS = 4000;
  * registered for that name, never to `onmessage`; unnamed `message` events are accepted too.
  */
 export const RUN_EVENT_NAMES: readonly string[] = [...EventKind.options, "message"];
+
+/**
+ * A RunEvent of kind `error` arrives as `event: error`, the same name EventSource uses for transport
+ * failures, and it is dispatched to `onerror` as well as to its named listener. The two are told
+ * apart by type: a server-sent event is a MessageEvent carrying data; a transport error is a plain
+ * Event. Named `error` messages are data, never a connection problem; plain errors are never parsed.
+ */
+export function isServerMessage(event: Event): event is MessageEvent {
+  return typeof MessageEvent !== "undefined" && event instanceof MessageEvent;
+}
 /** RunEvent.detail is capped at 64 KiB by the contract; allow headroom for the envelope. */
 export const MAX_PAYLOAD_CHARS = 96 * 1024;
 

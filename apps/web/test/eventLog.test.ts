@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { RunEvent } from "@airlock/contracts";
-import { appendEvents, emptyLog, MAX_EVENTS, MAX_PAYLOAD_CHARS, parseEventPayload, RUN_EVENT_NAMES } from "../src/lib/eventLog";
+import { appendEvents, emptyLog, MAX_EVENTS, MAX_PAYLOAD_CHARS, parseEventPayload, RUN_EVENT_NAMES, isServerMessage } from "../src/lib/eventLog";
 
 function ev(seq: number, kind: RunEvent["kind"] = "info"): RunEvent {
   return {
@@ -70,5 +70,15 @@ describe("RUN_EVENT_NAMES", () => {
     // `task` (a snapshot) and `end` are control frames, not RunEvents.
     expect(RUN_EVENT_NAMES).not.toContain("task");
     expect(RUN_EVENT_NAMES).not.toContain("end");
+  });
+});
+
+describe("isServerMessage", () => {
+  test("a server-sent `event: error` RunEvent is data; a transport error is not", () => {
+    const named = new MessageEvent("error", { data: JSON.stringify(ev(7, "error")), lastEventId: "7" });
+    expect(isServerMessage(named)).toBe(true);
+    const parsed = parseEventPayload(String(named.data));
+    expect(parsed.ok && parsed.event.kind).toBe("error");
+    expect(isServerMessage(new Event("error"))).toBe(false);
   });
 });

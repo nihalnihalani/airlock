@@ -8,7 +8,7 @@
  * - `status` is visible in the UI so a stalled or dead stream is never mistaken for "no news".
  */
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import { appendEvents, emptyLog, noteMalformed, parseEventPayload, RUN_EVENT_NAMES, type EventLog } from "../lib/eventLog";
+import { appendEvents, emptyLog, noteMalformed, parseEventPayload, RUN_EVENT_NAMES, isServerMessage, type EventLog } from "../lib/eventLog";
 import type { RunEvent } from "@airlock/contracts";
 
 export type StreamStatus = "idle" | "connecting" | "open" | "reconnecting" | "closed" | "ended" | "unsupported";
@@ -111,7 +111,7 @@ export function useTaskEvents(taskId: string | null, active: boolean, autoReconn
       if (disposed) return;
       // A RunEvent named `error` shares its name with EventSource's connection-error event, which
       // is a plain Event without data: only MessageEvents carry a payload.
-      if (!(msg instanceof MessageEvent)) return;
+      if (!isServerMessage(msg)) return;
       const data = typeof msg.data === "string" ? msg.data : "";
       const parsed = parseEventPayload(data);
       if (parsed.ok) enqueue(parsed.event);
@@ -131,7 +131,7 @@ export function useTaskEvents(taskId: string | null, active: boolean, autoReconn
       if (disposed) return;
       // A server-sent `event: error` RunEvent is dispatched to this handler too; it is data, not a
       // connection problem (onRunEvent records it).
-      if (event instanceof MessageEvent) return;
+      if (isServerMessage(event)) return;
       if (source.readyState === EventSource.CLOSED) {
         source.close();
         setStatus("closed");
