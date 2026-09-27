@@ -229,7 +229,7 @@ Secrets come from the environment only. For local work, put `VULTR_INFERENCE_API
 
 ### Web UI (`apps/web`)
 
-No runtime configuration: every request is relative (`/api/...`). `bun run --cwd apps/web build` writes `apps/web/dist`, which the control plane serves. For UI development `bun run --cwd apps/web dev` proxies `/api` to `AIRLOCK_CONTROL_URL` (default `http://localhost:3000`). The layout (case sidebar, the run as a conversation, details pane, hostile input as a chat) follows CopilotKit OpenBot's app; see [apps/web/README.md](apps/web/README.md) and the screenshots in `docs/assets/` ([new case](docs/assets/ui-new-case.png), [hostile input](docs/assets/ui-hostile.png), [mobile](docs/assets/ui-mobile.png)).
+No runtime configuration: every request is relative (`/api/...`). `bun run --cwd apps/web build` writes `apps/web/dist`, which the control plane serves. For UI development `bun run --cwd apps/web dev` proxies `/api` to `AIRLOCK_CONTROL_URL` (default `http://localhost:3000`). The layout (case sidebar, the run as a conversation, details pane, hostile input as a chat) follows CopilotKit OpenBot's app; see [apps/web/README.md](apps/web/README.md) and the screenshots in `docs/assets/`: [mobile](docs/assets/ui-mobile.png) (deployment, Kata); [new case](docs/assets/ui-new-case.png) and [hostile input](docs/assets/ui-hostile.png) (local dev (runc): the hostile card there reports `runc`/dev-unsafe, which only shows that the container's read-only rootfs, dropped capabilities and `--network none` held, not kernel isolation).
 
 ### Model driver
 
