@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Role } from "@airlock/contracts";
 import { ApiError, describeError, getSession, login as apiLogin, logout as apiLogout } from "../lib/api";
+import { rememberOwnerId } from "../lib/control";
 
 export interface SessionState {
   role: Role;
@@ -45,6 +46,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (password: string) => {
     const info = await apiLogin(password);
+    // A new login is a new principal: forget the owner id learned from the previous one.
+    rememberOwnerId(undefined);
     setRole(info.role);
     setError(null);
     return info.role;
@@ -54,6 +57,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     try {
       await apiLogout();
     } finally {
+      rememberOwnerId(undefined);
       setRole("viewer");
     }
   }, []);

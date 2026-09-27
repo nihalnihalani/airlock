@@ -27,7 +27,11 @@ import { GeneralTaskDetail } from "../components/general/detail";
 import { GeneralTaskSummary, StatusDimensions } from "../components/general/status";
 import { GeneralMark, GeneralResultPanel, GoalMessage, TurnMessage, type ScreenshotInfo } from "../components/general/thread";
 import { OperationCard } from "../components/general/op-card";
-import { buildGeneralThread, GENERAL_PHASES, generalPhase, profileShortName, screenshotMeta, type GeneralItem } from "../lib/general";
+import { ControlPanel, HumanActions, LiveView } from "../components/general/control";
+import { ApprovalsSection, ReviewBanner } from "../components/general/approvals";
+import { useBrowserControl } from "../hooks/useBrowserControl";
+import { controlView, humanActorLabel, humanHolderBySeq, knownOwnerId, pendingProposals, reviewWaitingFromEvents, type Viewer } from "../lib/control";
+import { buildGeneralThread, GENERAL_PHASES, generalPhase, profileShortName, screenshotMeta, type GeneralItem, type Operation } from "../lib/general";
 import { cleanupStatus, isDiagnostic, type CleanupStatus } from "../lib/evidence";
 import { extractCheckpoints, runtimeTier } from "../lib/eventViews";
 import { isTerminalStatus, PHASE_LABEL, STATUS_LABEL } from "../lib/format";
@@ -118,6 +122,7 @@ function GeneralRow({
   artifacts,
   artifactsError,
   canExport,
+  actorOf,
 }: {
   item: GeneralItem;
   task: TaskView["task"];
@@ -127,16 +132,17 @@ function GeneralRow({
   artifacts: Artifact[] | null;
   artifactsError: string | null;
   canExport: boolean;
+  actorOf: (op: Operation) => string;
 }) {
   switch (item.type) {
     case "goal":
       return <GoalMessage item={item} task={task} />;
     case "turn":
-      return <TurnMessage item={item} terminal={terminal} screenshotInfo={screenshotInfo} />;
+      return <TurnMessage item={item} terminal={terminal} screenshotInfo={screenshotInfo} actorOf={actorOf} />;
     case "op":
       return (
         <div className="min-w-0 pl-[2.125rem]">
-          <OperationCard op={item.op} terminal={terminal} screenshotInfo={screenshotInfo} />
+          <OperationCard op={item.op} terminal={terminal} screenshotInfo={screenshotInfo} actorOf={actorOf} />
         </div>
       );
     case "mark":
@@ -289,6 +295,19 @@ export function TaskPage({ id }: { id: string }) {
     [shots, sentImages, terminal],
   );
   const taskProfile = view ? (taskProfiles?.find((p) => p.id === view.task.profileId) ?? null) : null;
+
+  // Human control, live view and proposals (browser profiles only).
+  const browserTask = general && (taskProfile ? taskProfile.browser : (view?.task.egressAllow?.length ?? 0) > 0);
+  const running = view?.task.status === "running";
+  const browser = useBrowserControl(id, browserTask, running, stream.log.events);
+  const [ownerId, setOwnerId] = useState<string | null>(() => knownOwnerId());
+  const viewer: Viewer = useMemo(() => ({ ownerId, role: session.role, taskOwner: view?.task.owner ?? "" }), [ownerId, session.role, view?.task.owner]);
+  const holderAt = useMemo(() => humanHolderBySeq(stream.log.events), [stream.log.events]);
+  const actorOf = useCallback((op: Operation) => humanActorLabel(holderAt(op.seq), viewer), [holderAt, viewer]);
+  const reviewEventIds = useMemo(() => reviewWaitingFromEvents(stream.log.events), [stream.log.events]);
+  const pendingReview = browser.proposals ? pendingProposals(browser.proposals, Date.now()).length > 0 : reviewEventIds.length > 0;
+  const control = browserTask ? controlView(browser.control, viewer, { running, canOperate: canOperate(session.role) }) : null;
+  const waiting = running ? { review: pendingReview, humanControl: control !== null && control.holder !== "Agent" && control.holder !== "Transferring" } : undefined;
   const cleanup = useMemo(() => cleanupStatus({ status: view?.task.status ?? "queued" }, stream.log.events), [view?.task.status, stream.log.events]);
   const scroller = useStickToBottom(`${lastSeq ?? -1}:${items.length + generalItems.length}:${status ?? ""}`);
 
@@ -346,6 +365,11 @@ export function TaskPage({ id }: { id: string }) {
         {title}
       </span>
       {task && isDiagnostic(task) ? <DiagnosticBadge className="shrink-0" /> : null}
+      {general && running && pendingReview ? (
+        <Badge tone="warn" className="shrink-0" title="A proposed submission waits for a person's decision">
+          waiting for review
+        </Badge>
+      ) : null}
       {task?.outcome ? (
         <span className="hidden shrink-0 lg:inline-flex">
           <OutcomeBadge outcome={task.outcome} />
@@ -425,12 +449,13 @@ export function TaskPage({ id }: { id: string }) {
                   {general && task ? (
                     <GeneralTaskSummary
                       task={task}
+                      waiting={waiting}
                       profileName={taskProfile?.displayName ?? profileShortName(task.profileId)}
                       inputNames={(task.inputArtifactIds ?? []).map((aid) => artifacts?.find((a) => a.id === aid)?.filename ?? aid)}
                     />
                   ) : null}
                   {general && task
-                    ? generalItems.map((item) => (
+                    ? generalItems.filter((item) => item.type !== "working" && item.type !== "result").map((item) => (
                         <MessageScrollerItem key={item.key} className="flex flex-col gap-1.5 animate-in fade-in-0 duration-300 motion-reduce:animate-none">
                           <GeneralRow
                             item={item}
@@ -441,9 +466,49 @@ export function TaskPage({ id }: { id: string }) {
                             artifacts={artifacts}
                             artifactsError={artifactsError}
                             canExport={canOperate(session.role)}
+                            actorOf={actorOf}
                           />
                         </MessageScrollerItem>
                       ))
+                    : null}
+                  {general && task && browserTask ? (
+                    <MessageScrollerItem className="flex flex-col gap-4 py-2">
+                      <ApprovalsSection
+                        taskId={task.id}
+                        proposals={browser.proposals}
+                        error={browser.proposalsError}
+                        viewer={viewer}
+                        canDecide={canOperate(session.role)}
+                        running={running}
+                        onDecided={browser.refreshProposals}
+                      />
+                      {!terminal ? (
+                        <section aria-label="Browser" className="flex flex-col gap-4 rounded-xl border border-border bg-card p-4 dark:border-transparent">
+                          <ControlPanel task={task} data={browser} viewer={viewer} canOperate={canOperate(session.role)} onOwnerLearned={setOwnerId} />
+                          <LiveView task={task} data={browser} events={stream.log.events} canOperate={canOperate(session.role)} />
+                          {control?.youHold ? <HumanActions task={task} data={browser} /> : null}
+                        </section>
+                      ) : null}
+                    </MessageScrollerItem>
+                  ) : null}
+                  {general && task
+                    ? generalItems
+                        .filter((item) => item.type === "working" || item.type === "result")
+                        .map((item) => (
+                          <MessageScrollerItem key={item.key} className="flex flex-col gap-1.5 animate-in fade-in-0 duration-300 motion-reduce:animate-none">
+                            <GeneralRow
+                              item={item}
+                              task={task}
+                              terminal={terminal}
+                              screenshotInfo={screenshotInfo}
+                              events={stream.log.events}
+                              artifacts={artifacts}
+                              artifactsError={artifactsError}
+                              canExport={canOperate(session.role)}
+                              actorOf={actorOf}
+                            />
+                          </MessageScrollerItem>
+                        ))
                     : null}
                   {groups.map((group) => (
                     <MessageScrollerItem key={group.key} className="flex flex-col gap-1.5 animate-in fade-in-0 duration-300 motion-reduce:animate-none">
@@ -462,6 +527,7 @@ export function TaskPage({ id }: { id: string }) {
               <div className="mb-2 flex flex-col gap-2">
                 {loadError ? <ErrorBox message={`Could not refresh the task view: ${loadError}`} onRetry={() => void refresh()} /> : null}
                 {cancelError ? <ErrorBox message={cancelError} /> : null}
+                {general && browserTask && running ? <ReviewBanner proposals={browser.proposals} eventIds={reviewEventIds} /> : null}
                 {stream.note && (stream.status === "closed" || stream.status === "reconnecting" || stream.status === "unsupported") ? (
                   <Notice tone={streamTone(stream.status) === "bad" ? "bad" : "warn"} className="text-xs">
                     {stream.note}
@@ -479,7 +545,7 @@ export function TaskPage({ id }: { id: string }) {
             <div className="flex items-center gap-3">
               <div className="min-w-0 flex-1 text-sm">
                 {task && general ? (
-                  <StatusDimensions task={task} compact />
+                  <StatusDimensions task={task} compact waiting={waiting} />
                 ) : task ? (
                   task.outcome ? (
                     <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">

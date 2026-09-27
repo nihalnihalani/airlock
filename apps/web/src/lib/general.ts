@@ -10,7 +10,14 @@
  *               result (ExecResult), exitCode, files, outputs, sources, unsupportedCapability
  *   model       model, host, durationMs, usage, toolCalls[].name, finishReason, imageAttached,
  *               imageArtifactId, imageSha256, reasoning
- *   artifact    artifactId, kind, sha256, url, width, height, capturedAt, step, path, byteLength
+ *   artifact    artifactId, kind, sha256, url, width, height, capturedAt, step, path, byteLength,
+ *               frame (screenshot frames), actor (agent|human|observer|controller), downloadId
+ *   lifecycle   control { holder, humanOwner, since, reason }, proposalId, status, waitingForReview,
+ *               proposal { … }, receipt { receiptId, payloadDigest, at }
+ *
+ * Milestone 5 tools: browser_download_list / browser_download_save / browser_propose_submit (the
+ * model's), approved_submit (the controller's, after an approval), live_view (a read-only frame) and
+ * human_* (a person holding control). Their tool events carry `actor`.
  */
 import { ExecResult, type Artifact, type Outcome, type Phase, type RunEvent, type Task, type TaskResult, type TaskStatus } from "@airlock/contracts";
 import { toModelCallRow, type ModelCallRow } from "./eventViews";
@@ -139,7 +146,9 @@ export interface OpStateView {
  * How one operation's recorded state is shown. `started` on a terminal task never became an
  * answer: it is shown as "no outcome recorded", never as success.
  */
-export function opStateView(state: OpState | null, taskTerminal: boolean): OpStateView {
+export function opStateView(state: OpState | null, taskTerminal: boolean, tool?: string): OpStateView {
+  if (tool === "approved_submit" && state === "started")
+    return { label: "step sent", tone: "neutral", note: "A controller step of an approved submission. Its outcome is recorded on the proposal (receipt), not per step." };
   switch (state) {
     case "allowed":
       return { label: "allowed", tone: "neutral", note: "Permitted by policy; not yet dispatched. Permission is not execution." };
@@ -205,12 +214,18 @@ export function generalPhase(phase: Phase): Phase {
   return phase === "repair" || phase === "reproduce" || phase === "baseline" ? "execute" : phase;
 }
 
-export function workflowView(task: Pick<Task, "status" | "phase">): { label: string; tone: Tone } {
+/**
+ * `waiting`: what the running task is blocked on, from the control plane's answers (a pending
+ * proposal, a person holding browser control). It never changes the recorded status.
+ */
+export function workflowView(task: Pick<Task, "status" | "phase">, waiting?: { review?: boolean; humanControl?: boolean }): { label: string; tone: Tone } {
   const phase = PHASE_LABEL[generalPhase(task.phase)];
   switch (task.status) {
     case "queued":
       return { label: "Queued", tone: "neutral" };
     case "running":
+      if (waiting?.review) return { label: "Running · waiting for review", tone: "warn" };
+      if (waiting?.humanControl) return { label: "Running · a person holds control", tone: "warn" };
       return { label: `Running · ${phase}`, tone: "info" };
     case "cancelling":
       return { label: "Cancelling", tone: "warn" };
@@ -424,7 +439,21 @@ export const GENERAL_TOOLS = [
   "code_read",
   "files_list",
   "submit_result",
+  "browser_download_list",
+  "browser_download_save",
+  "browser_propose_submit",
+  "approved_submit",
+  "live_view",
 ] as const;
+
+/** A person's action while holding control (`human_navigate`, `human_click`, `human_upload`, …). */
+export function isHumanTool(tool: string): boolean {
+  return /^human_[a-z_]{1,40}$/.test(tool);
+}
+
+function isThreadTool(tool: string): boolean {
+  return (GENERAL_TOOLS as readonly string[]).includes(tool) || isHumanTool(tool);
+}
 
 function toolOf(ev: RunEvent): string {
   const t = str(rec(ev.data)?.["tool"], 64);
@@ -451,6 +480,22 @@ function markTone(ev: RunEvent, state: OpState | null): Tone {
   }
   if (ev.kind === "artifact") return "info";
   if (ev.kind === "lifecycle" && /incomplete|not confirmed/i.test(ev.title)) return "bad";
+  const d = rec(ev.data);
+  if (d?.["waitingForReview"] === true) return "warn";
+  switch (d?.["status"]) {
+    case "confirmed":
+      return "ok";
+    case "failed":
+      return "bad";
+    case "outcome_unknown":
+      return "warn";
+    case "approved":
+    case "claimed":
+      return "info";
+  }
+  const control = rec(d?.["control"]);
+  if (control?.["holder"] === "human" || control?.["holder"] === "transferring") return "warn";
+  if (ev.kind === "check" && d?.["adapterRefusal"] === true) return "warn";
   return "neutral";
 }
 
@@ -479,7 +524,9 @@ export function buildGeneralThread(task: Task | null, events: readonly RunEvent[
   }
   const byOperation = new Map<string, Operation>();
   let open: Extract<GeneralItem, { type: "turn" }> | null = null;
-  const tools = GENERAL_TOOLS as readonly string[];
+  /** The latest operation of each tool, for artifact events that name no operation. */
+  const lastOfTool = new Map<string, Operation>();
+  const lastRow = (): { type: string; op?: Operation } | undefined => (open ? open.rows[open.rows.length - 1] : items[items.length - 1]);
 
   for (const ev of events) {
     const data = rec(ev.data) ?? {};
@@ -509,7 +556,7 @@ export function buildGeneralThread(task: Task | null, events: readonly RunEvent[
       continue;
     }
     const tool = toolOf(ev);
-    if ((ev.kind === "tool" || ev.kind === "exec") && tools.includes(tool)) {
+    if ((ev.kind === "tool" || ev.kind === "exec") && isThreadTool(tool)) {
       const state = inferState(ev);
       const operationId = str(data["operationId"], 128);
       const existing = operationId ? byOperation.get(operationId) : undefined;
@@ -537,12 +584,60 @@ export function buildGeneralThread(task: Task | null, events: readonly RunEvent[
         eventKind: ev.kind,
         seqs: [ev.seq],
       };
+      // Consecutive live-view frames collapse into one compact row (the newest wins).
+      const prev = lastRow();
+      if (tool === "live_view" && prev?.type === "op" && prev.op?.tool === "live_view") {
+        const merged = prev.op;
+        merged.seqs.push(ev.seq);
+        merged.state = state;
+        merged.at = ev.at;
+        merged.title = ev.title;
+        merged.detail = ev.detail;
+        merged.operationId = operationId;
+        merged.data = { ...data, frames: (num(merged.data["frames"]) ?? 1) + 1 };
+        if (operationId) byOperation.set(operationId, merged);
+        lastOfTool.set(tool, merged);
+        continue;
+      }
       if (operationId) byOperation.set(operationId, op);
+      lastOfTool.set(tool, op);
       if (open) {
         open.ops.push(op);
         open.rows.push({ type: "op", key: op.key, op });
       } else items.push({ type: "op", key: op.key, op });
       continue;
+    }
+    if (ev.kind === "artifact") {
+      // A frame or a saved download names no operation: attach it to the operation that produced it.
+      const actor = str(data["actor"], 32);
+      const kind = data["kind"];
+      const target =
+        kind === "screenshot" && actor === "observer"
+          ? lastOfTool.get("live_view")
+          : kind === "screenshot" && actor === "human"
+            ? lastOfTool.get("human_screenshot")
+            : kind === "download" && actor === "human"
+              ? lastOfTool.get("human_download_read")
+              : kind === "download" && actor === "agent"
+                ? lastOfTool.get("browser_download_save")
+                : undefined;
+      const artifactId = str(data["artifactId"], 64);
+      if (target && artifactId && !target.data["savedArtifactId"]) {
+        target.seqs.push(ev.seq);
+        if (target.state === "started" || target.state === null) target.state = "completed";
+        target.data = {
+          ...target.data,
+          savedArtifactId: artifactId,
+          savedKind: kind,
+          savedSha256: str(data["sha256"], 64),
+          ...(typeof data["url"] === "string" ? { visitedUrl: data["url"] } : {}),
+          ...(typeof data["capturedAt"] === "string" ? { capturedAt: data["capturedAt"] } : {}),
+          ...(typeof data["byteLength"] === "number" ? { byteLength: data["byteLength"] } : {}),
+          ...(typeof data["mediaType"] === "string" ? { mediaType: data["mediaType"] } : {}),
+          ...(typeof data["path"] === "string" ? { path: data["path"] } : {}),
+        };
+        continue;
+      }
     }
     if (ev.kind === "artifact" && open) {
       open.notes.push({ seq: ev.seq, title: ev.title, detail: ev.detail });
@@ -583,6 +678,12 @@ export interface Observation {
   /** submit_result's claim. */
   claim: { summary: string; outputs: string[]; sources: string[]; unsupported: string | null } | null;
   files: string[] | null;
+  /** browser_download_list: what the runner listed (names and URLs are untrusted). */
+  downloads: { downloadId: string; suggestedFilename: string; url: string; state: string; bytes: number | null; reason: string | null }[] | null;
+  /** browser_propose_submit: the proposal this call recorded. */
+  proposal: { id: string; destination: string | null; formId: string | null } | null;
+  /** A stored artifact this operation produced (saved download, frame). */
+  saved: { artifactId: string; kind: string | null; sha256: string | null; path: string | null; byteLength: number | null } | null;
 }
 
 function afterFirstLine(text: string): string {
@@ -596,18 +697,26 @@ function strList(value: unknown, max = 100): string[] {
 
 export function observationOf(op: Operation): Observation {
   const d = op.data;
-  const out: Observation = { summary: "", explain: null, url: null, pageTitle: null, excerpt: null, code: null, exec: null, screenshot: null, claim: null, files: null };
+  const out: Observation = { summary: "", explain: null, url: null, pageTitle: null, excerpt: null, code: null, exec: null, screenshot: null, claim: null, files: null, downloads: null, proposal: null, saved: null };
+  const savedId = str(d["savedArtifactId"], 64);
+  if (savedId) out.saved = { artifactId: savedId, kind: str(d["savedKind"], 32), sha256: str(d["savedSha256"], 64), path: str(d["path"], 512), byteLength: num(d["byteLength"]) };
   const errorCode = str(d["errorCode"], 64);
   if (errorCode === "stale_reference") out.explain = "Stale reference: the page changed since the last observation, so the element reference no longer points at anything. The model must observe again; nothing was clicked or typed.";
-  else if (errorCode === "pending_review") out.explain = "Pending review: the page opened a dialog that needs a human decision. There is no human review step yet, so the action was not taken; the model is told to continue without it or submit.";
+  else if (errorCode === "pending_review") out.explain = "Pending review: the page opened a dialog that needs a human decision, so the action was not taken. A person can take control of the browser to handle it.";
   else if (errorCode === "navigation_failed") out.explain = "Navigation failed: the page could not be loaded. A destination outside the allowed list is refused by the egress proxy.";
   if (d["policy"] === "egress") out.explain = `Refused before dispatch: ${str(d["host"], 253) ?? "the host"} is outside the destinations you allowed. Nothing reached the network.`;
   if (d["interrupted"] === true) out.explain = "The browser session was lost during this operation. Whether it took effect is unknown; it was not replayed, and the next browser tool starts a fresh session.";
 
-  if (op.state === "started") {
+  if (op.tool === "approved_submit") {
+    out.summary = "a step of an approved submission, driven by Airlock (not the model); the approval code is never shown or recorded";
+    out.explain ??= "Airlock fills in exactly the approved values and a one-use approval code, then clicks Submit. The result is recorded on the proposal (confirmed with a receipt, failed, or outcome unknown), not per step. There is nothing else to display: the code itself is never recorded.";
+    return out;
+  }
+  if (op.state === "started" && !out.saved) {
     out.summary = "dispatched; waiting for the answer";
     return out;
   }
+  if (out.saved && (op.tool === "live_view" || op.tool === "human_screenshot")) out.screenshot = { artifactId: out.saved.artifactId, sha256: out.saved.sha256 };
   switch (op.tool) {
     case "browser_navigate": {
       out.url = str(d["finalUrl"]) ?? str(d["requestedUrl"]);
@@ -646,6 +755,35 @@ export function observationOf(op: Operation): Observation {
       const parsed = ExecResult.safeParse(d["result"]);
       out.exec = parsed.success ? parsed.data : null;
       out.summary = out.exec ? `${out.exec.status} · exit ${out.exec.exitCode ?? "—"}${out.exec.timedOut ? " · timed out" : ""}` : op.detail.split("\n")[0] ?? "";
+      break;
+    }
+    case "browser_download_list": {
+      const list = Array.isArray(d["downloads"]) ? (d["downloads"] as unknown[]) : [];
+      out.downloads = list
+        .map((x) => rec(x))
+        .filter((x): x is Data => !!x && typeof x["downloadId"] === "string")
+        .slice(0, 50)
+        .map((x) => ({ downloadId: str(x["downloadId"], 16)!, suggestedFilename: str(x["suggestedFilename"], 200) ?? "", url: str(x["url"]) ?? "", state: str(x["state"], 32) ?? "?", bytes: num(x["bytes"]), reason: str(x["reason"], 100) }));
+      out.summary = op.state === "completed" ? `${out.downloads.length} download(s)` : (op.detail.split("\n")[0] ?? "");
+      break;
+    }
+    case "browser_download_save":
+    case "human_download_read": {
+      out.url = str(d["visitedUrl"]);
+      out.summary = out.saved ? `stored as ${out.saved.artifactId}${out.saved.path ? ` · ${out.saved.path}` : ""}` : (op.detail.split("\n")[0] ?? "");
+      break;
+    }
+    case "browser_propose_submit": {
+      const id = str(d["proposalId"], 128);
+      if (id) out.proposal = { id, destination: str(d["destination"], 512), formId: str(d["formId"], 128) };
+      out.summary = id ? `proposal ${id} recorded; waiting for a person's review` : (op.detail.split("\n")[0] ?? "");
+      if (d["policy"] === "final-action" && op.state === "failed") out.explain ??= "Refused: only forms on a supported destination can be proposed, with every field of the form exactly once.";
+      break;
+    }
+    case "live_view": {
+      const frames = num(d["frames"]);
+      out.url = str(d["visitedUrl"]);
+      out.summary = `${out.saved ? `frame ${out.saved.artifactId}` : (op.detail.split("\n")[0] ?? "")}${frames && frames > 1 ? ` · ${frames} frames` : ""}`;
       break;
     }
     case "files_list": {

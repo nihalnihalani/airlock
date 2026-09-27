@@ -5,8 +5,10 @@
  */
 import { z } from "zod";
 import {
+  ActionProposal,
   Artifact,
   BlastRadiusCard,
+  ControlState,
   HostCheck,
   PreviewResult,
   ProfileManifest,
@@ -16,6 +18,7 @@ import {
   Task,
   TaskView,
 } from "@airlock/contracts";
+import { ActionResponse, ControlResponse, LiveResponse, ProposalList, RefreshResponse, type HumanRequest } from "./control";
 import { refusalLead, refusalOf } from "./evidence";
 import type { CaseInput, PreviewResult as PreviewResultType } from "./types";
 
@@ -358,4 +361,41 @@ export function createGeneralTask(input: GeneralTaskInput): Promise<Task> {
       ...(input.scriptedDriver ? { scriptedDriver: input.scriptedDriver } : {}),
     },
   });
+}
+
+// --- Human control, live view, approvals (doc 40 Stage 5) ----------------------------------------
+
+const taskPath = (id: string) => `/api/tasks/${encodeURIComponent(id)}`;
+
+export function getControl(id: string, signal?: AbortSignal): Promise<ControlResponse> {
+  return request(ControlResponse, `${taskPath(id)}/control`, { signal });
+}
+
+export function takeControl(id: string): Promise<ControlState> {
+  return request(ControlState, `${taskPath(id)}/control/take`, { method: "POST", body: {} });
+}
+
+export function releaseControl(id: string): Promise<ControlState> {
+  return request(ControlState, `${taskPath(id)}/control/release`, { method: "POST", body: {} });
+}
+
+export function humanAction(id: string, req: HumanRequest): Promise<ActionResponse> {
+  return request(ActionResponse, `${taskPath(id)}/control/action`, { method: "POST", body: { request: req } });
+}
+
+export function getLive(id: string, signal?: AbortSignal): Promise<LiveResponse> {
+  return request(LiveResponse, `${taskPath(id)}/live`, { signal });
+}
+
+export function refreshLive(id: string): Promise<RefreshResponse> {
+  return request(RefreshResponse, `${taskPath(id)}/live/refresh`, { method: "POST", body: {} });
+}
+
+export function listApprovals(id: string, signal?: AbortSignal): Promise<ActionProposal[]> {
+  return request(ProposalList, `${taskPath(id)}/approvals`, { signal });
+}
+
+/** Sends exactly the body built from the card the reviewer saw (see decisionBody). */
+export function decideProposal(id: string, proposalId: string, body: { decision: "approve" | "reject"; payloadDigest: string }): Promise<ActionProposal> {
+  return request(ActionProposal, `${taskPath(id)}/approvals/${encodeURIComponent(proposalId)}/decide`, { method: "POST", body });
 }

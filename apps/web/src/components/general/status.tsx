@@ -18,8 +18,18 @@ export function CleanupDimensionBadge({ task }: { task: Pick<Task, "cleanup" | "
   );
 }
 
-export function StatusDimensions({ task, className, compact = false }: { task: Task; className?: string; compact?: boolean }) {
-  const w = workflowView(task);
+export function StatusDimensions({
+  task,
+  className,
+  compact = false,
+  waiting,
+}: {
+  task: Task;
+  className?: string;
+  compact?: boolean;
+  waiting?: { review?: boolean; humanControl?: boolean } | undefined;
+}) {
+  const w = workflowView(task, waiting);
   const r = resultView(task);
   const c = cleanupView(task.cleanup, task.status);
   const rows = [
@@ -63,10 +73,12 @@ export function GeneralTaskSummary({
   task,
   profileName,
   inputNames,
+  waiting,
 }: {
   task: Task;
   profileName: string;
   inputNames: string[];
+  waiting?: { review?: boolean; humanControl?: boolean } | undefined;
 }) {
   const egress = task.egressAllow ?? [];
   return (
@@ -93,7 +105,7 @@ export function GeneralTaskSummary({
         <dt className="text-muted-foreground">Inputs</dt>
         <dd className="min-w-0 break-words">{inputNames.length ? inputNames.join(", ") : <span className="text-muted-foreground">none</span>}</dd>
       </dl>
-      <StatusDimensions task={task} />
+      <StatusDimensions task={task} waiting={waiting} />
     </section>
   );
 }

@@ -5,6 +5,11 @@
  */
 import {
   IconBrowser,
+  IconDownload,
+  IconEye,
+  IconForms,
+  IconHandStop,
+  IconShieldCheck,
   IconCamera,
   IconClick,
   IconCode,
@@ -18,7 +23,7 @@ import {
 } from "@tabler/icons-react";
 import type { ComponentType } from "react";
 import { formatDurationMs, tail } from "../../lib/format";
-import { observationOf, opStateView, type Operation } from "../../lib/general";
+import { artifactHref, isHumanTool, observationOf, opStateView, type Operation } from "../../lib/general";
 import { cn } from "../../lib/utils";
 import { Badge, Chip, Mono, Notice, Pre } from "../common";
 import { Screenshot } from "./artifacts";
@@ -38,7 +43,17 @@ const LABEL: Record<string, string> = {
   code_read: "Read file",
   files_list: "List files",
   submit_result: "Submit result",
+  browser_download_list: "List downloads",
+  browser_download_save: "Save download",
+  browser_propose_submit: "Propose submission",
+  approved_submit: "Approved submission (Airlock)",
+  live_view: "Live frame",
 };
+
+/** "human_download_read" → "download read". */
+function humanLabel(tool: string): string {
+  return tool.replace(/^human_/, "").replace(/_/g, " ");
+}
 
 const ICON: Record<string, ComponentType<{ className?: string }>> = {
   browser_navigate: IconWorld,
@@ -55,6 +70,11 @@ const ICON: Record<string, ComponentType<{ className?: string }>> = {
   code_read: IconFileText,
   files_list: IconFolder,
   submit_result: IconSend,
+  browser_download_list: IconDownload,
+  browser_download_save: IconDownload,
+  browser_propose_submit: IconForms,
+  approved_submit: IconShieldCheck,
+  live_view: IconEye,
 };
 
 function Stream({ label, text }: { label: string; text: string }) {
@@ -75,29 +95,61 @@ function Label({ children }: { children: string }) {
   return <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">{children}</span>;
 }
 
+/** A live-view frame: read-only, never acts on the page; one compact line. */
+function LiveFrameLine({ op, terminal }: { op: Operation; terminal: boolean }) {
+  const obs = observationOf(op);
+  const state = opStateView(op.state, terminal);
+  const id = obs.saved?.artifactId ?? null;
+  return (
+    <div className="flex min-h-7 min-w-0 items-center gap-2 px-2.5 text-xs text-muted-foreground">
+      <IconEye className="size-3.5 shrink-0" />
+      <span className="shrink-0 font-medium text-foreground/80">Live frame</span>
+      {id ? (
+        <a className="shrink-0 underline underline-offset-4" href={artifactHref(id)} target="_blank" rel="noreferrer noopener">
+          <Mono>{id}</Mono>
+        </a>
+      ) : null}
+      {obs.saved?.sha256 ? <span className="shrink-0">sha256 {obs.saved.sha256.slice(0, 12)}</span> : null}
+      <span className="min-w-0 flex-1 truncate" title={obs.summary}>
+        {obs.url ?? obs.summary}
+      </span>
+      <Badge tone={state.tone} title={state.note}>
+        {state.label}
+      </Badge>
+    </div>
+  );
+}
+
 export function OperationCard({
   op,
   terminal,
   screenshotInfo,
+  actorOf,
 }: {
   op: Operation;
   terminal: boolean;
   screenshotInfo?: ((artifactId: string) => { capturedAt: string | null; width: number | null; height: number | null; sentToModel: boolean | undefined }) | undefined;
+  /** "you (judge)" / "a person (operator)" for a human_* operation. */
+  actorOf?: ((op: Operation) => string) | undefined;
 }) {
-  const Icon = ICON[op.tool] ?? IconTool;
-  const state = opStateView(op.state, terminal);
+  if (op.tool === "live_view") return <LiveFrameLine op={op} terminal={terminal} />;
+  const human = isHumanTool(op.tool);
+  const Icon = human ? IconHandStop : (ICON[op.tool] ?? IconTool);
+  const state = opStateView(op.state, terminal, op.tool);
   const obs = observationOf(op);
+  const actor = human ? (actorOf?.(op) ?? "a person") : null;
   const target = obs.url ?? (typeof op.data["path"] === "string" ? (op.data["path"] as string) : typeof op.data["file"] === "string" ? (op.data["file"] as string) : null);
   const shot = obs.screenshot ? screenshotInfo?.(obs.screenshot.artifactId) : undefined;
 
   return (
-    <details className="tool-line group min-w-0 rounded-lg border border-border bg-card text-sm dark:border-transparent dark:bg-card/60" open={op.tool === "browser_screenshot" || op.tool === "submit_result" || op.state === "unknown" ? true : undefined}>
+    <details className={cn("tool-line group min-w-0 rounded-lg border bg-card text-sm dark:bg-card/60", human ? "border-blue-500/30" : "border-border dark:border-transparent")} open={op.tool === "browser_screenshot" || op.tool === "submit_result" || op.state === "unknown" ? true : undefined}>
       <summary className="flex min-h-9 cursor-pointer list-none items-center gap-2 rounded-lg px-2.5 py-1.5 select-none hover:bg-foreground/[0.03] [&::-webkit-details-marker]:hidden">
         <span aria-hidden className="tool-line-chevron w-2.5 shrink-0 text-xs text-muted-foreground transition-transform">
           ▸
         </span>
         <Icon className={cn("size-4 shrink-0", op.state === "failed" ? "text-destructive" : op.state === "unknown" ? "text-warning" : "text-muted-foreground")} />
-        <span className="shrink-0 font-medium text-foreground/90">{LABEL[op.tool] ?? op.tool}</span>
+        {human ? <Badge tone="info" title="An action by a person holding browser control, not the model">{actor}</Badge> : null}
+        <span className="shrink-0 font-medium text-foreground/90">{human ? humanLabel(op.tool) : (LABEL[op.tool] ?? op.tool)}</span>
         <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground" title={target ?? obs.summary}>
           {target ?? obs.summary}
         </span>
@@ -187,6 +239,48 @@ export function OperationCard({
             {obs.exec.stdout.length === 0 && obs.exec.stderr.length === 0 ? <p className="text-xs text-muted-foreground">No output captured.</p> : null}
             <p className="text-[11px] text-muted-foreground">Exit codes and logs inside the sandbox are advisory; the result is decided by the controller's checks.</p>
           </>
+        ) : null}
+        {human ? <p className="text-xs text-muted-foreground">Done by {actor} while holding browser control; the same allowed sites, deadline and budgets applied. It is not an approval.</p> : null}
+        {obs.proposal ? (
+          <p className="text-xs">
+            <span className="text-muted-foreground">proposal: </span>
+            <a className="underline underline-offset-4" href={`#proposal-${obs.proposal.id}`}>
+              <Mono>{obs.proposal.id}</Mono>
+            </a>
+            {obs.proposal.formId ? <span className="text-muted-foreground"> · form {obs.proposal.formId}</span> : null}
+            {obs.proposal.destination ? <span className="text-muted-foreground"> · {obs.proposal.destination}</span> : null}
+            <span className="text-muted-foreground"> · the model cannot submit it; a person reviews the exact values below.</span>
+          </p>
+        ) : null}
+        {obs.saved && !obs.screenshot ? (
+          <p className="flex flex-wrap items-center gap-1 text-xs">
+            <span className="text-muted-foreground">stored as</span>
+            <a className="underline underline-offset-4" href={artifactHref(obs.saved.artifactId)} target="_blank" rel="noreferrer noopener">
+              <Mono>{obs.saved.artifactId}</Mono>
+            </a>
+            {obs.saved.path ? <Mono>{obs.saved.path}</Mono> : null}
+            {obs.saved.byteLength !== null ? <Chip>{obs.saved.byteLength} bytes</Chip> : null}
+            {obs.saved.sha256 ? <Chip title={obs.saved.sha256}>sha256 {obs.saved.sha256.slice(0, 12)}</Chip> : null}
+          </p>
+        ) : null}
+        {obs.downloads ? (
+          obs.downloads.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No downloads.</p>
+          ) : (
+            <ul className="flex flex-col gap-1 text-xs">
+              {obs.downloads.map((d) => (
+                <li key={d.downloadId} className="flex flex-wrap items-center gap-1.5">
+                  <Mono>{d.downloadId}</Mono>
+                  <span className="min-w-0 break-all">{d.suggestedFilename || "(no name)"}</span>
+                  <Badge tone={d.state === "completed" ? "ok" : d.state === "in_progress" ? "info" : "bad"}>{d.state}</Badge>
+                  {d.reason ? <span className="text-muted-foreground">{d.reason}</span> : null}
+                  {d.bytes !== null ? <Chip>{d.bytes} bytes</Chip> : null}
+                  {d.url ? <span className="w-full min-w-0 truncate text-muted-foreground" title={d.url}>{d.url}</span> : null}
+                </li>
+              ))}
+              <li className="text-[11px] text-muted-foreground">File names and URLs come from untrusted pages.</li>
+            </ul>
+          )
         ) : null}
         {obs.files && obs.files.length > 0 ? (
           <ul className="flex flex-wrap gap-1">

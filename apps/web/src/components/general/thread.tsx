@@ -21,7 +21,7 @@ import { useState, type ComponentType } from "react";
 import type { Artifact, RunEvent, Task } from "@airlock/contracts";
 import { createExport, describeError, exportUrl, type ExportResponse } from "../../lib/api";
 import { formatDateTime, formatDurationMs, formatTime, httpUrl } from "../../lib/format";
-import { checkSummary, cleanupView, exportable, outcomeReason, profileShortName, resultView, type GeneralItem } from "../../lib/general";
+import { checkSummary, cleanupView, exportable, outcomeReason, profileShortName, resultView, type GeneralItem, type Operation } from "../../lib/general";
 import { cn } from "../../lib/utils";
 import { Badge, Chip, ErrorBox, KeyValue, Mono, Notice, TONE_TEXT } from "../common";
 import { RowMark } from "../layout/row-mark";
@@ -68,7 +68,17 @@ export function GoalMessage({ item, task }: { item: Extract<GeneralItem, { type:
   );
 }
 
-export function TurnMessage({ item, terminal, screenshotInfo }: { item: Extract<GeneralItem, { type: "turn" }>; terminal: boolean; screenshotInfo: ScreenshotInfo }) {
+export function TurnMessage({
+  item,
+  terminal,
+  screenshotInfo,
+  actorOf,
+}: {
+  item: Extract<GeneralItem, { type: "turn" }>;
+  terminal: boolean;
+  screenshotInfo: ScreenshotInfo;
+  actorOf?: ((op: Operation) => string) | undefined;
+}) {
   const t = item.turn;
   return (
     <Message align="start">
@@ -120,7 +130,7 @@ export function TurnMessage({ item, terminal, screenshotInfo }: { item: Extract<
         {item.rows.length > 0 ? (
           <div className="flex flex-col gap-1.5">
             {item.rows.map((row) =>
-              row.type === "op" ? <OperationCard key={row.key} op={row.op} terminal={terminal} screenshotInfo={screenshotInfo} /> : <GeneralMark key={row.key} item={row} />,
+              row.type === "op" ? <OperationCard key={row.key} op={row.op} terminal={terminal} screenshotInfo={screenshotInfo} actorOf={actorOf} /> : <GeneralMark key={row.key} item={row} />,
             )}
           </div>
         ) : null}

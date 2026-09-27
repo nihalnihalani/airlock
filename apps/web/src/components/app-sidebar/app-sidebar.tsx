@@ -24,6 +24,7 @@ import { IconBug, IconFlame, IconSparkles, IconLogin2, IconLogout, IconPinFilled
 import { useMemo, useState } from "react";
 import type { Task } from "@airlock/contracts";
 import { useNow, useSharedTaskList } from "../../hooks/useTaskList";
+import { usePendingReviews } from "../../hooks/useBrowserControl";
 import { canOperate, useSession } from "../../hooks/session";
 import { hrefFor, type Route } from "../../lib/router";
 import { useDeployment } from "../../hooks/useDeployment";
@@ -78,7 +79,7 @@ function rowClass(active: boolean) {
   );
 }
 
-function TaskRow({ row, active, onNavigate }: { row: TaskRowView; active: boolean; onNavigate: () => void }) {
+function TaskRow({ row, active, onNavigate, review }: { row: TaskRowView; active: boolean; onNavigate: () => void; review: boolean }) {
   const tone = DOT_TONE[row.dot];
   return (
     <a href={hrefFor({ name: "task", id: row.id })} className={rowClass(active)} aria-current={active ? "page" : undefined} onClick={onNavigate}>
@@ -95,6 +96,11 @@ function TaskRow({ row, active, onNavigate }: { row: TaskRowView; active: boolea
           <span className="min-w-0 flex-1 truncate text-[0.9rem] leading-5 font-medium tracking-[-0.01em]" title={row.title}>
             {row.title}
           </span>
+          {review ? (
+            <Badge tone="warn" className="shrink-0" title="A proposed submission waits for a person's review">
+              review
+            </Badge>
+          ) : null}
           <span className="shrink-0 whitespace-nowrap text-[12px] leading-4 text-muted-foreground/70" title={row.at}>
             {row.relative}
           </span>
@@ -185,6 +191,7 @@ export function AppSidebar({ route }: { route: Route }) {
   const { isMobile, setOpenMobile } = useSidebar();
   const [search, setSearch] = useState("");
   const rows = useMemo(() => (tasks ?? []).map((t: Task) => taskRowView(t, now)), [tasks, now]);
+  const reviews = usePendingReviews(tasks);
   const visible = matchingRows(rows, search);
   const searching = search.trim().length > 0;
   const activeTask = route.name === "task" ? route.id : null;
@@ -279,7 +286,7 @@ export function AppSidebar({ route }: { route: Route }) {
             ) : null}
             {visible.map((row) => (
               <SidebarMenuItem key={row.id}>
-                <TaskRow row={row} active={row.id === activeTask} onNavigate={onNavigate} />
+                <TaskRow row={row} active={row.id === activeTask} onNavigate={onNavigate} review={reviews.has(row.id)} />
               </SidebarMenuItem>
             ))}
           </SidebarGroup>
