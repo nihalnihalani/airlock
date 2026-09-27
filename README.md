@@ -60,18 +60,6 @@ An AI agent that does real work (repairs real bugs, browses the real web, runs r
 
 Built at **The Agent Arena Hackathon** (hosted by Vultr, San Francisco, 26–27 Sep 2026) for **Challenge 1: Blast Radius Zero, Safe Agent Execution on Vultr**. The brief: a web agent that does real work (writing and running code, or operating a real browser) where every action is contained in a sandbox on Vultr, and a central control layer plans, dispatches and returns verifiable output.
 
-| Required deliverable | Airlock |
-|---|---|
-| GitHub repo with setup and docs | This README, [docs/runbook.md](docs/runbook.md), [docs/configuration.md](docs/configuration.md), [deploy/README.md](deploy/README.md) |
-| Vultr VM backend that runs the whole loop, not static hosting | VM A plans and drives the model; VM B (VX1) executes. [Architecture](#-architecture) |
-| All agent LLM calls through Vultr Serverless Inference | `api.vultrinference.com/v1` is the **only** provider in the runtime path. The key lives on VM A only. |
-| Sandbox is a container or throwaway instance, never the app process | Per-attempt Kata microVM containers, created and destroyed by the supervisor |
-| Public demo URL | **https://155-138-198-12.sslip.io** |
-| Recorded demo video with one containment moment | [vultr-demo.mp4](docs/demo/vultr-demo.mp4): `rm -rf /` and a fork bomb contained at **1:45–2:03** |
-| Clear architecture and use case | [How it solves the challenge](#-how-airlock-solves-blast-radius-zero) · [Architecture](#-architecture) |
-| Original work clearly identified | [Built here vs reused](#-built-on-openmuse--openbot-built-here-vs-reused) + [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) + git history |
-| Pattern A (sandboxed code) / Pattern B (sandboxed browser) | **Both**: code repair plus offline analysis (A), and real Chromium behind an egress proxy (B) |
-
 ---
 
 ## 🛡 How Airlock solves Blast Radius Zero
