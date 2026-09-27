@@ -85,6 +85,8 @@ export interface Config {
   controlSettleMs: number;
   /** Lifetime of an action proposal and its approval code (AIRLOCK_PROPOSAL_TTL_MS). */
   proposalTtlMs: number;
+  /** Teardown retries for a finished task whose cleanup was not confirmed (AIRLOCK_CLEANUP_RETRIES, cleanup-sweeper.ts). */
+  cleanupRetries: number;
 }
 
 export class ConfigError extends Error {
@@ -219,6 +221,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     controlIdleMs: intEnv(env, "AIRLOCK_CONTROL_IDLE_MS", 5 * 60_000, 10_000, 60 * 60_000),
     controlSettleMs: intEnv(env, "AIRLOCK_CONTROL_SETTLE_MS", 10_000, 1000, 120_000),
     proposalTtlMs: intEnv(env, "AIRLOCK_PROPOSAL_TTL_MS", 15 * 60_000, 60_000, 24 * 60 * 60_000),
+    cleanupRetries: intEnv(env, "AIRLOCK_CLEANUP_RETRIES", 6, 0, 100),
     port: intEnv(env, "PORT", 3000, 1, 65535),
     bind: env.CONTROL_BIND?.trim() || "0.0.0.0",
     dataDir: resolve(env.AIRLOCK_DATA_DIR?.trim() || "./data"),

@@ -7,6 +7,7 @@ import { join } from "node:path";
 import type { Task } from "@airlock/contracts";
 import { createApp } from "./api.ts";
 import { ArtifactService } from "./artifact-service.ts";
+import { CleanupSweeper } from "./cleanup-sweeper.ts";
 import { RepairAvailabilityService, describeDiagnostics, type DiagnosticScript } from "./availability.ts";
 import { ControlService } from "./browser-control.ts";
 import { ArtifactStore, buildManifest, exportBundle, validateEnvelope, zipFiles } from "./artifacts/index.ts";
@@ -151,6 +152,8 @@ async function main() {
   if (config.modelVision) log.info("AIRLOCK_MODEL_VISION=1: screenshots are sent to the model as images (verify with scripts/probe-model.ts --vision)");
   const handler = createDispatchingHandler({ repair: repairHandler, general: generalHandler });
   const worker = new TaskWorker(store, handler, { bus, leaseMs: WORKER_LEASE_MS, pollMs: 1000, concurrency: 2 });
+  // F3: a finished task whose teardown was not confirmed is retried with backoff until confirmed or exhausted.
+  const cleanupSweeper = new CleanupSweeper({ store, supervisor, bus, maxRetries: config.cleanupRetries, pollMs: 5000 });
   const sessions = new SessionService(store, {
     operatorPassword: config.operatorPassword,
     judgePassword: config.judgePassword,
@@ -192,6 +195,7 @@ async function main() {
   else log.warn("no web UI directory (apps/web/dist); only /api is served. Build it with: bun run --cwd apps/web build");
 
   worker.start();
+  cleanupSweeper.start();
   const server = Bun.serve({ port: config.port, hostname: config.bind, fetch: app.fetch, idleTimeout: 255 });
   log.info("control listening", { url: `http://${config.bind}:${server.port}`, driver: config.driver.kind, model: config.driver.kind === "vultr" ? config.vultr.model : null, logLevel: log.level });
 
@@ -202,6 +206,7 @@ async function main() {
     log.info("shutting down", { signal });
     server.stop(true);
     await worker.stop().catch((error) => backgroundFailure("worker stop", error));
+    await cleanupSweeper.stop().catch((error) => backgroundFailure("cleanup sweeper stop", error));
     await store.close().catch((error) => backgroundFailure("store close", error));
     process.exit(0);
   };
