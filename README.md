@@ -2,319 +2,390 @@
 
 # Airlock
 
-**Give the agent a stranger's bug report. Get back a patch you can try, with checks the agent could not fake, while every line of untrusted code runs in a disposable sandbox.**
+**Let the agent do anything. Nothing it does can touch you.**
 
-[![The Agent Arena Hackathon](https://img.shields.io/badge/The%20Agent%20Arena%20Hackathon-2026-007BFC?style=for-the-badge)](#hackathon-fit)
-[![Challenge 1](https://img.shields.io/badge/Challenge%201-Blast%20Radius%20Zero-dc2626?style=for-the-badge)](#hackathon-fit)
-[![Live repair gate](https://img.shields.io/badge/live%20repair%20gate-3%2F3%20on%20Vultr-16a34a?style=for-the-badge)](#status)
-[![Live demo](https://img.shields.io/badge/live%20demo-Kata%20on%20VX1-007BFC?style=for-the-badge)](https://155-138-198-12.sslip.io)
+An AI agent that does real work (repairs real bugs, browses the real web, runs real analysis), where every action runs in a disposable Kata microVM on **Vultr** and every result is judged by checks the agent cannot fake.
 
-[![Vultr Serverless Inference](https://img.shields.io/badge/Vultr-Serverless%20Inference%20%C2%B7%20glm--5.3-007BFC?style=flat-square&logo=vultr&logoColor=white)](https://www.vultr.com/products/serverless-inference/)
-[![Vultr VX1](https://img.shields.io/badge/Vultr-VX1%20sandbox%20host-007BFC?style=flat-square&logo=vultr&logoColor=white)](https://docs.vultr.com/how-to-set-up-agent-sandboxing-on-vultr-cloud-compute)
+[![The Agent Arena Hackathon](https://img.shields.io/badge/The%20Agent%20Arena%20Hackathon-Vultr%20·%20SF%202026-007BFC?style=for-the-badge)](#-hackathon-submission)
+[![Challenge 1](https://img.shields.io/badge/Challenge%201-Blast%20Radius%20Zero-dc2626?style=for-the-badge)](#-how-airlock-solves-blast-radius-zero)
+[![Live demo](https://img.shields.io/badge/▶%20live%20demo-155--138--198--12.sslip.io-16a34a?style=for-the-badge)](https://155-138-198-12.sslip.io)
+[![Demo video](https://img.shields.io/badge/▶%20video-Vultr%20walkthrough%202%3A20-111827?style=for-the-badge)](docs/demo/vultr-demo.mp4)
+
+[![Vultr Serverless Inference](https://img.shields.io/badge/Vultr-Serverless%20Inference%20·%20glm--5.3-007BFC?style=flat-square&logo=vultr&logoColor=white)](https://www.vultr.com/products/cloud-inference/)
+[![Vultr VX1](https://img.shields.io/badge/Vultr-VX1%20Cloud%20Compute%20·%20%2Fdev%2Fkvm-007BFC?style=flat-square&logo=vultr&logoColor=white)](https://www.vultr.com/products/vx1-compute/)
+[![Vultr Cloud Compute](https://img.shields.io/badge/Vultr-Cloud%20Compute%20·%20control%20plane-007BFC?style=flat-square&logo=vultr&logoColor=white)](https://www.vultr.com/pricing/)
+[![Vultr VPC](https://img.shields.io/badge/Vultr-VPC%202.0-007BFC?style=flat-square&logo=vultr&logoColor=white)](https://www.vultr.com/products/vpc/)
+[![Vultr Firewall](https://img.shields.io/badge/Vultr-Firewall%20groups-007BFC?style=flat-square&logo=vultr&logoColor=white)](https://www.vultr.com/api/#tag/firewall)
+[![Vultr API v2](https://img.shields.io/badge/Vultr-API%20v2%20provisioning-007BFC?style=flat-square&logo=vultr&logoColor=white)](https://www.vultr.com/api/)
+
+[![Preflight](https://img.shields.io/badge/preflight%20on%20VX1-49%2F49-16a34a?style=flat-square)](docs/evidence/vultr/)
+[![Live repair gate](https://img.shields.io/badge/live%20repair%20gate-3%2F3-16a34a?style=flat-square)](docs/evidence/live-gate/)
+[![Vultr acceptance](https://img.shields.io/badge/Vultr%20acceptance-9%2F9-16a34a?style=flat-square)](docs/evidence/vultr/acceptance-f223c19/)
+[![Isolation probe](https://img.shields.io/badge/isolation%20probe-all%20BLOCKED-16a34a?style=flat-square)](#-the-five-checkpoints)
 [![Kata Containers](https://img.shields.io/badge/Kata-guest%20kernel%20per%20sandbox-f59e0b?style=flat-square)](https://katacontainers.io/)
-[![gVisor](https://img.shields.io/badge/gVisor-runsc%20installed%20floor-4285F4?style=flat-square)](https://gvisor.dev/)
+[![gVisor](https://img.shields.io/badge/gVisor-installed%20floor-4285F4?style=flat-square)](https://gvisor.dev/)
+[![Tests](https://img.shields.io/badge/tests-988%20passing-16a34a?style=flat-square)](docs/configuration.md#testing)
 
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6?style=flat-square&logo=typescript&logoColor=white)
 ![Bun](https://img.shields.io/badge/Bun-1.3-000000?style=flat-square&logo=bun)
 ![Hono](https://img.shields.io/badge/Hono-API-E36002?style=flat-square&logo=hono&logoColor=white)
 ![React](https://img.shields.io/badge/React-Vite-61DAFB?style=flat-square&logo=react&logoColor=black)
-![Python](https://img.shields.io/badge/Python-3.12%20runtime-3776AB?style=flat-square&logo=python&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-398%20control%20%C2%B7%20207%20supervisor%20%C2%B7%20132%20web%20%C2%B7%20135%20runtime%20%C2%B7%20114%20other-16a34a?style=flat-square)
+![Playwright](https://img.shields.io/badge/Chromium-Playwright-2EAD33?style=flat-square&logo=playwright&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square&logo=python&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-supervised-2496ED?style=flat-square&logo=docker&logoColor=white)
+[![Third-party notices](https://img.shields.io/badge/upstream-MIT%20notices%20kept-lightgrey?style=flat-square)](THIRD_PARTY_NOTICES.md)
 
 <br />
-<br />
 
-<a href="docs/demo/airlock-intro.mp4"><img src="docs/assets/airlock-intro-poster.jpg" alt="Airlock intro video: sealed sandboxes on Vultr (1:40, click to play)" width="900" /></a>
+<a href="docs/demo/airlock-intro.mp4"><img src="docs/assets/airlock-intro-poster.jpg" alt="Airlock intro video: sealed sandboxes on Vultr (1:40, click to play)" width="880" /></a>
 
-<sub><b>▶ <a href="docs/demo/airlock-intro.mp4">Watch the intro (1:40)</a></b> · <a href="docs/demo/vultr-demo.mp4">Live walkthrough on the Vultr deployment (2:20)</a>: host check, the hero task, a live repair, Kata containment and teardown. Details in <a href="docs/demo/README.md">docs/demo</a>.</sub>
-
-<br />
-<br />
-
-<img src="docs/assets/ui-task.png" alt="Airlock task page on the Vultr deployment: a live glm-5.3 repair under Kata as a conversation with model turns, tool calls, checkpoints and the Passed these checks result, with the five checkpoints in the details pane" width="900" />
-
-<sub>A live-gate run on the deployment (glm-5.3 via Vultr Serverless Inference, sandboxes under Kata on the VX1 host), captured signed out before task data required a session.</sub>
+<sub><b>▶ <a href="docs/demo/airlock-intro.mp4">Intro (1:40)</a></b> · <b>▶ <a href="docs/demo/vultr-demo.mp4">Live walkthrough on the Vultr deployment (2:20)</a></b>: instance 0:06 · hero task 0:25 · live repair 1:06 · <b>containment 1:45</b> · teardown 2:03</sub>
 
 </div>
 
-Airlock is a web agent that does real work in disposable sandboxes on Vultr. It has two task kinds. **General tasks** run a goal under a controller-selected profile (`analysis`, `web-research`, `web-analysis`) with real headless Chromium behind a per-task egress proxy, offline Python and Node sandboxes, owner uploads, screenshots, human takeover, and approvals for supported form submissions only; the controller's completion checks, never the model, decide the result. **Repair** takes an untrusted bug report for a supported library, reproduces the failure in a disposable sandbox on Vultr, attempts a minimal repair, and returns a patch with **externally measured** before/after behavior. The agent can edit the candidate; it can never edit the acceptance contract, grant itself privileges, publish its work, or decide that it passed. The result of a run is one of six terminal outcomes; "Passed these checks" means exactly that the frozen contract cases passed on a sealed candidate, measured by a comparator that never imports the candidate.
+---
 
-## Hackathon fit
+## ⚡ In 30 seconds
 
-Built at **The Agent Arena Hackathon** (Vultr, NetBird, Cerebral Valley; San Francisco, 26–27 Sep 2026) for **Challenge 1, Blast Radius Zero**: a web agent that does real work while every action stays inside a sandbox on Vultr.
+- **Real work, not a chat.** Paste a real bug report and Airlock reproduces it, repairs it with `glm-5.3` on **Vultr Serverless Inference**, and returns a patch. Or give it a goal and it drives a real **Chromium**, downloads data, and analyses it offline into a chart with cited sources.
+- **Blast radius zero.** Every command, page and line of model-written code runs in a **Kata microVM on a Vultr VX1 host**. It has its own guest kernel, no network (the browser gets only an allowlisting proxy), no secrets, hard caps, and it is destroyed after use. `rm -rf /` and fork bombs die inside their sandbox while everything else keeps running.
+- **The agent can't mark its own homework.** Success is decided by an external comparator, on sealed bytes, in fresh sandboxes. A forged "all tests passed" log still fails.
+- **Deployed and measured on Vultr:** preflight **49/49**, live repair **3/3**, end-to-end acceptance **9/9** with the live model.
 
-| The judge asks | What Airlock shows |
+**Try it:** https://155-138-198-12.sslip.io. Sign in with the judge password shared with the submission (it is never stored in this repo). Then start a repair (the `tabulate-365` profile), run a web-analysis task, or paste `rm -rf / --no-preserve-root` into **Hostile input**.
+
+---
+
+## 🏆 Hackathon submission
+
+Built at **The Agent Arena Hackathon** (hosted by Vultr, San Francisco, 26–27 Sep 2026) for **Challenge 1: Blast Radius Zero, Safe Agent Execution on Vultr**. The brief: a web agent that does real work (writing and running code, or operating a real browser) where every action is contained in a sandbox on Vultr, and a central control layer plans, dispatches and returns verifiable output.
+
+| Required deliverable | Airlock |
 |---|---|
-| **"Show me the instance."** | A Vultr VM backend: the control plane on VM A and the supervisor that owns Docker on a VX1 sandbox host (VM B). Every run record carries the host check from the machine that ran it. |
-| **"Is the model yours, or a borrowed key?"** | Every agent call goes to Vultr Serverless Inference (`api.vultrinference.com`); the run page shows the model id, host, `finish_reason` and token counts for each turn. No other provider is in the runtime path. |
-| **"Is Vultr planning and dispatching?"** | The control plane plans the task, drives the model and dispatches every tool call to the supervisor; nothing the report or the model produces runs in the app process. |
-| **"If I paste `rm -rf /`, what dies?"** | The Hostile input panel runs it in a fresh sandbox and answers with a blast-radius card: what died (that sandbox, its runtime and guest kernel) and what survived (control plane, supervisor, other tasks, a host sentinel), then the teardown listing. |
-| **Secret hygiene, limits, lifecycle** | No key, token, Docker socket, host mount or network route in any sandbox; CPU, memory, PID, time, output and disk caps on every run; every sandbox destroyed, with `(no sandboxes)` recorded. |
+| GitHub repo with setup and docs | This README, [docs/runbook.md](docs/runbook.md), [docs/configuration.md](docs/configuration.md), [deploy/README.md](deploy/README.md) |
+| Vultr VM backend that runs the whole loop, not static hosting | VM A plans and drives the model; VM B (VX1) executes. [Architecture](#-architecture) |
+| All agent LLM calls through Vultr Serverless Inference | `api.vultrinference.com/v1` is the **only** provider in the runtime path. The key lives on VM A only. |
+| Sandbox is a container or throwaway instance, never the app process | Per-attempt Kata microVM containers, created and destroyed by the supervisor |
+| Public demo URL | **https://155-138-198-12.sslip.io** |
+| Recorded demo video with one containment moment | [vultr-demo.mp4](docs/demo/vultr-demo.mp4): `rm -rf /` and a fork bomb contained at **1:45–2:03** |
+| Clear architecture and use case | [How it solves the challenge](#-how-airlock-solves-blast-radius-zero) · [Architecture](#-architecture) |
+| Original work clearly identified | [Built here vs reused](#-built-on-openmuse--openbot-built-here-vs-reused) + [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) + git history |
+| Pattern A (sandboxed code) / Pattern B (sandboxed browser) | **Both**: code repair plus offline analysis (A), and real Chromium behind an egress proxy (B) |
 
-## Status
+---
 
-**Deployed on Vultr (27 Sep 2026): https://155-138-198-12.sslip.io** — this branch (`fix/milestone-1-guarantees`), control plane on VM A (`vc2-2c-4gb`, atl), supervisor on a **VX1** host (`vx1-g-4c-16g-240s`) with **Kata Containers** (guest kernel 6.18.35 vs host 6.8.0-139), live model **glm-5.3 on Vultr Serverless Inference**. It closes the gap audit ([research/42](research/42-AIRLOCK-GAP-AUDIT.md)) and adds doc 40's browser and general execution (stages 0–6); the per-finding ledger is [docs/implementation-status.md](docs/implementation-status.md) and the independent requirement-to-evidence matrix is [docs/acceptance-matrix.md](docs/acceptance-matrix.md).
+## 🛡 How Airlock solves Blast Radius Zero
 
-- **Preflight on VM B: 49/49** ([evidence](docs/evidence/vultr/)): KVM, Kata guest kernel, every sandbox inspected as `kata` with the isolation probe fully BLOCKED, the workspace quota holding with post-stop collection, detached children dying with the sandbox, Chromium's own sandbox active under Kata, egress through the per-attempt proxy only, metadata and form POSTs refused, an offline analysis sandbox, and a host-wide empty listing.
-- **Live repair gate: 3/3** through the public URL, each judged by the external comparator ([receipt](docs/evidence/live-gate/)); repair is available in production because that receipt matches the running model, runtime, image, adapter and contract.
-- **Vultr acceptance: 9/9** with the live model ([evidence](docs/evidence/vultr/acceptance-f223c19/)): repair with a byte-identical sealed export, CSV analysis with correct answers on fresh data, browser research with screenshots, the combined hero (public page → CSV download → offline analysis → chart with sources) for two data variants, an approved form submission confirmed by the destination's receipt, human takeover within policy, Kata containment of hostile commands with a healthy control plane, cross-session isolation, and an empty host afterwards.
-- **Also verified locally** (Colima runc, labelled dev-unsafe): the full acceptance suite and C41 crash/restart cases (control plane or supervisor killed mid-operation: nothing uncertain is replayed).
-- **Documented limitations:** GET requests to sites the task owner allowed can carry data; pages that need web workers do not run in the sandboxed browser; "Result verified" means the profile's structural checks passed, not that an answer is correct; one control-plane process (PGlite).
+The kickoff turned the brief into four judge questions. Here are the answers, each backed by evidence:
 
-The earlier deployment of `main` (replaced by this branch on 27 Sep) is described below for history; its measurements apply to that revision only.
+| The judge asks | Airlock's answer | Proof |
+|---|---|---|
+| **"Show me the instance."** | Two Vultr VMs in `atl`: VM A `vc2-2c-4gb` (control) and VM B **VX1** `vx1-g-4c-16g-240s` (sandboxes, `/dev/kvm`). Every run record carries the host check of the machine that ran it, and the UI shows both instance IDs. | [01-instance-host-check](docs/assets/vultr/01-instance-host-check.jpg) |
+| **"Is the model yours, or a borrowed key?"** | Every agent turn goes to **Vultr Serverless Inference**. The model was picked by a measured tool-call round trip on the live `/v1/models` list, and each turn records model, host and tokens. | [live-gate receipt](docs/evidence/live-gate/) |
+| **"Is Vultr planning and dispatching?"** | The control plane on VM A owns phases, budgets and the model loop, and dispatches every tool call over the **VPC** to the supervisor on VX1. Nothing from a report or the model runs in the app process. | [Architecture](#-architecture) |
+| **"If I paste `rm -rf /`, what dies?"** | Only that sandbox: its Kata guest kernel `6.18.35` (host `6.8.0`). The control plane, supervisor, host sentinel and a sibling task survive, and the card ends with `(no sandboxes)`. | [06-hostile-rm-rf](docs/assets/vultr/06-hostile-rm-rf.jpg) · [07-forkbomb-sibling-survived](docs/assets/vultr/07-hostile-forkbomb-sibling-survived.jpg) |
 
-- **Deployed on Vultr, `atl` (main, before this branch):** control plane on `vhp-2c-4gb-amd` (VM A) behind Caddy TLS at **https://144-202-21-168.sslip.io**; supervisor on a **VX1** `vx1-g-4c-16g-240s` (VM B), bound to its VPC address only, with **Kata Containers** as the sandbox runtime (gVisor `runsc` installed as the floor). About $0.19/hour for both. Details, scripts and teardown: [`deploy/README.md`](deploy/README.md).
-- **Isolation, measured on VM B** (`deploy/preflight.sh`): `/dev/kvm` present; every sandbox runs a **guest kernel `6.18.35` under Kata** while the host runs `6.8.0-139-generic`; the supervisor's inspection records `runtime=kata`, `devUnsafe=false`; the isolation probe reports metadata, DNS, outbound TCP, Docker socket and host mounts all **BLOCKED**; `169.254.169.254` is unreachable from inside a sandbox; teardown `(no sandboxes)`. Port 4300 is not reachable from the internet.
-- **Smoke against the deployment:** diagnostic repair `CANDIDATE_PASSED_CHECKS`, forged "tests passed" log `CHECKS_FAILED`, a task cancelled mid-command `cancelled` with nothing left running, and a fork bomb absorbed by its Kata sandbox while another task kept running.
-- **Live repair against the deployment:** [python-tabulate #365](https://github.com/astanin/python-tabulate/issues/365) repaired by `glm-5.3` on Vultr Serverless Inference in **3 of 3 fresh runs**, each judged by the external comparator (12–15 model calls, 41–63 s per run). Locally on dev-unsafe `runc` it was also 3 of 3. All patches fix the root cause (use the header count when the table is empty). The gate is `bun scripts/live-gate.ts --n 3`. This is one known historical bug, not a general repair-success rate.
-- **Local development** (`./run.sh`) runs on plain `runc` with `AIRLOCK_DEV_UNSAFE=1`: it shares the host kernel and every record it produces is labelled `dev-unsafe`.
+**The four containment focus areas**
 
-## Architecture
+| Focus area | Control | Measured on VX1 |
+|---|---|---|
+| **Process isolation** | Kata microVM per sandbox (gVisor installed as the floor, `runc` refused in production). The runtime is **inspected, never assumed**: 13 hardening checks are read back from the actual container before every dispatch. | guest kernel differs from host; runtime recorded as `kata` |
+| **Secret hygiene** | No model key, token, Docker socket, host mount, cookie or metadata route inside any sandbox. Provider credentials exist only on VM A. | isolation probe: metadata, DNS, TCP, socket, mounts all **BLOCKED** |
+| **Resource limits** | 1 CPU · 512 MiB · 64 PIDs · 30 s/command · 64 KiB output · 5 min/attempt · capped workspace. Host-wide capacity admission refuses (429) before any Docker call. | workspace quota stops at 127/128 MiB; fork bomb contained |
+| **Lifecycle discipline** | revoke → stop → confirm → collect → destroy, with fencing so late results are ignored. A janitor reconciles leftovers after crashes. | host-wide listing `(no sandboxes)` after every run |
+
+---
+
+## 🟦 Built on Vultr
+
+| Vultr product | What Airlock uses it for | Where |
+|---|---|---|
+| [**Serverless Inference**](https://www.vultr.com/products/cloud-inference/) | Every agent model call: `glm-5.3` with forced tool calls (`-normalize` for standard tool-call IDs), text and vision. Pinned base URL `https://api.vultrinference.com/v1`, redirects refused. | [`apps/control/src/vultr-client.ts`](apps/control/src/vultr-client.ts) |
+| [**VX1 Cloud Compute**](https://www.vultr.com/products/vx1-compute/) | The sandbox host. VX1 "supports customer virtualization" and exposes `/dev/kvm`, so each sandbox is a **Kata microVM** with its own kernel. This follows the direction of Vultr's [agent sandboxing guide](https://docs.vultr.com/how-to-set-up-agent-sandboxing-on-vultr-cloud-compute) (KVM microVMs on VX1). | VM B · [`deploy/host/sandbox-host.sh`](deploy/host/sandbox-host.sh) |
+| [**Cloud Compute**](https://www.vultr.com/pricing/) | The trusted control plane (`vc2-2c-4gb`): API, worker, comparator, artifacts, web UI, TLS. | VM A · [`deploy/host/control-host.sh`](deploy/host/control-host.sh) |
+| [**VPC 2.0**](https://www.vultr.com/products/vpc/) | Private control → supervisor link. The supervisor binds only to its VPC address; VM B's only public port is SSH, open to admin IPs. | [`deploy/vultr/provision.sh`](deploy/vultr/provision.sh) |
+| [**Firewall groups**](https://www.vultr.com/api/#tag/firewall) | VM A: 443/80 public, 22 from admin IPs. VM B: 22 from admin IPs only. | `provision.sh` |
+| [**API v2**](https://www.vultr.com/api/) | One-command, idempotent provisioning (VPC, firewalls, both VMs, SSH key), key checks and teardown. | [`deploy/vultr/`](deploy/vultr/) · [`scripts/check-keys.ts`](scripts/check-keys.ts) |
+
+Region `atl` keeps inference traffic in-region. The two VMs cost roughly $0.18/hour together (Vultr plans API); `deploy/vultr/destroy.sh` removes everything.
+
+---
+
+## 🧭 Architecture
 
 ```mermaid
 flowchart TB
-  U["Maintainer or judge<br/>(browser)"] -->|"REST + replayable SSE"| API
+  U["👤 Judge / maintainer<br/>browser"]
+  WEB["🌐 Public websites<br/>owner allowlist only"]
 
-  subgraph A["Vultr VM A · control plane (trusted)"]
-    API["Hono API<br/>sessions · roles · export grants"]
-    W["TaskWorker + RepairHandler<br/>phases · budgets · one model loop"]
-    DB[("PGlite<br/>tasks · leases · events")]
-    V["External comparator<br/>frozen contract, owns the verdict"]
-    F[("Immutable artifacts<br/>sealed candidate · patch · records")]
-    API --> W
-    W <--> DB
-    W --> V
-    V --> F
-    API --> F
+  subgraph VULTR["Vultr · region atl"]
+    INF["☁️ Vultr Serverless Inference<br/>api.vultrinference.com/v1<br/>glm-5.3 · forced tool calls · vision"]
+
+    subgraph VPC["Vultr VPC 2.0 · private link"]
+      subgraph A["VM A · Cloud Compute vc2-2c-4gb · control plane · trusted<br/>Firewall: 443/80 public · 22 admin only"]
+        CADDY["Caddy · automatic TLS"]
+        API["Hono API · sessions · roles<br/>ownership checks · CSRF · replayable SSE"]
+        WORKER["TaskWorker · leases · heartbeats<br/>(adapted from OpenMuse)"]
+        RH["RepairHandler<br/>prepare → baseline → reproduce<br/>→ repair → freeze → verify → ready"]
+        GH["General handler<br/>analysis · web-research · web-analysis<br/>controller completion checks"]
+        CTL["Browser control + ActionProposals<br/>exclusive takeover · digest approvals"]
+        VC["Vultr client · key lives here only<br/>pinned URL · redirects refused"]
+        CMP["External comparator<br/>frozen contract · owns the verdict"]
+        ART[("Immutable artifacts<br/>sealed SourceManifest · ExportSeal")]
+        DB[("PGlite · tasks · append-only events")]
+        FIX["Fixtures · forms.host<br/>airlock-forms-v1 · HMAC receipts"]
+      end
+
+      subgraph B["VM B · VX1 vx1-g-4c-16g-240s · /dev/kvm · supervisor on VPC only"]
+        SUP["Supervisor · only Docker owner<br/>fixed vocabulary · bearer · request digests<br/>(forked from OpenBot)"]
+        JR[("Operation journal<br/>fences · generations")]
+        CAP["Capacity admission"]
+        INS["Runtime inspection<br/>13 hardening checks · runtime = kata"]
+
+        subgraph CODE["Code sandboxes · Kata microVM · --network none"]
+          AU["author"]
+          BA["baseline"]
+          CA["candidate"]
+          PV["preview"]
+          HO["hostile"]
+          AN["analysis · Python"]
+          ND["node"]
+        end
+
+        subgraph BROW["Browser sandbox · Kata · per-attempt networks"]
+          BR["Chromium runner<br/>no shell · no CDP · no evaluate<br/>non-GET refused"]
+          EG["Egress proxy<br/>allowlist · DNS pinned<br/>private + metadata IPs refused"]
+        end
+      end
+    end
   end
 
-  W <-->|"tool calls"| L["Vultr Serverless Inference<br/>glm-5.3"]
-
-  subgraph B["Vultr VM B · VX1 sandbox host"]
-    S["Supervisor<br/>fixed vocabulary · fencing · deadlines · janitor"]
-    J[("Operation journal")]
-    S <--> J
-    S --> AU["Author sandbox<br/>reproduce + repair"]
-    S --> CO["Collector<br/>stopped workspace, read-only"]
-    S --> BA["Baseline sandbox<br/>pristine tree"]
-    S --> CA["Candidate sandbox<br/>sealed bytes"]
-    S --> PV["Preview invocation"]
-    S --> HO["Hostile-input sandbox"]
-  end
-
-  W -->|"private VPC link · bearer token"| S
-  V <-->|"typed inputs · bounded observations"| S
-  S -->|"validated source bytes"| F
-  W -.->|"optional add-on: NetBird peer link"| S
+  U -->|"HTTPS 443"| CADDY --> API
+  CADDY --> FIX
+  API --> WORKER
+  WORKER --> RH
+  WORKER --> GH
+  API --> CTL
+  RH --> VC
+  GH --> VC
+  VC -->|"HTTPS · tool calls"| INF
+  WORKER <--> DB
+  RH --> CMP --> ART
+  RH -->|"VPC :4300 · bearer token"| SUP
+  GH -->|"VPC :4300"| SUP
+  CTL -->|"VPC :4300 · fenced"| SUP
+  SUP <--> JR
+  SUP --> CAP
+  SUP --> INS
+  SUP --> CODE
+  SUP --> BROW
+  BR ---|"--internal network"| EG
+  EG -->|"allowlisted hosts"| WEB
+  EG -->|"approved submissions"| CADDY
+  SUP -->|"bounded, validated bytes"| ART
 ```
 
-Every sandbox runs with `--network none`, non-root, a read-only root filesystem, dropped capabilities and per-run CPU, memory, PID, time, output and disk caps, under Kata (target) or gVisor (floor). The model is an author inside the workflow, never its authority.
+**One authority per concern.** The model owns nothing.
 
-Two roles, meant for two VMs joined by a private (VPC) link:
-
-| Role | Where | Owns | Never |
-|---|---|---|---|
-| **Control plane** `apps/control` (VM A) | any plan, in `atl` (where the inference models live) | task identity, contracts, phases, budgets, sessions, export authorization, the model client | holds a Docker socket, runs candidate code, trusts anything a sandbox prints |
-| **Supervisor** `apps/supervisor` (VM B) | VX1 sandbox host with `/dev/kvm` | container identity, actual execution, deadlines, termination, cleanup, the isolation checks | learns an image, mount, network, runtime option or host path from a caller: none is expressible in its API |
-| **Web UI** `apps/web` | served by the control plane | rendering authoritative REST/SSE state | deciding that anything passed |
-| **Runtime image** `runtime/python` | built on VM B | the pinned source tree, fixed adapter/collector/probe scripts | network, pip, secrets |
-| **Profile** `profiles/<id>` | repository | the supported repo/commit, what the agent may read and change, the frozen contract | a special case in code |
-| **Contracts** `packages/contracts` | shared | every boundary's schemas and digests | runtime configuration or secrets |
-
-The control plane runs one task through `prepare → baseline → reproduce → repair → freeze → verify → ready` (up to two repair attempts, the second fed the comparator's verdicts) around a single model loop with five tools (`read_file` with optional line ranges, `edit_file` for exact-match replacements, `write_file` for small files, `run`, `submit_candidate`). `submit_candidate` only advances to freeze: the supervisor revokes dispatch, stops the author sandbox, confirms the stop and collects the allowed files in a fresh container; the control plane seals them into a `SourceManifest` whose digest identifies the candidate from then on. Verification, preview and export all run fresh one-shot sandboxes from that sealed bundle. The comparator decides the verdict from observations; a `passed` field, a pytest exit code or an "all tests passed" log from inside the sandbox carries no authority.
-
-**Terminal outcomes:** `NOT_REPRODUCED`, `REPRODUCED_UNRESOLVED`, `CANDIDATE_PASSED_CHECKS`, `CHECKS_FAILED`, `INCONCLUSIVE`, `STOPPED_LIMIT`. A cancelled task has status `cancelled` and no outcome.
-
-### The five checkpoints
-
-Every run record carries them; the task page shows them under "Five checkpoints" and the export bundle contains them.
-
-1. **Host check**: Docker version, CPU virtualization, `/dev/kvm` presence and mode, runtimes Docker lists, the selected runtime and the `devUnsafe` flag.
-2. **Execution log**: every command with exit code, duration and bounded output; baseline and candidate invocations with their `ExecResult`.
-3. **In-sandbox identity**: `hostname` and `uname -a` read from inside each sandbox.
-4. **Isolation probe**: metadata endpoint, DNS, outbound TCP, Docker socket and host mounts, each `BLOCKED | REACHED | UNKNOWN`; anything not `BLOCKED` refuses the run before any agent work.
-5. **Teardown**: what the supervisor still owns for the attempt after destroy. Must be `(no sandboxes)`; anything else stays visible on the task.
-
-### Runtime tiers
-
-The tier is **inspected, never assumed**: the supervisor creates every container with the configured OCI runtime, reads the effective configuration back and refuses (409, container destroyed) if any hardening check or the runtime differs.
-
-| Tier | `AIRLOCK_RUNTIME` | Meaning | Measured |
-|---|---|---|---|
-| Kata Containers | `kata` | own guest kernel per sandbox; target on the VX1 host | **deployed**: VM B runs every sandbox under Kata (guest kernel 6.18.35, host 6.8.0), inspected and recorded per run |
-| gVisor | `runsc` | user-space syscall interception; the floor for a deployment | installed on VM B and verified by the preflight (`4.19.0-gvisor`); not the selected runtime |
-| runc | `runc` + `AIRLOCK_DEV_UNSAFE=1` | shares the host kernel; **development only**, never a deployment default | local `./run.sh` on macOS/Colima |
-
-## Quick start (local, dev-unsafe)
-
-Prerequisites: Bun 1.3, Docker (on macOS via Colima: `colima start`; `./run.sh` defaults `DOCKER_HOST` to the Colima socket), `python3`, `git`, `perl` (present on macOS and Linux), `unzip` and `patch` (for the smoke), `uv` (for the Python tests).
-
-```sh
-./run.sh                  # bun install if needed, build the runtime image and the web UI if missing,
-                          # start supervisor + control plane, stream the merged debug log; Ctrl-C stops everything
-./run.sh up -d            # the same, detached
-./run.sh status           # pids, health JSON, owned containers, model driver/model, log path
-./run.sh logs             # tail -F the merged log
-./run.sh smoke            # end to end through the HTTP API (about a minute; scripted driver)
-./run.sh gate --n 3       # live-repair gate (needs AIRLOCK_MODEL_DRIVER=vultr, a key and AIRLOCK_MODEL in .env)
-./run.sh test             # the four suites: control, supervisor (real Docker), web, runtime pytest
-./run.sh down             # stop; footer with the docker owned-container listing
-open http://127.0.0.1:3000/   # web UI; operator password is in data/dev.env
-```
-
-`./run.sh` is a thin wrapper over `scripts/dev-up.sh` / `scripts/dev-down.sh`, which hold the start/stop
-logic: they generate a random `SUPERVISOR_TOKEN` and the two role passwords into the gitignored
-`data/dev.env` on first run, load `.env`, build the runtime image (`runtime/python/build.sh tabulate-365`)
-when it is missing, rebuild `apps/web/dist`, start both processes on `127.0.0.1`, wait for `/health` and
-`/api/session`, and are idempotent. They can still be called directly (`scripts/dev-up.sh --detach`,
-`bun scripts/smoke.ts`); the wrapper adds the merged debugging log below.
-
-### The debugging log
-
-Every `./run.sh up` writes `data/run/airlock-<YYYYmmdd-HHMMSS>.log` and points the symlink
-`data/run/airlock-latest.log` at it. It contains, in order:
-
-1. **A preflight header**: git revision and dirty flag, `bun`/`docker`/`uv` versions, `DOCKER_HOST`,
-   the runtimes Docker lists, the runtime image id and digest, the profile ids, a redacted summary of the
-   effective environment (values for ordinary settings, `[set, N chars]` for anything named like a
-   token, password or key), the chosen model driver and model, and the ports.
-2. **Both processes' output, merged in order**: each line is `<ISO ts> [control|supervisor] <line>`;
-   `dev-up`'s own progress (image build, URLs) appears as `[run]`. Each app's line is one JSON object
-   `{ts, level, app, msg, ...fields}` (see "Log levels" below).
-3. **A footer on exit** with the exit reason and the `docker ps` listing of owned containers, which must
-   read `(no sandboxes)`.
-
-**Log levels.** Both apps read `AIRLOCK_LOG_LEVEL` (`error` | `warn` | `info` | `debug`; default `info`
-when started by hand). `./run.sh` defaults it to `debug`; pass `--quiet` for `info`. At `debug` the control
-plane records every HTTP request/response (method, path, status, duration, role, body sizes; never a body),
-worker lease claims/releases, every phase transition, every model call (model, host, `finish_reason`,
-prompt/completion/reasoning tokens, tool names, duration), every supervisor-client call (operation id,
-endpoint, status, duration, fence errors), SSE subscribe/replay/close and export grants; the supervisor
-records every HTTP request, every Docker verb with container/volume names and duration (create, inspect,
-start, stop, remove, list, archive upload, exec start/end with exit code and captured byte counts), probe
-results, provisioning, reconcile/janitor passes and what they removed, deadline timers armed and fired, and
-journal operations (new / replay / conflict / in-progress, completion status). At `info` only the startup
-lines, attempt lifecycle summaries and anomalies remain.
-
-**What is never in the log.** The supervisor token, the inference key, the role passwords, session tokens
-and cookies. The apps redact any field whose name looks like a credential and any bearer/cookie header
-value; the wrapper prints secret names only. The smoke run used for this README was grepped for every
-token, password and key value in `data/dev.env` and `.env`: zero hits.
-
-In the UI, sign in with the operator password, choose the `tabulate-365` profile, paste the issue text (for the hero case: an empty table with `headers` and `maxheadercolwidths` raises `IndexError`) and start. The default dev driver is scripted (see "Model driver"), so the run replays the labelled diagnostic candidate; pick `forged-log` or `slow` through the API's `scriptedDriver` field to see `CHECKS_FAILED` or a cancellable run. With `AIRLOCK_MODEL_DRIVER=vultr`, `VULTR_INFERENCE_API_KEY` and `AIRLOCK_MODEL` in `.env`, the same start runs live repairs.
-
-## Configuration
-
-Secrets come from the environment only. For local work, put `VULTR_INFERENCE_API_KEY`, `AIRLOCK_MODEL` and any overrides in a conventional `.env` at the repository root (gitignored; `dev-up.sh` loads it after the generated `data/dev.env`, and variables exported in your shell win over both). `.env.example` lists the deployment shape; nothing under `data/` or `.env` is committed.
-
-### Control plane (`apps/control`)
-
-| Variable | Required | Default | Meaning |
-|---|---|---|---|
-| `SUPERVISOR_TOKEN` | yes (≥16 chars) | — | Bearer secret for the supervisor API. |
-| `SUPERVISOR_URL` | no | `http://127.0.0.1:4300` | Supervisor base URL; the VPC address of VM B in a deployment. |
-| `AIRLOCK_MODEL_DRIVER` | no | `vultr` | `vultr` for live inference, or `scripted:<file-or-directory>` of JSON scripts for diagnostics and tests. Scripted runs are labelled `scripted:<name>` on every model event and are never a live repair. |
-| `VULTR_INFERENCE_API_KEY` | with `vultr` | — | Vultr Serverless Inference key. Never logged, never in an event, never in a sandbox. |
-| `VULTR_INFERENCE_BASE_URL` | no | `https://api.vultrinference.com/v1` | Must be https. |
-| `AIRLOCK_MODEL` | with `vultr` | — | Model name; choose it with `bun scripts/probe-model.ts` (measured tool-call round trip on the live `/v1/models` list). |
-| `AIRLOCK_DATA_DIR` | no | `./data` | PGlite database and content-addressed artifacts. |
-| `AIRLOCK_PROFILES_DIR` | no | `<repo>/profiles` | Profiles; each needs a verified `base/`. |
-| `AIRLOCK_RUNTIME_DIR` | no | `<repo>/runtime/python` | Where `adapter.py` lives (part of the adapter digest). |
-| `AIRLOCK_WEB_DIST` | no | `<repo>/apps/web/dist` | Built web UI served at `/`; `/api/*` always takes precedence; `none` disables. |
-| `AIRLOCK_OPERATOR_PASSWORD`, `AIRLOCK_JUDGE_PASSWORD` | no (≥8 chars, must differ) | — | Role passwords. Without both, no one can sign in. Task data (issue text, events, model turns, command output) is readable only by the session that started the task and by the operator; each login is its own principal, so judges sharing the judge password do not see each other's cases. Signed out, only profiles and the host check are served. Export is limited to candidates that passed their checks, and serves one sealed zip. |
-| `PORT`, `CONTROL_BIND` | no | `3000`, `0.0.0.0` | Listener. |
-| `AIRLOCK_INSECURE_COOKIES` | no | unset | `1` drops the cookie `Secure` flag for plain-http local development only. |
-| `AIRLOCK_TRUST_PROXY` | no | unset | Set when a reverse proxy fronts control (deployment step 2): `1` for a proxy on the same host, or a comma-separated list of proxy IP addresses. The login rate limit (10/min per client) then keys on the proxy's `X-Forwarded-For` hop for requests arriving from that proxy; every other peer is keyed on its own address, so a direct connection cannot spoof a fresh budget. Unset behind a proxy, all clients share the proxy's address and one login bucket, and ten bad passwords a minute from anyone lock every operator out. |
-| `AIRLOCK_SESSION_TTL_MS`, `AIRLOCK_EXPORT_GRANT_TTL_MS`, `AIRLOCK_HOSTILE_MIN_INTERVAL_MS` | no | 12 h, 24 h, 10 s | Session lifetime, export grant lifetime, per-session hostile-run rate limit. |
-
-### Supervisor (`apps/supervisor`)
-
-| Variable | Default | Meaning |
+| Component | Owns | Never |
 |---|---|---|
-| `SUPERVISOR_TOKEN` | required (≥16 chars) | Bearer token for every route except `GET /health`. |
-| `PORT` | `4300` | Listen port. |
-| `SUPERVISOR_BIND` | `127.0.0.1` | Bind address. A deployment sets VM B's **VPC** address, never a public interface. |
-| `AIRLOCK_RUNTIME` | `kata` | `kata`, `runsc` or `runc`. |
-| `AIRLOCK_DEV_UNSAFE` | unset | Must be `1` to allow `runc`; then every record carries `devUnsafe: true`. |
-| `AIRLOCK_DOCKER_RUNTIME_NAME` | per runtime | The name Docker lists the runtime under (e.g. `io.containerd.kata.v2`). |
-| `AIRLOCK_PROFILES_DIR` | `<repo>/profiles` | Profile manifests. |
-| `AIRLOCK_DATA_DIR` | `<repo>/data/supervisor` | Journal and host sentinel. |
-| `AIRLOCK_JOURNAL_PATH` | `<data dir>/supervisor-journal.sqlite` | Execution journal. |
-| `DOCKER_SOCKET` | dockerode default | Docker socket path; a `unix://` `DOCKER_HOST` is honoured too. |
-| `AIRLOCK_NAMESPACE` | `airlock` | Namespace in every container/volume name and label. |
-| `AIRLOCK_RETENTION_MS`, `AIRLOCK_JANITOR_INTERVAL_MS` | 30 min, 30 s | Stopped-volume retention past deadline; janitor period. |
+| **Control plane** (VM A) | identities, contracts, phases, budgets, sessions, export, the model client | holds a Docker socket, runs candidate code, trusts sandbox output |
+| **Supervisor** (VM B) | container identity, execution, deadlines, termination, cleanup, isolation checks | accepts an image, mount, network, runtime or host path from a caller |
+| **Comparator** | required case IDs, expected behaviour, the verdict | imports or executes candidate code |
+| **Artifact service** | canonical bytes and digests | replaces an immutable record |
+| **Model** | nothing: it proposes edits and tool calls | declares success, grants privileges, publishes |
 
-### Web UI (`apps/web`)
+### The repair loop: plan → dispatch → verify
 
-No runtime configuration: every request is relative (`/api/...`). `bun run --cwd apps/web build` writes `apps/web/dist`, which the control plane serves. For UI development `bun run --cwd apps/web dev` proxies `/api` to `AIRLOCK_CONTROL_URL` (default `http://localhost:3000`). The layout (case sidebar, the run as a conversation, details pane, hostile input as a chat) follows CopilotKit OpenBot's app; see [apps/web/README.md](apps/web/README.md) and the screenshots in `docs/assets/`: [mobile](docs/assets/ui-mobile.png) (deployment, Kata); [new case](docs/assets/ui-new-case.png) and [hostile input](docs/assets/ui-hostile.png) (local dev (runc): the hostile card there reports `runc`/dev-unsafe, which only shows that the container's read-only rootfs, dropped capabilities and `--network none` held, not kernel isolation).
-
-### Model driver
-
-`vultr` talks to Vultr Serverless Inference with forced tool calls (the API has no JSON mode); it is the only provider in the runtime path. `scripted:<path>` replays a JSON `ScriptedTurn[]` file, or one of the `<name>.json` files in a directory, chosen per task with `CreateTaskRequest.scriptedDriver` (the field is refused in `vultr` mode). The repository ships three under `apps/control/test/fixtures/scripted/`: `diagnostic` (writes the labelled hand-written fix), `forged-log` (writes a fake "312 passed" log and submits unchanged code), `slow` (runs `sleep 25` so a cancel lands mid-command).
-
-## Deployment outline: two Vultr VMs
-
-**Performed from this repository with the scripts under [`deploy/`](deploy/README.md)** (provision, host setup, deploy, preflight, teardown, and the measured results on Kata). The outline below follows the research in `research/13-vultr-inference-and-deployment.md` and `research/38-kickoff-decks-and-netbird-clarification.md`.
-
-1. **VM B, sandbox host**: a VX1 plan with a `-120s`/`-240s` suffix (local boot disk) in `atl`, because VX1 is the only cloud plan documented with nested virtualization. On first boot verify `ls -l /dev/kvm`, install Docker plus Kata Containers (target) and gVisor `runsc` (floor), and confirm both appear under `docker info` → Runtimes. Build the runtime image there: `runtime/python/build.sh tabulate-365`. Run the supervisor with `SUPERVISOR_BIND=<VPC address>`, `AIRLOCK_RUNTIME=kata` (or `runsc` if Kata fails its deployment probe) and a strong `SUPERVISOR_TOKEN`. Keep the Docker socket local to this VM; open no public port. `GET /health` reports what was actually found: `kvmPresent`, `availableRuntimes`, `selectedRuntime`, `devUnsafe`.
-2. **VM A, control plane**: any plan, in `atl` so inference traffic stays in-region. Set `SUPERVISOR_URL=http://<VM B VPC address>:4300`, the same `SUPERVISOR_TOKEN`, `VULTR_INFERENCE_API_KEY`, `AIRLOCK_MODEL` (from `bun scripts/probe-model.ts`), the role passwords and `AIRLOCK_DATA_DIR` on persistent disk. Build `apps/web/dist` and let the control plane serve it. Put TLS in front of port 3000 (a reverse proxy), set `AIRLOCK_TRUST_PROXY=1` (proxy on the same VM) or the proxy's IP address, and make port 3000 reachable only from the proxy (`CONTROL_BIND=127.0.0.1` for a same-host proxy, or a firewall rule); cookies are `Secure` by default.
-3. **Private link**: both VMs in one Vultr VPC; the supervisor listens only on its VPC address and VM B's firewall admits port 4300 from VM A only. Provider credentials exist only on VM A; sandbox VM `user_data` carries no secrets.
-4. **NetBird (optional add-on, only after the core works end to end)**: peer-to-peer link for controller → supervisor first, then a reverse proxy and judge-role gating for the public URL. Nothing in the core depends on it; see `research/38-kickoff-decks-and-netbird-clarification.md` §3.4 for the recommended shape.
-
-Runtime caps come from the profile (`caps` in `profile.json`): 1 CPU, 512 MiB, 64 PIDs, 30 s per command, 64 KiB captured output, 5 min per attempt, 2 repair attempts, 40 model calls, 1 MiB per accepted file, 4 MiB total. They are what the supervisor enforces; measure before advertising anything else.
-
-## Supported profile and how to add one
-
-The only supported profile is **`tabulate-365`**: a historical replay of [python-tabulate #365](https://github.com/astanin/python-tabulate/issues/365) at base commit `e13a4d0d…`, where an empty table with `headers` and `maxheadercolwidths` raises `IndexError`. The contract has six measured cases (one reported failure, five regressions); the agent may change only `tabulate/__init__.py`. The maintainer's later fix is used only to author the contract and is never supplied to any sandbox. The UI offers this profile and nothing else; other repository/runtime combinations are rejected by the API (`422`).
-
-A profile is a directory, not a special case:
-
-```
-profiles/<id>/profile.json                 ProfileManifest: repo, baselineCommit, baselineTreeDigest, allowed/readable paths, caps, runtimeImage
-profiles/<id>/contract.json                CaseContract: measured baseline and candidate expectations per case
-profiles/<id>/<adapterModule>.py           run_case(input) → value; raising is how failures are observed
-profiles/<id>/base/                        pristine tracked tree at baselineCommit (prepare-profile.sh)
+```mermaid
+sequenceDiagram
+  autonumber
+  participant J as Judge
+  participant C as Control plane (VM A)
+  participant M as Vultr Serverless Inference
+  participant S as Supervisor (VX1)
+  participant K as Kata sandboxes
+  J->>C: paste issue (tabulate #365)
+  C->>S: create author sandbox (VPC)
+  S->>K: create · inspect runtime=kata · isolation probe
+  K-->>S: all BLOCKED (else refused)
+  C->>S: baseline in fresh one-shot sandboxes
+  loop reproduce → repair (≤ 40 model calls, 2 attempts)
+    C->>M: messages + tools
+    M-->>C: tool call (read_file / edit_file / run)
+    C->>S: fenced, journaled operation
+    S->>K: exec with caps
+    K-->>C: bounded result
+  end
+  M-->>C: submit_candidate (only advances to freeze)
+  C->>S: revoke → stop → collect allowed files
+  C->>C: seal SourceManifest (digest = candidate identity)
+  C->>S: verify sealed bytes, one fresh sandbox per case
+  S-->>C: observations only
+  C->>C: comparator decides the verdict
+  C->>S: destroy → "(no sandboxes)"
+  C-->>J: CANDIDATE_PASSED_CHECKS + patch + five checkpoints
 ```
 
-To add one: write `profile.json` with the pinned commit and the digest rule described in `profiles/tabulate-365/README.md` (lines ordered by `(casefold(path), path)`, symlinks hashed as their target's bytes), measure the contract at the base and reference commits in a clean environment and record the observed values, write the adapter module, run `runtime/python/build.sh <id>` (it refuses a `base/` that does not match the digest), and start both processes: each loads and verifies every profile at start-up and skips one that fails. Never `pip install` from issue text on any host; dependencies are pinned in the image.
+**General tasks** use the same control plane and supervisor. The hero `web-analysis` task goes:
 
-## What "Passed these checks" means, and does not mean
+1. Navigate the allowlisted page in the Kata browser and take a screenshot.
+2. Download the CSV.
+3. The bytes cross into an offline Python sandbox, which produces a chart and `summary.json`.
+4. The controller runs 8 completion checks (sources visited, in policy, cited, outputs valid, …) and returns `RESULT_VERIFIED`.
 
-`CANDIDATE_PASSED_CHECKS` means: the sealed candidate (identified by its `candidateDigest`) was materialized on the pristine base tree in a fresh sandbox, the fixed adapter ran every case in the frozen contract, every observation matched the contract's candidate expectation, and the run was complete (no timeout, protocol error, missing, duplicate or unknown case id). The same sealed bytes are what preview runs and what the export bundle contains, with the verification record, the baseline record and the diff.
+**Form submissions** need a human:
 
-It does not mean the patch is safe, certified, correct in general, or free of other regressions. It does not mean anything about behaviour outside the contract cases. It does not mean the model was honest: the model's own claims, logs and pass counts are never consulted. A run on `runc` additionally carries `devUnsafe: true` and is not a deployment measurement.
+1. The model proposes an immutable `ActionProposal`.
+2. A person approves by restating its exact digest.
+3. The controller types a one-use HMAC code into the page.
+4. The destination confirms with a receipt.
 
-## Limits and dev-unsafe
+The model never sees the code.
 
-- `runc` shares the host kernel. It is accepted only with `AIRLOCK_DEV_UNSAFE=1`, warns at start, and labels every host check, inspection, record and UI page. The hostile panel's "survived" card on `runc` shows that the container's read-only rootfs, dropped capabilities and `--network none` held for that command; it is not a kernel-isolation claim.
-- The deployment runs Kata on one VX1 host with the supervisor on the VPC link; NetBird (the optional add-on) is not set up, SSH on both VMs is open to the deploying machine's IP only, and VM B's own egress is unrestricted (sandboxes have none). See the trust-properties section of `deploy/README.md` for exactly what is and is not enforced.
-- Live Vultr repairs: 3 of 3 fresh hero runs passed the comparator with `glm-5.3` (the gate needs 2 of 3). That is one known historical bug run three times, not a general repair-success rate.
-- One profile. Adding profiles is real adapter work, per above.
-- The control plane uses an embedded PGlite database and runs the API and worker in one process; splitting them means moving to Postgres.
+<details>
+<summary><b>Security invariants (checked on every change)</b></summary>
 
-## Testing
+1. One authority per concern (table above).
+2. Untrusted code runs only in its assigned sandbox. Nothing from a report runs on VM A.
+3. Candidate identity is immutable: verify, preview and export all use one sealed digest.
+4. The worker cannot declare success. `passed` fields, exit codes and logs from inside the sandbox carry no authority.
+5. Cancellation has an execution effect: revoke → stop → confirm → fence late results.
+6. Ownership is checked at every access. IDs are not bearer tokens.
+7. No secrets, network or host in any sandbox. The single exception is the browser, which reaches only its own allowlisting proxy.
+8. The runtime tier is inspected, never assumed: Kata is the target, gVisor the floor, runc dev-only.
+9. Every run record carries the five checkpoints.
+10. All runtime model calls go through Vultr Serverless Inference.
 
-Current counts on this branch (Colima for the real-Docker tests): control 398, supervisor 207 (all real-Docker integration tests ran), web 132, egress 35, fixtures 41, scripts 11, browser runner 27, Node probe parity 2, Python runtime and output collector 135 (+2 skipped on macOS). `bun run test` runs the owned Bun suites (it lists paths so upstream reference trees are not collected); `bun run test:python` and `bun run test:browser` run the others. The independent acceptance driver is `bun scripts/acceptance/local.ts` against a running `scripts/dev-up.sh` stack.
+</details>
 
-The original four suites plus the smoke:
+---
+
+## 🔍 The five checkpoints
+
+Every run record, task page and export bundle carries all five:
+
+| # | Checkpoint | What it proves |
+|---|---|---|
+| 1 | **Host check** | CPU virtualization, `/dev/kvm`, runtimes, selected runtime, `devUnsafe=false` |
+| 2 | **Execution log** | every command with exit code, duration and bounded output |
+| 3 | **In-sandbox identity** | `hostname` + `uname -a` from inside (Kata guest `6.18.35` ≠ host `6.8.0`) |
+| 4 | **Isolation probe** | metadata · DNS · TCP · Docker socket · host mounts: anything not `BLOCKED` refuses the run **before** agent work |
+| 5 | **Teardown** | host-wide listing must read `(no sandboxes)` |
+
+<table>
+<tr>
+<td><img src="docs/assets/vultr/04-repair-candidate-passed.jpg" alt="Live repair: CANDIDATE_PASSED_CHECKS, 6 of 6 frozen cases" /><br/><sub>Live repair: 6/6 frozen cases pass the external comparator</sub></td>
+<td><img src="docs/assets/vultr/03-hero-outputs-chart.jpg" alt="Hero web-analysis task: chart and summary outputs, RESULT_VERIFIED" /><br/><sub>Hero: browser → CSV → offline analysis → chart</sub></td>
+</tr>
+<tr>
+<td><img src="docs/assets/vultr/07-hostile-forkbomb-sibling-survived.jpg" alt="Fork bomb contained: the Kata guest died, a sibling task survived" /><br/><sub>Fork bomb: that guest died, the sibling task survived</sub></td>
+<td><img src="docs/assets/vultr/08-teardown-no-sandboxes.jpg" alt="Host-wide teardown listing: (no sandboxes)" /><br/><sub>Teardown: <code>(no sandboxes)</code></sub></td>
+</tr>
+</table>
+
+---
+
+## ✅ Evidence (deployed on Vultr, live model)
+
+| Gate | Result | Evidence |
+|---|---|---|
+| **Preflight on the VX1 host** (KVM, Kata, 13 hardening checks, isolation probe, workspace quota, Chromium sandbox under Kata, egress-only-via-proxy, metadata and form POSTs refused, empty host) | **49/49** | [docs/evidence/vultr/](docs/evidence/vultr/) |
+| **Live repair gate**: fresh tabulate #365 repairs through the public URL, judged by the comparator | **3/3** | [docs/evidence/live-gate/](docs/evidence/live-gate/) |
+| **Vultr acceptance**: analysis · web research · live repair + byte-identical export · hero (2 data variants) · approvals with destination receipt · human takeover · Kata containment · two-judge isolation · empty host | **9/9** | [acceptance-f223c19](docs/evidence/vultr/acceptance-f223c19/) |
+| **Negative controls**: forged "tests passed" log → `CHECKS_FAILED`; changed approval digest → 409; replayed approval → 409; other judge → 404; off-allowlist navigation → 422 | pass | [acceptance-f223c19](docs/evidence/vultr/acceptance-f223c19/); forged log: [Vultr smoke](docs/evidence/vultr/smoke-20260927T164034Z.txt) (scripted driver) |
+| **Crash/restart** (local `runc`, scripted drivers, not the deployment): control plane or supervisor killed mid-operation; nothing uncertain is replayed | 7/7 | [docs/acceptance-matrix.md](docs/acceptance-matrix.md) |
+| **Findings ledger**: 95 audited requirements | 0 open (1 conditional, 1 optional) | [docs/implementation-status.md](docs/implementation-status.md) |
+
+The six terminal outcomes are `NOT_REPRODUCED`, `REPRODUCED_UNRESOLVED`, `CANDIDATE_PASSED_CHECKS`, `CHECKS_FAILED`, `INCONCLUSIVE` and `STOPPED_LIMIT`. "Passed these checks" means exactly that the frozen cases passed on sealed bytes. It never means safe, certified or correct in general.
+
+---
+
+## 💡 What's new here
+
+The two-VM layout (control VM + sandbox host) is the expected baseline for this challenge. What Airlock adds on top:
+
+- **Verification the agent cannot influence.** A frozen contract, an external comparator, sealed candidates and fresh sandboxes per case. The agent is an author inside the workflow, never its judge.
+- **Execution you can reason about after a crash.** Every supervisor mutation is journaled before dispatch and fenced by generation, so uncertainty surfaces as `unknown`, never as an invented receipt.
+- **A browser that can't be turned against you.** Chromium keeps its own sandbox inside a Kata microVM. It sits behind a per-attempt proxy with DNS pinning and a private-IP refusal, has no shell, CDP or evaluate, and can submit forms only after a digest-bound human approval.
+- **Honest claims.** The runtime tier is inspected per run. Repair is enabled in production only while a live-gate receipt matches the running model, runtime, image and contract.
+
+<details>
+<summary><b>Why Kata on VX1, and not OpenSandbox or Microsandbox?</b></summary>
+
+Kata gives each sandbox its own guest kernel through Docker's OCI runtime interface. That lets one narrow supervisor keep Docker's inspection, labels and lifecycle verbs while getting microVM isolation from VX1's `/dev/kvm`. gVisor stays installed as the floor. Vultr's own guide demonstrates the same KVM-microVM approach with Microsandbox. We chose Kata because the whole hardening, inspection and journaling layer is built on Docker's API. See `research/38-kickoff-decks-and-netbird-clarification.md` §3.6.
+
+</details>
+
+---
+
+## 🧩 Built on OpenMuse + OpenBot (built here vs reused)
+
+Airlock adapts audited modules from two MIT-licensed repositories. **Neither upstream app is the composition root**, and neither CopilotKit Intelligence nor AG-UI is a dependency. The pins are OpenMuse [`205cc386`](THIRD_PARTY_NOTICES.md) and OpenBot [`3c73cf00`](THIRD_PARTY_NOTICES.md); the browser plane uses OpenBot `1ac9c35b` and OpenMuse `34b15bc8`.
+
+| Capability | Upstream source | Airlock | What changed |
+|---|---|---|---|
+| Durable orchestration | OpenMuse `engine/worker.ts` | `apps/control/src/worker/` | `RepairHandler` + general handler at the `TaskHandler` seam; the model no longer decides when it has finished |
+| Task storage | OpenMuse `db.ts` | `apps/control/src/store/` | PGlite; immutable inserts; append-only events with per-task sequence |
+| Sessions & routes | OpenMuse `auth.ts`, `routes.ts` | `sessions.ts`, `api.ts` | judge/operator roles, per-login ownership, SSE replay, CSRF |
+| Guarded model tools | OpenMuse `engine/model.ts` | `repair-handler.ts` | pattern only; a deterministic phase machine replaces the model deciding when it has finished |
+| Container hardening | OpenMuse `computer.ts` | `apps/supervisor/src/runtime.ts`, `exec.ts` | moved **inside VM B**; per-attempt identity; runtime verified on inspect |
+| Narrow privileged service | OpenBot `supervisor/src/*` | `apps/supervisor/src/index.ts`, `names.ts`, `docker-api.ts` | disposable per-attempt roles; exec, freeze, hostile; request digests |
+| Browser runner | OpenBot `agent-computer/*` | `runtime/browser/` | transient profile, proxy-only, no CDP/evaluate, unix-socket protocol |
+| Egress policy & proxy | OpenMuse `worker/network.ts`, `proxy.ts` | `apps/egress/` | resolve once, connect to the validated IP; CGNAT/IPv4-mapped refused |
+| Web UI shell | OpenBot `app/src/*` | `apps/web/` | layout and components; Airlock data and flows |
+
+**Built here:** the RepairHandler and general task loop, the Vultr client, the supervisor execution/freeze protocol, generation fencing and the operation journal, capacity admission, the bounded collector and pristine materializer, the external comparator, artifact manifests with sealed export, the browser/egress plane wiring, approvals with the `airlock-forms-v1` destination, the five checkpoints, the deploy/preflight/acceptance tooling and all tests. Every copied file, its pin and its modifications are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+---
+
+## 🚀 Run it
+
+**On Vultr** (two VMs, all scripted; details in [docs/runbook.md](docs/runbook.md)):
 
 ```sh
-# supervisor: unit tests with a fake Docker plus one real-docker integration test (skipped without Docker/image)
-cd apps/supervisor && bunx tsc --noEmit -p tsconfig.json && DOCKER_HOST=unix://$HOME/.colima/default/docker.sock bun test
-# control: in-memory PGlite, fake supervisor, scripted drivers
-cd apps/control && bunx tsc --noEmit -p tsconfig.json && bun test
-# web: pure modules
-cd apps/web && bunx tsc --noEmit -p tsconfig.json && bunx vite build && bun test
-# runtime: adapter, materializer, collector, probe, tree digest, and a docker integration test on dev-unsafe runc
-uv run --with pytest pytest runtime/python/tests
-# end to end against a running stack (./run.sh up -d)
-./run.sh smoke            # or: bun scripts/smoke.ts
-# all four suites in one go
-./run.sh test
+bun scripts/check-keys.ts                        # VULTR_API_KEY + VULTR_INFERENCE_API_KEY, read-only checks, never printed
+deploy/vultr/register-ssh-key.sh                 # idempotent
+deploy/vultr/provision.sh                        # VPC 2.0, firewall groups, VM A (vc2) + VM B (VX1)
+deploy/deploy.sh --driver scripted              # hosts, Kata, pinned images, supervisor, control, TLS
+deploy/preflight.sh                              # 49 runtime-tier checks on VM B
+bun scripts/probe-model.ts glm-5.3               # measured tool-call round trip picks the model
+deploy/deploy.sh --driver vultr --model glm-5.3 --skip-host-setup
+bun scripts/live-gate.ts --n 3                   # live repair gate → commit the receipt
+deploy/deploy.sh --only control --skip-host-setup # reload receipts; repair turns on in production
+deploy/vultr/destroy.sh                          # when done
 ```
 
-The smoke proves, through the public HTTP API only: diagnostic repair → `CANDIDATE_PASSED_CHECKS` with all five checkpoints; preview of the reported input renders the header-only table; the export zip's `patch.diff` applies with `patch -p1 --dry-run` to `profiles/tabulate-365/base`; `rm -rf / --no-preserve-root` dies in its sandbox while the supervisor, host sentinel and control plane survive and teardown is `(no sandboxes)`; the forged-log script ends `CHECKS_FAILED`; a task cancelled during `sleep 25` ends `cancelled` with no live attempt at the supervisor and no owned container in `docker ps`.
+**Locally** (macOS/Colima, `runc`, every record labelled `dev-unsafe`):
 
-## Attribution
+```sh
+bun install --frozen-lockfile
+./run.sh            # builds images and UI, starts supervisor + control, streams the debug log
+./run.sh smoke      # end to end through the HTTP API
+./run.sh test       # control, supervisor (real Docker), web, runtime
+```
 
-Airlock adapts modules from two MIT-licensed repositories, OpenMuse (`205cc386…`) and OpenBot (`3c73cf00…`). Every copied or adapted file, its pin and its modifications are listed in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md); upstream notices are preserved in file headers. The development guideline is [`CLAUDE.md`](CLAUDE.md); the research that produced it is under `research/`.
+Environment variables, the debug log, adding a profile and the full test matrix are covered in **[docs/configuration.md](docs/configuration.md)**.
+
+---
+
+## ⚖️ Limits (stated, not hidden)
+
+- One supported repair profile (`tabulate-365`, a labelled historical replay). Other repo/runtime combinations are rejected with 422. 3/3 is one known bug, not a general success rate.
+- The browser only reads the open web. Non-GET requests are refused except on the approval-gated form destination, WebSockets and web workers are blocked, and there is no logged-in browsing. GET requests to hosts the owner allowlisted can still carry data.
+- `RESULT_VERIFIED` means the profile's structural checks passed, not that an answer is correct.
+- One control-plane process (PGlite). Splitting API and worker means moving to Postgres.
+- NetBird (the optional bonus) is not set up. SSH is limited to admin IPs, and the supervisor listens only on the VPC.
+
+## 🔭 What's next
+
+- More repair profiles as real adapters (one directory each, plus a pinned image).
+- One throwaway VX1 instance per task through the Vultr API, for tenant-level isolation.
+- A NetBird peer link for control → supervisor, and judge-role gating for the public URL.
+- Postgres to scale the control plane horizontally.
+
+---
+
+<div align="center">
+<sub>Adapted modules keep their upstream notices ([THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)) · development guideline in [CLAUDE.md](CLAUDE.md) · research in <code>research/</code></sub>
+</div>
