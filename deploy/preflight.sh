@@ -44,6 +44,7 @@ say "runtimes: $(docker info --format '{{range $k, $v := .Runtimes}}{{$k}} {{end
 say "daemon.json: $(tr -d '\n ' < /etc/docker/daemon.json)"
 HOST_KR="$(uname -r)"
 say "== runtime uname checks (docker run --rm --runtime=<name> python:3.12-slim uname -r)"
+docker image inspect python:3.12-slim >/dev/null 2>&1 || docker pull -q python:3.12-slim >/dev/null 2>&1 || true
 for rt in kata runsc runc; do
   if out="$(timeout 180 docker run --rm --runtime=$rt --network none python:3.12-slim uname -r 2>&1)"; then
     say "  $rt: $out"
