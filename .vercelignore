@@ -1,0 +1,19 @@
+# Allowlist: the Vercel build needs only the web app and the workspace packages it imports.
+/*
+!/package.json
+!/bun.lock
+!/tsconfig.base.json
+!/vercel.json
+!/apps
+/apps/*
+!/apps/web
+!/apps/control
+!/apps/supervisor
+!/apps/egress
+!/apps/fixtures
+!/packages
+**/node_modules
+**/dist
+**/data
+**/.env*
+!/middleware.ts

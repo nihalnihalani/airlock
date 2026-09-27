@@ -22,3 +22,4 @@ __pycache__/
 # Agent worktrees and orchestration state (never source)
 .claude/worktrees/
 .omc/
+.vercel
