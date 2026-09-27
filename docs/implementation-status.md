@@ -6,7 +6,7 @@ Durable state for the Airlock completion work (prompt in research/41 and the pas
 
 - Branch: `fix/milestone-1-guarantees` (pushed). Base: `main` @ `a1ae88d`.
 - Milestone 1 (B1–B8): done and pushed; verified with local unit/integration tests against fakes.
-- Milestone 2: in progress.
+- Milestone 2: done and pushed (review findings fixed). Milestone 3: browser runner, egress proxy and supervisor browser role done and pushed (local runc evidence; gVisor/Kata blocked). Milestone 4: in progress.
 - **External blocker:** this machine has no Vultr access (`VULTR_API_KEY` absent, no `data/deploy/` state). Every gate that needs the deployed VMs (Kata measurements, live gate, deployment evidence, SSH/HTTPS checks) stays *blocked* until access is provided. Local verification uses Colima (runc, labelled dev-unsafe).
 
 Status vocabulary: `open`, `in progress`, `implemented-unverified`, `verified (local)` (unit/fake or local Docker), `verified (Vultr)`, `conditional`, `optional`, `blocked (reason)`.
@@ -23,62 +23,62 @@ Status vocabulary: `open`, `in progress`, `implemented-unverified`, `verified (l
 | B6 | 1 | control | verified (local) | queued-with-attempt → cancelling; lost-lease teardown recorded — 1fbeae2 |
 | B7 | 1 | control | verified (local) | cancel-pass errors retry then failed — 1fbeae2 |
 | B8 | 1 | supervisor | verified (local, fake Docker) | restart revokes+stops live attempts; freeze only live running — a8f9f1c |
-| M1 | 2 | supervisor+control | open | renewable execution authorization tied to worker lease |
-| M2 | 2 | supervisor | open | atomic host admission |
-| M3 | 2 | control | open | token budget per attempt and task |
-| M4 | 2 | control | open | second repair attempt after failed checks |
-| M5 | 2 | control | open | preview bound to verified image/adapter |
-| M6 | 2 | control | open | probe result in VerificationRecord |
-| M7 | 2 | supervisor | open | host-wide teardown listing |
-| M8 | 2 | control | open | persist operation intent/ids; reconcile by id |
-| M9 | 2 | control | open | collector rejections fail sealing |
+| M1 | 2 | supervisor+control | verified (local) | renew route + control renewal timer; fake+unit tests — 2c662a8, cf86da6 |
+| M2 | 2 | supervisor | verified (local) | capacity.ts admission for every role incl. browser; tmpfs counted against memory — 2c662a8, b2de0d6 |
+| M3 | 2 | control | verified (local) | token/call ceilings, conservative charging — cf86da6 |
+| M4 | 2 | control | verified (local) | second attempt with comparator feedback; Task.candidates — cf86da6 |
+| M5 | 2 | control | verified (local) | imageId/adapter/contract/runtime drift refusal — 9168d5d, a5f9bce |
+| M6 | 2 | control | verified (local) | probe in both records incl. resume; required for production export — a5f9bce |
+| M7 | 2 | supervisor | verified (local) | GET /listing, TeardownRecord.host incl. networks — 2c662a8, b2de0d6 |
+| M8 | 2 | control | verified (local) | journal before send; reconcile pages all rows; GET /operations/:id — cf86da6, a5f9bce, b2de0d6 |
+| M9 | 2 | control | verified (local) | collector rejections fail sealing — cf86da6 |
 | M10 | 1 | control | verified (local) | ExportGrant binds verificationRecordDigest — 1fbeae2 |
-| M11 | 2 | control | open | outcome in VerificationRecord |
-| M12 | 2 | supervisor | open | runner readiness check |
-| M13 | 2 | control | conditional | no model case-proposal tool exists; keep none |
+| M11 | 2 | control | verified (local) | VerificationRecord.outcome — cf86da6 |
+| M12 | 2 | supervisor | verified (local, real Docker) | readiness exec before dispatch — 2c662a8 |
+| M13 | 2 | control | conditional | no model case-proposal tool exists |
 | D1 | 6 | supervisor+lead | blocked (deployment) | durable quota storage must be proven on Kata; needs VM B access |
-| D2 | 2 | supervisor+runtime | open | digest-pinned base/runtime image enforced at inspection |
-| D3 | 2 | control | open | fresh one-shot sandbox per case |
-| D4 | 2 | supervisor+control | open | production rejects dev-unsafe/runc |
-| D5 | 2 | supervisor | open | bind address validation |
-| D6 | 2 | control | open | phase events match real work |
-| D7 | 2 | control | open | hard failures → INCONCLUSIVE |
-| D8 | 2 | control | open | bounded recoveries |
-| D9 | 2 | control | open | baseline regression drift → INCONCLUSIVE |
-| D10 | 2 | control | open | hostile judge-only; rate limit survives relogin |
-| D11 | 2 | control | open | inference base URL pinned |
-| D12 | 2 | runtime | open | probe mount exemptions |
-| D13 | 2 | contracts | done (lead) | compareCodePoints for manifest ordering |
+| D2 | 2 | supervisor+runtime | verified (local, real Docker) | digest-pinned base; imageId enforced; retag test — 2c662a8 |
+| D3 | 2 | control | verified (local, real Docker) | one sandbox per case — cf86da6; smoke 66/66 |
+| D4 | 2 | supervisor+control | verified (local) | AIRLOCK_PRODUCTION on both planes; deploy sets it — 2c662a8, a5f9bce |
+| D5 | 2 | supervisor | verified (local) | bind classification — 2c662a8 |
+| D6 | 2 | control | verified (local) | phase order prepare→baseline→reproduce→repair — cf86da6 |
+| D7 | 2 | control | verified (local) | infrastructure errors → INCONCLUSIVE after confirmed teardown — a5f9bce |
+| D8 | 2 | control | verified (local) | bounded recoveries — cf86da6, a5f9bce |
+| D9 | 2 | control | verified (local) | regression drift → INCONCLUSIVE — cf86da6 |
+| D10 | 2 | control | verified (local) | judge-only; client-keyed + global limits — 9168d5d |
+| D11 | 2 | control | verified (local) | exact base URL, redirect:error — 9168d5d |
+| D12 | 2 | runtime | verified (local, real Docker runc) | root/ro/size-aware mount classification — b2de0d6; Kata mount roots unmeasured |
+| D13 | 2 | contracts | verified (local) | compareCodePoints — c7580dc, cf86da6 |
 | D14 | 6 | lead | open | CLAUDE.md layout names |
-| D15 | 2 | supervisor | open | minimal public /health |
-| G1 | 2 | control | open | live gate: tracked issue, provenance check |
+| D15 | 2 | supervisor | verified (local) | public health {ok:true} on both planes — 2c662a8, 9168d5d |
+| G1 | 2 | control | verified (local) | provenance-checked live gate + receipts bound to image/adapter/store; running it needs Vultr — a5f9bce |
 | G2 | 6 | lead | blocked (deployment) | committed sanitized evidence needs a deployment run |
-| G3 | 2 | supervisor | open | background child dies on stop (real Docker) |
+| G3 | 2 | supervisor | verified (local, real Docker runc) | detached child dies on expiry/revoke/destroy — 2c662a8; Kata blocked |
 | G4 | 6 | lead | blocked (deployment) | runtime gates on Kata |
-| G5 | 2 | control+web | open | forged '312 passed' reaches comparator |
-| G6 | 2 | web | open | launch forged-log/slow diagnostics from UI |
-| G7 | 2 | control | open | resume from sealed bundle test |
-| U1 | 2 | web+supervisor | open | instance ids in UI |
-| U2 | 2 | web+supervisor | open | host uname beside guest |
-| U3 | 2 | web+supervisor+control | open | blast radius: control health, files destroyed, siblings |
-| U4 | 2 | web | open | dispatch trail evidence |
-| U5 | 2 | control+web | open | repair-disabled state from live-gate evidence |
-| U6 | 2 | control | open | CSP |
-| U7 | 2 | web | open | re-check unused modules against current imports |
+| G5 | 2 | control+web | verified (local, real Docker runc) | forged '312 passed' reaches comparator → CHECKS_FAILED; smoke asserts it |
+| G6 | 2 | web | verified (local, real browser check) | diagnostics catalog + UI launch — 9168d5d, 083d977 |
+| G7 | 2 | control | verified (local) | resume from sealed bundle — cf86da6, a5f9bce |
+| U1 | 2 | web+supervisor | verified (local UI) | instance ids or 'not deployed (local)' — 083d977 |
+| U2 | 2 | web+supervisor | verified (local UI) | host vs guest uname with honest runc wording — 083d977 |
+| U3 | 2 | web+supervisor+control | verified (local) | files before/after, siblings, control-plane health, host listing — 2c662a8, 9168d5d, 083d977 |
+| U4 | 2 | web | verified (local UI) | plan→dispatch→observation→verification — 083d977 |
+| U5 | 2 | control+web | verified (local) | repair availability from receipts; baseline-only tasks — 9168d5d, a5f9bce |
+| U6 | 2 | control | verified (local) | CSP/nosniff/no-referrer on every response — 9168d5d |
+| U7 | 2 | web | verified (local) | all four modules imported; getHealth removed — 083d977 |
 | P1 | 6 | lead | blocked (deployment) | SSH restriction on VMs |
 | P2 | 6 | lead | blocked (deployment) | host headroom measured |
 | P3 | 6 | lead | blocked (deployment) | HTTPS/restart verification |
 | P4 | - | optional | optional | NetBird add-on; not claimed |
-| C1 | 3 | execution/control/web | open | doc 40 browser/general execution scope |
-| C2 | 3 | execution/control/web | open | doc 40 browser/general execution scope |
-| C3 | 3 | execution/control/web | open | doc 40 browser/general execution scope |
-| C4 | 3 | execution/control/web | open | doc 40 browser/general execution scope |
-| C5 | 3 | execution/control/web | open | doc 40 browser/general execution scope |
-| C6 | 3 | execution/control/web | open | doc 40 browser/general execution scope |
-| C7 | 3 | execution/control/web | open | doc 40 browser/general execution scope |
-| C8 | 3 | execution/control/web | open | doc 40 browser/general execution scope |
-| C9 | 3 | execution/control/web | open | doc 40 browser/general execution scope |
-| C10 | 3 | execution/control/web | open | doc 40 browser/general execution scope |
+| C1 | 3 | execution/control/web | verified (local, real Docker runc) | browser image/runner/egress + supervisor browser role — fcc8170, b2de0d6; gVisor/Kata + host iptables unverified |
+| C2 | 3 | execution/control/web | verified (local, real Docker runc) | browser image/runner/egress + supervisor browser role — fcc8170, b2de0d6; gVisor/Kata + host iptables unverified |
+| C3 | 3 | execution/control/web | verified (local, real Docker runc) | browser image/runner/egress + supervisor browser role — fcc8170, b2de0d6; gVisor/Kata + host iptables unverified |
+| C4 | 3 | execution/control/web | blocked (deployment) | Chromium sandbox under gVisor/Kata needs VX1 |
+| C5 | 3 | execution/control/web | verified (local, real Docker runc) | browser image/runner/egress + supervisor browser role — fcc8170, b2de0d6; gVisor/Kata + host iptables unverified |
+| C6 | 3 | execution/control/web | verified (local, real Docker runc) | browser image/runner/egress + supervisor browser role — fcc8170, b2de0d6; gVisor/Kata + host iptables unverified |
+| C7 | 3 | execution/control/web | verified (local, real Docker runc) | browser image/runner/egress + supervisor browser role — fcc8170, b2de0d6; gVisor/Kata + host iptables unverified |
+| C8 | 3 | execution/control/web | implemented-unverified | DOCKER-USER egress guard (dry-run tested); needs VX1 host |
+| C9 | 3 | execution/control/web | verified (local, real Docker runc) | browser image/runner/egress + supervisor browser role — fcc8170, b2de0d6; gVisor/Kata + host iptables unverified |
+| C10 | 3 | execution/control/web | verified (local, real Docker runc) | browser image/runner/egress + supervisor browser role — fcc8170, b2de0d6; gVisor/Kata + host iptables unverified |
 | C11 | 4 | execution/control/web | open | doc 40 browser/general execution scope |
 | C12 | 4 | execution/control/web | open | doc 40 browser/general execution scope |
 | C13 | 4 | execution/control/web | open | doc 40 browser/general execution scope |
@@ -114,5 +114,5 @@ Status vocabulary: `open`, `in progress`, `implemented-unverified`, `verified (l
 ## Housekeeping
 
 - scripted fixture path (`fileURLToPath`): done — 011fb84
-- root `bun test` picks up reference repos: open
+- root `bun test` picks up reference repos: `bun run test` lists owned paths (Bun 1.3.2 has no ignore option) — fcc8170
 - README test counts / CLAUDE.md layout / research status line / duplicate 38- file: open
