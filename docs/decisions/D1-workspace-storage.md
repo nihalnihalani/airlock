@@ -1,6 +1,6 @@
 # D1 — Per-attempt workspace storage
 
-Status: **provisional, pending measurement on the VX1 host.** Recorded 27 September 2026 at `fix/milestone-1-guarantees`.
+Status: **closed — measured on the VX1 host under Kata (27 September 2026, preflight 49/49 at `cce4719`).** Filling `/workspace` stopped at 127 MiB of 128 MiB; post-stop collection returned the written file; host `MemAvailable` dropped by about 239 MiB per full workspace (tmpfs plus guest overhead), inside the budget `capacity.ts` reserves; the probe accepts the guest's `/workspace` root. Evidence: `docs/evidence/vultr/preflight-*.txt`.
 
 ## The requirement
 
@@ -14,16 +14,16 @@ Each author, analysis and node attempt gets a Docker `local` volume of type `tmp
 
 | Guarantee | 37 (durable volume + quota) | Implemented (tmpfs + hold) | Evidence |
 |---|---|---|---|
-| Hard per-attempt size limit | quota (mechanism unspecified) | `size=` on the tmpfs, verified on every mount | supervisor tests; `deploy/preflight-api.ts` D1 fill check (VX1 pending) |
+| Hard per-attempt size limit | quota (mechanism unspecified) | `size=` on the tmpfs, verified on every mount | supervisor tests; `deploy/preflight-api.ts` D1 fill check (measured on VX1) |
 | Survives the author's stop until collection | yes | yes, while the collector holds the mount | lifecycle tests; local real Docker |
 | Freeze retry after a failed collection | yes | **no**: a collection failure after the stop loses the workspace; the task ends INCONCLUSIVE, never a false pass | B5/D1 notes in the ledger |
 | Nothing on host disk | no | yes (RAM only) | — |
-| Host memory accounting | n/a | tmpfs pages count as host RAM; under Kata they may sit outside the guest memory limit, so `capacity.ts` charges every tmpfs size against the memory budget | capacity tests; D1 MemAvailable measurement in preflight (VX1 pending) |
+| Host memory accounting | n/a | tmpfs pages count as host RAM; under Kata they may sit outside the guest memory limit, so `capacity.ts` charges every tmpfs size against the memory budget | capacity tests; D1 MemAvailable measurement in preflight (measured on VX1) |
 | Host-wide admission | required | implemented for every role (M2) | capacity tests |
 
 ## Decision
 
-Keep tmpfs + hold as the shipped mechanism **until the VX1 measurements below say otherwise**. The one lost guarantee (freeze retry after a failed post-stop collection) fails closed: the task is INCONCLUSIVE and no candidate is sealed. Replacing it with durable storage on the host disk requires a quota mechanism that the deployed Docker/Kata combination honours (for example XFS project quotas on a dedicated volume filesystem, or loop-mounted per-attempt filesystems managed by the supervisor). That can't be chosen without the host.
+Keep tmpfs + hold as the shipped mechanism; the VX1 measurements below passed. The one lost guarantee (freeze retry after a failed post-stop collection) fails closed: the task is INCONCLUSIVE and no candidate is sealed. Replacing it with durable storage on the host disk requires a quota mechanism that the deployed Docker/Kata combination honours (for example XFS project quotas on a dedicated volume filesystem, or loop-mounted per-attempt filesystems managed by the supervisor). That can't be chosen without the host.
 
 ## Measurements that close or reopen this decision (run `deploy/preflight.sh` on VM B)
 
