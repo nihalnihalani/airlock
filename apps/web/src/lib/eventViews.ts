@@ -1,9 +1,13 @@
 /**
  * Read-only projections of RunEvents and the TaskView into what the panels render.
  *
- * Event `data` is a free-form record owned by the control plane. These helpers read the keys the
- * control app documents (model, host, usage, command, result, probe, inspection, teardown, host)
- * and fall back gracefully; unknown shapes are surfaced as "unknown", never guessed.
+ * Event `data` is a free-form record owned by the control plane (apps/control/src/repair-handler.ts).
+ * Keys read here, as the control plane writes them:
+ *   model events   model, host, durationMs, usage.{input,output}, toolCalls[].name
+ *   tool events    tool, path, byteLength | chars, refused
+ *   exec events    tool, command, result (ExecResult, bounded), inspection, teardown, exitCode, status
+ *   phase/check    host, probe, inspection, teardown
+ * Everything falls back gracefully; unknown shapes are surfaced as "unknown", never guessed.
  */
 import {
   ExecResult,
@@ -215,9 +219,11 @@ export function extractCheckpoints(view: TaskView | null, events: readonly RunEv
         out.execCount += 1;
         if (row.result && row.result.status !== "succeeded") out.execFailures += 1;
       }
-      continue;
+      if (ev.kind === "tool") continue;
+      // exec events from one-shot invocations also carry inspection + teardown; fall through.
     }
-    if (ev.kind !== "check" && ev.kind !== "lifecycle" && ev.kind !== "info") continue;
+    // `phase` (prepare) carries the host check; check/lifecycle/info carry inspection, probe, teardown.
+    if (ev.kind !== "check" && ev.kind !== "lifecycle" && ev.kind !== "info" && ev.kind !== "phase" && ev.kind !== "exec") continue;
     const data = asRecord(ev.data);
     if (!data) continue;
     const label = ev.title.length > 0 ? ev.title.slice(0, 80) : `event #${ev.seq}`;

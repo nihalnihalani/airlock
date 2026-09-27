@@ -37,6 +37,8 @@ export interface ChatOutput {
 
 export interface ModelDriver {
   chat(input: ChatInput): Promise<ChatOutput>;
+  /** Identity recorded on every model event: the model name and the host it is served from. */
+  describe?(): { model: string; host: string };
 }
 
 export type VultrErrorKind = "auth" | "http" | "network" | "aborted" | "protocol" | "config";
@@ -335,6 +337,7 @@ export function createVultrDriver(opts: VultrDriverOptions): ModelDriver {
   const endpoint = `${baseUrl}/chat/completions`;
 
   return {
+    describe: () => ({ model, host: baseUrl }),
     async chat(input: ChatInput): Promise<ChatOutput> {
       const maxTokens = Math.min(MAX_MAX_TOKENS, Math.max(1, Math.floor(input.maxTokens ?? DEFAULT_MAX_TOKENS)));
       const body: Record<string, unknown> = {
@@ -367,11 +370,13 @@ export function createVultrDriver(opts: VultrDriverOptions): ModelDriver {
 }
 
 /** Replays scripted turns in order; once exhausted, returns an empty text turn forever. */
-export function createScriptedDriver(script: ScriptedTurn[], _options: { name?: string } = {}): ModelDriver {
+export function createScriptedDriver(script: ScriptedTurn[], options: { name?: string } = {}): ModelDriver {
   const turns = [...script];
   let cursor = 0;
   let counter = 0;
   return {
+    // Labelled so no UI or export can mistake a replayed script for a live Vultr repair.
+    describe: () => ({ model: `scripted:${options.name ?? "script"}`, host: "scripted" }),
     async chat(input: ChatInput): Promise<ChatOutput> {
       if (input.signal?.aborted) throw new VultrError("aborted", "request aborted");
       const turn = turns[cursor];

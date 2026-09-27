@@ -81,6 +81,32 @@ describe("extractCheckpoints / runtimeTier", () => {
     devUnsafe: true,
   };
 
+  test("reads host from the prepare phase event and inspection/teardown from invocation exec events", () => {
+    const inspection = {
+      inspectedAt: "2026-01-01T00:00:03.000Z",
+      container: "airlock-candidate-x",
+      runtime: "runc",
+      devUnsafe: true,
+      imageDigest: "sha256:abc",
+      guestUname: "Linux x 6.1",
+      guestHostname: "abc",
+      checks: {
+        networkNone: true, nonRootUser: true, readOnlyRootfs: true, capDropAll: true, noNewPrivileges: true,
+        pidsLimited: true, memoryLimited: true, cpuLimited: true, noHostBinds: true, noPorts: true,
+        privateIpc: true, restartDisabled: true, ownedLabels: true,
+      },
+      allPassed: true,
+    };
+    const execResult = { status: "succeeded", exitCode: 0, stdout: "", stderr: "", truncated: false, timedOut: false, durationMs: 5 };
+    const events = [ev(1, "phase", { host }), ev(2, "exec", { tool: "candidate", command: "adapter", result: execResult, inspection, teardown })];
+    const cp = extractCheckpoints(null, events);
+    expect(cp.hostSource).toBe("event #1");
+    expect(cp.inspections.map((i) => i.inspection.container)).toEqual(["airlock-candidate-x"]);
+    expect(cp.teardowns.length).toBe(1);
+    expect(cp.execCount).toBe(1);
+    expect(runtimeTier(cp)).toEqual({ runtime: "runc", devUnsafe: true, source: "inspected" });
+  });
+
   test("collects probe, teardown and host from check events and dedupes", () => {
     const events = [ev(1, "check", { host, probe }), ev(2, "check", { probe }), ev(3, "lifecycle", { teardown }), ev(4, "exec", { command: "x" })];
     const cp = extractCheckpoints(null, events);

@@ -53,6 +53,8 @@ export interface ModelDriver {
     toolCalls: { id: string; name: string; args: unknown }[];
     usage: { input: number; output: number };
   }>;
+  /** Identity recorded on every model event (model name, serving host). */
+  describe?(): { model: string; host: string };
 }
 export type CompareFn = (input: {
   id: string;
@@ -394,6 +396,10 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
           { signal: ctx.signal, timeoutMs: budgetMs + 30_000 },
         );
         await ctx.event("exec", `${role} invocation ${result.exec.status}`, `exit=${result.exec.exitCode} ${result.exec.durationMs}ms observations=${result.observations.length} protocolErrors=${result.protocolErrors.length}${result.exec.stderr ? `\nstderr:\n${bounded(result.exec.stderr, 4096)}` : ""}`, {
+          tool: role,
+          command: "/opt/airlock/materialize.py; /opt/airlock/adapter.py --request /workspace/request.json",
+          result: boundedExec(result.exec),
+          inspection: result.inspection,
           container: result.container,
           runtime: result.inspection.runtime,
           devUnsafe: result.inspection.devUnsafe,
@@ -408,6 +414,7 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
 
       async function modelLoop(attemptRef: AttemptRef, deadlineMs: number): Promise<{ end: "submitted" | "budget" | "deadline" | "unresolved"; reason: string }> {
         const driver: ModelDriver = typeof deps.driver === "function" ? await deps.driver(task) : deps.driver;
+        const identity = driver.describe?.() ?? { model: "unknown", host: "unknown" };
         const reported = contract.cases.find((c) => c.kind === "reported");
         const system = systemPrompt(manifest);
         const messages: ChatMessage[] = [{ role: "user", content: taskMessage(task.issueText, reported) }];
@@ -420,19 +427,23 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
             return { end: "budget", reason: `model call budget exhausted (${task.budget.modelCallsUsed}/${manifest.caps.maxModelCalls})` };
           await checkpoint({ budget: { ...task.budget, modelCallsUsed: task.budget.modelCallsUsed + 1 } });
           let turn: Awaited<ReturnType<ModelDriver["chat"]>>;
+          const startedAt = now();
           try {
             turn = await driver.chat({ system, messages, tools: MODEL_TOOLS, signal: ctx.signal, ...(deps.maxTokens ? { maxTokens: deps.maxTokens } : {}) });
             driverErrors = 0;
           } catch (error) {
             if (ctx.signal.aborted) throw new LostLeaseError();
             driverErrors++;
-            await ctx.event("error", "Model call failed", bounded(errorMessage(error), 2000), { consecutive: driverErrors });
+            await ctx.event("error", "Model call failed", bounded(errorMessage(error), 2000), { consecutive: driverErrors, model: identity.model, host: identity.host, durationMs: now() - startedAt, error: true });
             if (driverErrors >= MAX_CONSECUTIVE_DRIVER_ERRORS) throw new Error(`Model driver failed ${driverErrors} times in a row: ${errorMessage(error).slice(0, 300)}`);
             continue;
           }
           const toolCalls = Array.isArray(turn.toolCalls) ? turn.toolCalls.slice(0, 16) : [];
           const text = typeof turn.text === "string" ? turn.text : "";
           await ctx.event("model", `Model turn ${task.budget.modelCallsUsed}`, bounded(text || "(no text)"), {
+            model: identity.model,
+            host: identity.host,
+            durationMs: now() - startedAt,
             toolCalls: toolCalls.map((c) => ({ name: String(c.name).slice(0, 64) })),
             usage: turn.usage,
           });
@@ -475,7 +486,11 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
                 return { payload: { error: `"${call.args.path}" is not readable. Allowed: ${manifest.readablePaths.join(", ")}` } };
               }
               const result = await deps.supervisor.authorTool({ ref: attemptRef, args: { kind: "read", path: call.args.path } }, { signal: ctx.signal });
-              await ctx.event("tool", `read_file ${call.args.path}`, result.kind === "read" ? `${result.content.length} chars${result.truncated ? " (truncated)" : ""}` : describeToolResult(result));
+              await ctx.event("tool", `read_file ${call.args.path}`, result.kind === "read" ? `${result.content.length} chars${result.truncated ? " (truncated)" : ""}` : describeToolResult(result), {
+                tool: "read_file",
+                path: call.args.path,
+                ...(result.kind === "read" ? { chars: result.content.length, truncated: result.truncated } : { refused: describeToolResult(result) }),
+              });
               if (result.kind === "read") return { payload: { path: call.args.path, content: result.content, truncated: result.truncated } };
               return { payload: { error: describeToolResult(result) } };
             }
@@ -490,7 +505,11 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
                 return { payload: { error: `file exceeds ${manifest.caps.maxFileBytes} bytes` } };
               }
               const result = await deps.supervisor.authorTool({ ref: attemptRef, args: { kind: "write", path: call.args.path, content: call.args.content } }, { signal: ctx.signal });
-              await ctx.event("tool", `write_file ${call.args.path}`, result.kind === "write" ? `${result.byteLength} bytes` : describeToolResult(result));
+              await ctx.event("tool", `write_file ${call.args.path}`, result.kind === "write" ? `${result.byteLength} bytes` : describeToolResult(result), {
+                tool: "write_file",
+                path: call.args.path,
+                ...(result.kind === "write" ? { byteLength: result.byteLength } : { refused: describeToolResult(result) }),
+              });
               if (result.kind === "write") return { payload: { path: call.args.path, byteLength: result.byteLength } };
               return { payload: { error: describeToolResult(result) } };
             }
@@ -499,10 +518,13 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
               if (result.kind === "exec") {
                 const r = result.result;
                 await ctx.event("exec", `run: ${bounded(call.args.command, 200)}`, `${r.status} exit=${r.exitCode} ${r.durationMs}ms${r.truncated ? " (output truncated)" : ""}\nstdout:\n${bounded(r.stdout, 6000)}\nstderr:\n${bounded(r.stderr, 6000)}`, {
+                  tool: "run",
+                  command: call.args.command,
                   status: r.status,
                   exitCode: r.exitCode,
                   durationMs: r.durationMs,
                   timedOut: r.timedOut,
+                  result: boundedExec(r),
                 });
                 return {
                   payload: {
@@ -544,6 +566,20 @@ export function createRepairHandler(deps: RepairDeps): TaskHandler {
       }
       throw error;
     }
+  };
+}
+
+/** An ExecResult with stdout/stderr cut to what an event should carry (the tool result keeps more). */
+function boundedExec(r: { status: string; exitCode: number | null; stdout: string; stderr: string; truncated: boolean; timedOut: boolean; durationMs: number }) {
+  const cap = 8 * 1024;
+  return {
+    status: r.status,
+    exitCode: r.exitCode,
+    stdout: r.stdout.length > cap ? r.stdout.slice(0, cap) : r.stdout,
+    stderr: r.stderr.length > cap ? r.stderr.slice(0, cap) : r.stderr,
+    truncated: r.truncated || r.stdout.length > cap || r.stderr.length > cap,
+    timedOut: r.timedOut,
+    durationMs: r.durationMs,
   };
 }
 
