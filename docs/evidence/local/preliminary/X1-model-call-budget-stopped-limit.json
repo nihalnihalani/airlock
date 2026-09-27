@@ -1,0 +1,1109 @@
+{
+  "id": "X1-model-call-budget-stopped-limit",
+  "requirement": "(incidental) a general task that exceeds its model-call budget (30) ends STOPPED_LIMIT with the reason, browser sandbox destroyed",
+  "command": "bun scripts/acceptance/local.ts T5-takeover-and-stale-ref",
+  "environment": "real local runc (dev-unsafe, Colima)",
+  "timestamp": "2026-09-27T08:56:21.095Z",
+  "revision": "22dcce55f9c3e5c9c9316e8a5b385308b77632aa",
+  "result": "PASS",
+  "evidence": {
+    "containerEnvNames": {
+      "airlock-browser-task-b9690147abb5db23-att-bdb1b25a08f1042109f9": [
+        "AIRLOCK_PROXY",
+        "PATH",
+        "LANG",
+        "LC_ALL",
+        "PLAYWRIGHT_BROWSERS_PATH",
+        "NODE_ENV",
+        "AIRLOCK_RUNNER_SOCKET"
+      ],
+      "airlock-egress-task-b9690147abb5db23-att-bdb1b25a08f1042109f9": [
+        "AIRLOCK_EGRESS_ALLOW",
+        "AIRLOCK_EGRESS_PORTS",
+        "PATH",
+        "BUN_RUNTIME_TRANSPILER_CACHE_PATH",
+        "BUN_INSTALL_BIN",
+        "AIRLOCK_EGRESS_LISTEN"
+      ]
+    },
+    "humanObserve": {
+      "status": 200,
+      "ref": "e6",
+      "keys": [
+        "response",
+        "status",
+        "durationMs",
+        "generationBefore"
+      ]
+    },
+    "humanObserveResult": "{\"response\":{\"schemaVersion\":1,\"id\":\"op-d3d122b2ced80800121431b7\",\"op\":\"observe\",\"ok\":true,\"result\":{\"generation\":3,\"tabId\":\"tab-1\",\"url\":\"https://example.com/\",\"title\":\"Example Domain\",\"text\":\"Example Domain\\n\\nThis domain is for use in documentation examples without needing permission. Avoid use in operations.\\n\\nLearn more\",\"textTruncated\":false,\"controls\":[{\"ref\":\"e6\",\"role\":\"link\",\"name\":\"Learn more\"}],\"controlsTruncated\":false,\"tabs\":[{\"tabId\":\"tab-1\",\"url\":\"https://example.com/\",\"title\":\"Example Domain\",\"active\":true}],\"events\":[],\"droppedEvents\":0,\"pendingReview\":false}},\"status\":\"completed\",\"durationMs\":60,\"generationBefore\":2}",
+    "linkClick": {
+      "status": 400,
+      "body": "{\"error\":\"invalid body:  Invalid input\"}"
+    },
+    "egressLogWhileHeld": {
+      "attemptId": "att-bdb1b25a08f1042109f9",
+      "egressContainer": "airlock-egress-task-b9690147abb5db23-att-bdb1b25a08f1042109f9",
+      "collectedAt": "2026-09-27T08:55:38.952Z",
+      "source": "live",
+      "allow": [
+        "example.com"
+      ],
+      "decisions": [
+        {
+          "host": "example.com",
+          "decision": "allow",
+          "reason": "allowlisted",
+          "at": "2026-09-27T08:55:05.326Z",
+          "method": "CONNECT",
+          "port": 443,
+          "address": "172.66.147.243"
+        }
+      ],
+      "summary": {
+        "allowed": 1,
+        "denied": 0
+      },
+      "listening": {
+        "allowExact": [
+          "example.com"
+        ],
+        "allowSuffixes": [],
+        "ports": [
+          443,
+          80
+        ]
+      }
+    },
+    "observeAfterLinkClick": "{\"response\":{\"schemaVersion\":1,\"id\":\"op-dc6dc1e6240aab65bcfb1222\",\"op\":\"observe\",\"ok\":true,\"result\":{\"generation\":4,\"tabId\":\"tab-1\",\"url\":\"https://example.com/\",\"title\":\"Example Domain\",\"text\":\"Example Domain\\n\\nThis domain is for use in documentation examples without needing permission. Avoid use in operations.\\n\\nLearn more\",\"textTruncated\":false,\"controls\":[{\"ref\":\"e6\",\"role\":\"link\",\"name\":\"Learn more\"}],\"controlsTruncated\":false,\"tabs\":[{\"tabId\":\"tab-1\",\"url\":\"https://example.com/\",\"title\":\"Example Domain\",\"active\":true}],\"events\":[],\"droppedEvents\":0,\"pendingReview\":false}},\"status\":\"comp",
+    "eventsWhileHeld": [
+      {
+        "seq": 30,
+        "at": "2026-09-27T08:55:36.342Z",
+        "kind": "tool",
+        "title": "human_observe started",
+        "tool": "human_observe",
+        "opState": "started"
+      },
+      {
+        "seq": 31,
+        "at": "2026-09-27T08:55:36.406Z",
+        "kind": "tool",
+        "title": "human_observe observe",
+        "detail": "by the person holding control; https://example.com/",
+        "tool": "human_observe",
+        "opState": "completed",
+        "actor": "human"
+      },
+      {
+        "seq": 32,
+        "at": "2026-09-27T08:55:36.408Z",
+        "kind": "tool",
+        "title": "human_click started",
+        "tool": "human_click",
+        "opState": "started"
+      },
+      {
+        "seq": 33,
+        "at": "2026-09-27T08:55:36.445Z",
+        "kind": "tool",
+        "title": "human_click stale_reference",
+        "detail": "generation 0 is not current (3); observe again and use the new refs",
+        "tool": "human_click",
+        "opState": "failed",
+        "actor": "human"
+      },
+      {
+        "seq": 34,
+        "at": "2026-09-27T08:55:38.955Z",
+        "kind": "tool",
+        "title": "human_observe started",
+        "tool": "human_observe",
+        "opState": "started"
+      },
+      {
+        "seq": 35,
+        "at": "2026-09-27T08:55:38.997Z",
+        "kind": "tool",
+        "title": "human_observe observe",
+        "detail": "by the person holding control; https://example.com/",
+        "tool": "human_observe",
+        "opState": "completed",
+        "actor": "human"
+      },
+      {
+        "seq": 36,
+        "at": "2026-09-27T08:55:38.999Z",
+        "kind": "tool",
+        "title": "human_screenshot started",
+        "tool": "human_screenshot",
+        "opState": "started"
+      },
+      {
+        "seq": 37,
+        "at": "2026-09-27T08:55:39.044Z",
+        "kind": "artifact",
+        "title": "Screenshot stored art-0e882eada8f4ec57fe4d",
+        "detail": "https://example.com/ (1280x800, sha256 74055151462e4f8b960ea307694724a88dc32b73179f9812ebfa3c4d1ab9a81a)",
+        "actor": "human"
+      }
+    ],
+    "task": {
+      "id": "task-b9690147abb5db23",
+      "status": "done",
+      "outcome": "STOPPED_LIMIT",
+      "cleanup": {
+        "at": "2026-09-27T08:56:20.683Z",
+        "detail": "supervisor confirmed teardown of 1 attempt(s)",
+        "status": "confirmed"
+      },
+      "control": {
+        "since": "2026-09-27T08:56:15.055Z",
+        "holder": "agent",
+        "reason": "released by judge",
+        "fenceGeneration": 4
+      }
+    },
+    "events": [
+      {
+        "seq": 1,
+        "at": "2026-09-27T08:54:58.985Z",
+        "kind": "lifecycle",
+        "title": "Task created",
+        "detail": "general task, profile web-research v1; destinations example.com; diagnostic (scripted:acc-web-long), not a model run"
+      },
+      {
+        "seq": 2,
+        "at": "2026-09-27T08:54:59.292Z",
+        "kind": "phase",
+        "title": "prepare",
+        "detail": "general task profile web-research v1; tools: browser_navigate, browser_observe, browser_click, browser_type, browser_key, browser_scroll, browser_screenshot, browser_tabs, browser_download_list, browser_download_save, browser_propose_submit, submit_result; destinations: example.com"
+      },
+      {
+        "seq": 3,
+        "at": "2026-09-27T08:54:59.293Z",
+        "kind": "check",
+        "title": "dev-unsafe runtime",
+        "detail": "supervisor host runs runc with AIRLOCK_DEV_UNSAFE; results are not a deployment measurement"
+      },
+      {
+        "seq": 4,
+        "at": "2026-09-27T08:54:59.294Z",
+        "kind": "phase",
+        "title": "execute",
+        "detail": "model loop for goal under profile web-research"
+      },
+      {
+        "seq": 5,
+        "at": "2026-09-27T08:54:59.296Z",
+        "kind": "model",
+        "title": "Model turn 1",
+        "detail": "Opening example.com."
+      },
+      {
+        "seq": 6,
+        "at": "2026-09-27T08:54:59.297Z",
+        "kind": "tool",
+        "title": "browser_navigate allowed",
+        "detail": "example.com is inside the task's destinations",
+        "tool": "browser_navigate",
+        "opState": "allowed",
+        "actor": "agent"
+      },
+      {
+        "seq": 7,
+        "at": "2026-09-27T08:54:59.298Z",
+        "kind": "lifecycle",
+        "title": "Creating browser sandbox",
+        "detail": "attempt att-bdb1b25a08f1042109f9, generation 1, deadline 2026-09-27T09:09:59.298Z; egress allowed to example.com"
+      },
+      {
+        "seq": 8,
+        "at": "2026-09-27T08:55:05.223Z",
+        "kind": "lifecycle",
+        "title": "browser sandbox created",
+        "detail": "container airlock-browser-task-b9690147abb5db23-att-bdb1b25a08f1042109f9; runtime runc (dev-unsafe)",
+        "opState": "completed"
+      },
+      {
+        "seq": 9,
+        "at": "2026-09-27T08:55:05.225Z",
+        "kind": "tool",
+        "title": "browser_navigate started",
+        "tool": "browser_navigate",
+        "opState": "started"
+      },
+      {
+        "seq": 10,
+        "at": "2026-09-27T08:55:05.402Z",
+        "kind": "tool",
+        "title": "browser_navigate https://example.com/",
+        "detail": "status 200",
+        "tool": "browser_navigate",
+        "opState": "completed"
+      },
+      {
+        "seq": 11,
+        "at": "2026-09-27T08:55:05.403Z",
+        "kind": "model",
+        "title": "Model turn 2",
+        "detail": "Observing."
+      },
+      {
+        "seq": 12,
+        "at": "2026-09-27T08:55:05.404Z",
+        "kind": "tool",
+        "title": "browser_observe started",
+        "tool": "browser_observe",
+        "opState": "started"
+      },
+      {
+        "seq": 13,
+        "at": "2026-09-27T08:55:05.456Z",
+        "kind": "tool",
+        "title": "browser_observe https://example.com/",
+        "detail": "Example Domain \u2014 129 chars, 1 controls, 1 tab(s)\n\nExample Domain\n\nThis domain is for use in documentation examples without needing permission. Avoid use in operations.\n\nLearn more",
+        "tool": "browser_observe",
+        "opState": "completed"
+      },
+      {
+        "seq": 14,
+        "at": "2026-09-27T08:55:05.458Z",
+        "kind": "model",
+        "title": "Model turn 3",
+        "detail": "Scroll 0."
+      },
+      {
+        "seq": 15,
+        "at": "2026-09-27T08:55:05.459Z",
+        "kind": "tool",
+        "title": "browser_scroll started",
+        "tool": "browser_scroll",
+        "opState": "started"
+      },
+      {
+        "seq": 16,
+        "at": "2026-09-27T08:55:05.666Z",
+        "kind": "tool",
+        "title": "browser_scroll 0,50",
+        "detail": "https://example.com/",
+        "tool": "browser_scroll",
+        "opState": "completed"
+      },
+      {
+        "seq": 17,
+        "at": "2026-09-27T08:55:05.668Z",
+        "kind": "model",
+        "title": "Model turn 4",
+        "detail": "Scroll 1."
+      },
+      {
+        "seq": 18,
+        "at": "2026-09-27T08:55:05.670Z",
+        "kind": "tool",
+        "title": "browser_scroll started",
+        "tool": "browser_scroll",
+        "opState": "started"
+      },
+      {
+        "seq": 19,
+        "at": "2026-09-27T08:55:05.890Z",
+        "kind": "tool",
+        "title": "browser_scroll 0,-50",
+        "detail": "https://example.com/",
+        "tool": "browser_scroll",
+        "opState": "completed"
+      },
+      {
+        "seq": 20,
+        "at": "2026-09-27T08:55:05.893Z",
+        "kind": "model",
+        "title": "Model turn 5",
+        "detail": "Scroll 2."
+      },
+      {
+        "seq": 21,
+        "at": "2026-09-27T08:55:05.895Z",
+        "kind": "tool",
+        "title": "browser_scroll started",
+        "tool": "browser_scroll",
+        "opState": "started"
+      },
+      {
+        "seq": 22,
+        "at": "2026-09-27T08:55:06.118Z",
+        "kind": "tool",
+        "title": "browser_scroll 0,50",
+        "detail": "https://example.com/",
+        "tool": "browser_scroll",
+        "opState": "completed"
+      },
+      {
+        "seq": 23,
+        "at": "2026-09-27T08:55:06.121Z",
+        "kind": "model",
+        "title": "Model turn 6",
+        "detail": "Scroll 3."
+      },
+      {
+        "seq": 24,
+        "at": "2026-09-27T08:55:06.123Z",
+        "kind": "tool",
+        "title": "browser_scroll started",
+        "tool": "browser_scroll",
+        "opState": "started"
+      },
+      {
+        "seq": 25,
+        "at": "2026-09-27T08:55:06.271Z",
+        "kind": "lifecycle",
+        "title": "Human control requested",
+        "detail": "agent dispatch revoked; waiting up to 10 s for the in-flight browser operation to settle"
+      },
+      {
+        "seq": 26,
+        "at": "2026-09-27T08:55:06.328Z",
+        "kind": "tool",
+        "title": "browser_scroll 0,-50",
+        "detail": "https://example.com/",
+        "tool": "browser_scroll",
+        "opState": "completed"
+      },
+      {
+        "seq": 27,
+        "at": "2026-09-27T08:55:06.329Z",
+        "kind": "lifecycle",
+        "title": "Human took control",
+        "detail": "the agent is paused; every earlier page snapshot is invalid after release (fence generation 2); control returns after 300 s without an action"
+      },
+      {
+        "seq": 28,
+        "at": "2026-09-27T08:55:06.330Z",
+        "kind": "model",
+        "title": "Model turn 7",
+        "detail": "Scroll 4."
+      },
+      {
+        "seq": 29,
+        "at": "2026-09-27T08:55:06.331Z",
+        "kind": "lifecycle",
+        "title": "Agent paused: human control",
+        "detail": "browser_scroll waits while a person holds control of the browser; the task's wall clock keeps running",
+        "tool": "browser_scroll"
+      },
+      {
+        "seq": 30,
+        "at": "2026-09-27T08:55:36.342Z",
+        "kind": "tool",
+        "title": "human_observe started",
+        "tool": "human_observe",
+        "opState": "started"
+      },
+      {
+        "seq": 31,
+        "at": "2026-09-27T08:55:36.406Z",
+        "kind": "tool",
+        "title": "human_observe observe",
+        "detail": "by the person holding control; https://example.com/",
+        "tool": "human_observe",
+        "opState": "completed",
+        "actor": "human"
+      },
+      {
+        "seq": 32,
+        "at": "2026-09-27T08:55:36.408Z",
+        "kind": "tool",
+        "title": "human_click started",
+        "tool": "human_click",
+        "opState": "started"
+      },
+      {
+        "seq": 33,
+        "at": "2026-09-27T08:55:36.445Z",
+        "kind": "tool",
+        "title": "human_click stale_reference",
+        "detail": "generation 0 is not current (3); observe again and use the new refs",
+        "tool": "human_click",
+        "opState": "failed",
+        "actor": "human"
+      },
+      {
+        "seq": 34,
+        "at": "2026-09-27T08:55:38.955Z",
+        "kind": "tool",
+        "title": "human_observe started",
+        "tool": "human_observe",
+        "opState": "started"
+      },
+      {
+        "seq": 35,
+        "at": "2026-09-27T08:55:38.997Z",
+        "kind": "tool",
+        "title": "human_observe observe",
+        "detail": "by the person holding control; https://example.com/",
+        "tool": "human_observe",
+        "opState": "completed",
+        "actor": "human"
+      },
+      {
+        "seq": 36,
+        "at": "2026-09-27T08:55:38.999Z",
+        "kind": "tool",
+        "title": "human_screenshot started",
+        "tool": "human_screenshot",
+        "opState": "started"
+      },
+      {
+        "seq": 37,
+        "at": "2026-09-27T08:55:39.044Z",
+        "kind": "artifact",
+        "title": "Screenshot stored art-0e882eada8f4ec57fe4d",
+        "detail": "https://example.com/ (1280x800, sha256 74055151462e4f8b960ea307694724a88dc32b73179f9812ebfa3c4d1ab9a81a)",
+        "actor": "human"
+      },
+      {
+        "seq": 38,
+        "at": "2026-09-27T08:56:15.056Z",
+        "kind": "lifecycle",
+        "title": "Control returned to the agent",
+        "detail": "released by judge; the agent must observe the page before any ref-bound action"
+      },
+      {
+        "seq": 39,
+        "at": "2026-09-27T08:56:15.058Z",
+        "kind": "tool",
+        "title": "browser_scroll started",
+        "tool": "browser_scroll",
+        "opState": "started"
+      },
+      {
+        "seq": 40,
+        "at": "2026-09-27T08:56:15.296Z",
+        "kind": "tool",
+        "title": "browser_scroll 0,50",
+        "detail": "https://example.com/",
+        "tool": "browser_scroll",
+        "opState": "completed"
+      },
+      {
+        "seq": 41,
+        "at": "2026-09-27T08:56:15.298Z",
+        "kind": "model",
+        "title": "Model turn 8",
+        "detail": "Scroll 5."
+      },
+      {
+        "seq": 42,
+        "at": "2026-09-27T08:56:15.299Z",
+        "kind": "tool",
+        "title": "browser_scroll started",
+        "tool": "browser_scroll",
+        "opState": "started"
+      },
+      {
+        "seq": 43,
+        "at": "2026-09-27T08:56:15.523Z",
+        "kind": "tool",
+        "title": "browser_scroll 0,-50",
+        "detail": "https://example.com/",
+        "tool": "browser_scroll",
+        "opState": "completed"
+      },
+      {
+        "seq": 44,
+        "at": "2026-09-27T08:56:15.526Z",
+        "kind": "model",
+        "title": "Model turn 9",
+        "detail": "Scroll 6."
+      },
+      {
+        "seq": 45,
+        "at": "2026-09-27T08:56:15.527Z",
+        "kind": "tool",
+        "title": "browser_scroll started",
+        "tool": "browser_scroll",
+        "opState": "started"
+      },
+      {
+        "seq": 46,
+        "at": "2026-09-27T08:56:15.742Z",
+        "kind": "tool",
+        "title": "browser_scroll 0,50",
+        "detail": "https://example.com/",
+        "tool": "browser_scroll",
+        "opState": "completed"
+      },
+      {
+        "seq": 47,
+        "at": "2026-09-27T08:56:15.744Z",
+        "kind": "model",
+        "title": "Model turn 10",
+        "detail": "Scroll 7."
+      },
+      {
+        "seq": 48,
+        "at": "2026-09-27T08:56:15.745Z",
+        "kind": "tool",
+        "title": "browser_scroll started",
+        "tool": "browser_scroll",
+        "opState": "started"
+      },
+      {
+        "seq": 49,
+        "at": "2026-09-27T08:56:15.973Z",
+        "kind": "tool",
+        "title": "browser_scroll 0,-50",
+        "detail": "https://example.com/",
+        "tool": "browser_scroll",
+        "opState": "completed"
+      },
+      {
+        "seq": 50,
+        "at": "2026-09-27T08:56:15.975Z",
+        "kind": "model",
+        "title": "Model turn 11",
+        "detail": "Scroll 8."
+      },
+      {
+        "seq": 51,
+        "at": "2026-09-27T08:56:15.977Z",
+        "kind": "tool",
+        "title": "browser_scroll started",
+        "tool": "browser_scroll",
+        "opState": "started"
+      },
+      {
+        "seq": 52,
+        "at": "2026-09-27T08:56:16.211Z",
+        "kind": "tool",
+        "title": "browser_scroll 0,50",
+        "detail": "https://example.com/",
+        "tool": "browser_scroll",
+        "opState": "completed"
+      },
+      {
+        "seq": 53,
+        "at": "2026-09-27T08:56:16.212Z",
+        "kind": "model",
+        "title": "Model turn 12",
+        "detail": "Scroll 9."
+      },
+      {
+        "seq": 54,
+        "at": "2026-09-27T08:56:16.214Z",
+        "kind": "tool",
+        "title": "browser_scroll started",
+        "tool": "browser_scroll",
+        "opState": "started"
+      },
+      {
+        "seq": 55,
+        "at": "2026-09-27T08:56:16.434Z",
+        "kind": "tool",
+        "title": "browser_scroll 0,-50",
+        "detail": "https://example.com/",
+        "tool": "browser_scroll",
+        "opState": "completed"
+      },
+      {
+        "seq": 56,
+        "at": "2026-09-27T08:56:16.435Z",
+        "kind": "model",
+        "title": "Model turn 13",
+        "detail": "Scroll 10."
+      },
+      {
+        "seq": 57,
+        "at": "2026-09-27T08:56:16.436Z",
+        "kind": "tool",
+        "title": "browser_scroll started",
+        "tool": "browser_scroll",
+        "opState": "started"
+      },
+      {
+        "seq": 58,
+        "at": "2026-09-27T08:56:16.650Z",
+        "kind": "tool",
+        "title": "browser_scroll 0,50",
+        "detail": "https://example.com/",
+        "tool": "browser_scroll",
+        "opState": "completed"
+      },
+      {
+        "seq": 59,
+        "at": "2026-09-27T08:56:16.652Z",
+        "kind": "model",
+        "title": "Model turn 14",
+        "detail": "Scroll 11."
+      },
+      {
+        "seq": 60,
+        "at": "2026-09-27T08:56:16.654Z",
+        "kind": "tool",
+        "title": "browser_scroll started",
+        "tool": "browser_scroll",
+        "opState": "started"
+      },
+      {
+        "seq": 61,
+        "at": "2026-09-27T08:56:16.871Z",
+        "kind": "tool",
+        "title": "browser_scroll 0,-50",
+        "detail": "https://example.com/",
+        "tool": "browser_scroll",
+        "opState": "completed"
+      },
+      {
+        "seq": 62,
+        "at": "2026-09-27T08:56:16.873Z",
+        "kind": "model",
+        "title": "Model turn 15",
+        "detail": "Scroll 12."
+      },
+      {
+        "seq": 63,
+        "at": "2026-09-27T08:56:16.875Z",
+        "kind": "tool",
+        "title": "browser_scroll started",
+        "tool": "browser_scroll",
+        "opState": "started"
+      },
+      {
+        "seq": 64,
+        "at": "2026-09-27T08:56:17.103Z",
+        "kind": "tool",
+        "title": "browser_scroll 0,50",
+        "detail": "https://example.com/",
+        "tool": "browser_scroll",
+        "opState": "completed"
+      },
+      {
+        "seq": 65,
+        "at": "2026-09-27T08:56:17.104Z",
+        "kind": "model",
+        "title": "Model turn 16",
+        "detail": "Scroll 13."
+      },
+      {
+        "seq": 66,
+        "at": "2026-09-27T08:56:17.106Z",
+        "kind": "tool",
+        "title": "browser_scroll started",
+        "tool": "browser_scroll",
+        "opState": "started"
+      },
+      {
+        "seq": 67,
+        "at": "2026-09-27T08:56:17.318Z",
+        "kind": "tool",
+        "title": "browser_scroll 0,-50",
+        "detail": "https://example.com/",
+        "tool": "browser_scroll",
+        "opState": "completed"
+      },
+      {
+        "seq": 68,
+        "at": "2026-09-27T08:56:17.320Z",
+        "kind": "model",
+        "title": "Model turn 17",
+        "detail": "Scroll 14."
+      },
+      {
+        "seq": 69,
+        "at": "2026-09-27T08:56:17.321Z",
+        "kind": "tool",
+        "title": "browser_scroll started",
+        "tool": "browser_scroll",
+        "opState": "started"
+      },
+      {
+        "seq": 70,
+        "at": "2026-09-27T08:56:17.533Z",
+        "kind": "tool",
+        "title": "browser_scroll 0,50",
+        "detail": "https://example.com/",
+        "tool": "browser_scroll",
+        "opState": "completed"
+      },
+      {
+        "seq": 71,
+        "at": "2026-09-27T08:56:17.534Z",
+        "kind": "model",
+        "title": "Model turn 18",
+        "detail": "Scroll 15."
+      },
+      {
+        "seq": 72,
+        "at": "2026-09-27T08:56:17.536Z",
+        "kind": "tool",
+        "title": "browser_scroll started",
+        "tool": "browser_scroll",
+        "opState": "started"
+      },
+      {
+        "seq": 73,
+        "at": "2026-09-27T08:56:17.752Z",
+        "kind": "tool",
+        "title": "browser_scroll 0,-50",
+        "detail": "https://example.com/",
+        "tool": "browser_scroll",
+        "opState": "completed"
+      },
+      {
+        "seq": 74,
+        "at": "2026-09-27T08:56:17.754Z",
+        "kind": "model",
+        "title": "Model turn 19",
+        "detail": "Scroll 16."
+      },
+      {
+        "seq": 75,
+        "at": "2026-09-27T08:56:17.755Z",
+        "kind": "tool",
+        "title": "browser_scroll started",
+        "tool": "browser_scroll",
+        "opState": "started"
+      },
+      {
+        "seq": 76,
+        "at": "2026-09-27T08:56:17.993Z",
+        "kind": "tool",
+        "title": "browser_scroll 0,50",
+        "detail": "https://example.com/",
+        "tool": "browser_scroll",
+        "opState": "completed"
+      },
+      {
+        "seq": 77,
+        "at": "2026-09-27T08:56:17.995Z",
+        "kind": "model",
+        "title": "Model turn 20",
+        "detail": "Scroll 17."
+      },
+      {
+        "seq": 78,
+        "at": "2026-09-27T08:56:17.996Z",
+        "kind": "tool",
+        "title": "browser_scroll started",
+        "tool": "browser_scroll",
+        "opState": "started"
+      },
+      {
+        "seq": 79,
+        "at": "2026-09-27T08:56:18.218Z",
+        "kind": "tool",
+        "title": "browser_scroll 0,-50",
+        "detail": "https://example.com/",
+        "tool": "browser_scroll",
+        "opState": "completed"
+      },
+      {
+        "seq": 80,
+        "at": "2026-09-27T08:56:18.220Z",
+        "kind": "model",
+        "title": "Model turn 21",
+        "detail": "Scroll 18."
+      },
+      {
+        "seq": 81,
+        "at": "2026-09-27T08:56:18.221Z",
+        "kind": "tool",
+        "title": "browser_scroll started",
+        "tool": "browser_scroll",
+        "opState": "started"
+      },
+      {
+        "seq": 82,
+        "at": "2026-09-27T08:56:18.437Z",
+        "kind": "tool",
+        "title": "browser_scroll 0,50",
+        "detail": "https://example.com/",
+        "tool": "browser_scroll",
+        "opState": "completed"
+      },
+      {
+        "seq": 83,
+        "at": "2026-09-27T08:56:18.439Z",
+        "kind": "model",
+        "title": "Model turn 22",
+        "detail": "Scroll 19."
+      },
+      {
+        "seq": 84,
+        "at": "2026-09-27T08:56:18.440Z",
+        "kind": "tool",
+        "title": "browser_scroll started",
+        "tool": "browser_scroll",
+        "opState": "started"
+      },
+      {
+        "seq": 85,
+        "at": "2026-09-27T08:56:18.651Z",
+        "kind": "tool",
+        "title": "browser_scroll 0,-50",
+        "detail": "https://example.com/",
+        "tool": "browser_scroll",
+        "opState": "completed"
+      },
+      {
+        "seq": 86,
+        "at": "2026-09-27T08:56:18.652Z",
+        "kind": "model",
+        "title": "Model turn 23",
+        "detail": "Scroll 20."
+      },
+      {
+        "seq": 87,
+        "at": "2026-09-27T08:56:18.654Z",
+        "kind": "tool",
+        "title": "browser_scroll started",
+        "tool": "browser_scroll",
+        "opState": "started"
+      },
+      {
+        "seq": 88,
+        "at": "2026-09-27T08:56:18.864Z",
+        "kind": "tool",
+        "title": "browser_scroll 0,50",
+        "detail": "https://example.com/",
+        "tool": "browser_scroll",
+        "opState": "completed"
+      },
+      {
+        "seq": 89,
+        "at": "2026-09-27T08:56:18.865Z",
+        "kind": "model",
+        "title": "Model turn 24",
+        "detail": "Scroll 21."
+      },
+      {
+        "seq": 90,
+        "at": "2026-09-27T08:56:18.866Z",
+        "kind": "tool",
+        "title": "browser_scroll started",
+        "tool": "browser_scroll",
+        "opState": "started"
+      },
+      {
+        "seq": 91,
+        "at": "2026-09-27T08:56:19.083Z",
+        "kind": "tool",
+        "title": "browser_scroll 0,-50",
+        "detail": "https://example.com/",
+        "tool": "browser_scroll",
+        "opState": "completed"
+      },
+      {
+        "seq": 92,
+        "at": "2026-09-27T08:56:19.085Z",
+        "kind": "model",
+        "title": "Model turn 25",
+        "detail": "Scroll 22."
+      },
+      {
+        "seq": 93,
+        "at": "2026-09-27T08:56:19.087Z",
+        "kind": "tool",
+        "title": "browser_scroll started",
+        "tool": "browser_scroll",
+        "opState": "started"
+      },
+      {
+        "seq": 94,
+        "at": "2026-09-27T08:56:19.305Z",
+        "kind": "tool",
+        "title": "browser_scroll 0,50",
+        "detail": "https://example.com/",
+        "tool": "browser_scroll",
+        "opState": "completed"
+      },
+      {
+        "seq": 95,
+        "at": "2026-09-27T08:56:19.307Z",
+        "kind": "model",
+        "title": "Model turn 26",
+        "detail": "Scroll 23."
+      },
+      {
+        "seq": 96,
+        "at": "2026-09-27T08:56:19.308Z",
+        "kind": "tool",
+        "title": "browser_scroll started",
+        "tool": "browser_scroll",
+        "opState": "started"
+      },
+      {
+        "seq": 97,
+        "at": "2026-09-27T08:56:19.513Z",
+        "kind": "tool",
+        "title": "browser_scroll 0,-50",
+        "detail": "https://example.com/",
+        "tool": "browser_scroll",
+        "opState": "completed"
+      },
+      {
+        "seq": 98,
+        "at": "2026-09-27T08:56:19.513Z",
+        "kind": "model",
+        "title": "Model turn 27",
+        "detail": "Scroll 24."
+      },
+      {
+        "seq": 99,
+        "at": "2026-09-27T08:56:19.514Z",
+        "kind": "tool",
+        "title": "browser_scroll started",
+        "tool": "browser_scroll",
+        "opState": "started"
+      },
+      {
+        "seq": 100,
+        "at": "2026-09-27T08:56:19.735Z",
+        "kind": "tool",
+        "title": "browser_scroll 0,50",
+        "detail": "https://example.com/",
+        "tool": "browser_scroll",
+        "opState": "completed"
+      },
+      {
+        "seq": 101,
+        "at": "2026-09-27T08:56:19.736Z",
+        "kind": "model",
+        "title": "Model turn 28",
+        "detail": "Scroll 25."
+      },
+      {
+        "seq": 102,
+        "at": "2026-09-27T08:56:19.738Z",
+        "kind": "tool",
+        "title": "browser_scroll started",
+        "tool": "browser_scroll",
+        "opState": "started"
+      },
+      {
+        "seq": 103,
+        "at": "2026-09-27T08:56:19.949Z",
+        "kind": "tool",
+        "title": "browser_scroll 0,-50",
+        "detail": "https://example.com/",
+        "tool": "browser_scroll",
+        "opState": "completed"
+      },
+      {
+        "seq": 104,
+        "at": "2026-09-27T08:56:19.950Z",
+        "kind": "model",
+        "title": "Model turn 29",
+        "detail": "Scroll 26."
+      },
+      {
+        "seq": 105,
+        "at": "2026-09-27T08:56:19.951Z",
+        "kind": "tool",
+        "title": "browser_scroll started",
+        "tool": "browser_scroll",
+        "opState": "started"
+      },
+      {
+        "seq": 106,
+        "at": "2026-09-27T08:56:20.149Z",
+        "kind": "tool",
+        "title": "browser_scroll 0,50",
+        "detail": "https://example.com/",
+        "tool": "browser_scroll",
+        "opState": "completed"
+      },
+      {
+        "seq": 107,
+        "at": "2026-09-27T08:56:20.150Z",
+        "kind": "model",
+        "title": "Model turn 30",
+        "detail": "Scroll 27."
+      },
+      {
+        "seq": 108,
+        "at": "2026-09-27T08:56:20.151Z",
+        "kind": "tool",
+        "title": "browser_scroll started",
+        "tool": "browser_scroll",
+        "opState": "started"
+      },
+      {
+        "seq": 109,
+        "at": "2026-09-27T08:56:20.361Z",
+        "kind": "tool",
+        "title": "browser_scroll 0,-50",
+        "detail": "https://example.com/",
+        "tool": "browser_scroll",
+        "opState": "completed"
+      },
+      {
+        "seq": 110,
+        "at": "2026-09-27T08:56:20.682Z",
+        "kind": "lifecycle",
+        "title": "browser sandbox destroyed (run ended)",
+        "detail": "revoked; destroyed; remaining containers=0 volumes=0",
+        "opState": "completed"
+      },
+      {
+        "seq": 111,
+        "at": "2026-09-27T08:56:20.683Z",
+        "kind": "phase",
+        "title": "Outcome STOPPED_LIMIT",
+        "detail": "model call budget exhausted (30/30)"
+      }
+    ]
+  },
+  "checks": [
+    {
+      "ok": true,
+      "what": "agent navigated and observed"
+    },
+    {
+      "ok": true,
+      "what": "live browser+egress containers (2) carry no secret names/values in Env"
+    },
+    {
+      "ok": true,
+      "what": "take \u2192 200 {\"holder\":\"human\",\"humanOwner\":\"judge-3851fad392d0a49450126cda\",\"since\":\"2026-09-27T08:55:06.328Z\",\"fenceGeneration\":2,\"reason\":\"taken by judge\"}"
+    },
+    {
+      "ok": true,
+      "what": "holder=human"
+    },
+    {
+      "ok": true,
+      "what": "human observe \u2192 200"
+    },
+    {
+      "ok": true,
+      "what": "human click with previous generation refused as stale (200: {\"ok\":false,\"error\":\"stale_reference\",\"result\":{\"response\":{\"schemaVersion\":1,\"id\":\"op-e890d5ab667e8739baf81006\",\"op\":\"click\",\"ok\":false,\"error\":\"stale_referenc)"
+    },
+    {
+      "ok": false,
+      "what": "human click on the outbound link (ref e6) \u2192 egress proxy denied nothing; allowed only example.com"
+    },
+    {
+      "ok": true,
+      "what": "human screenshot while holding control \u2192 200"
+    },
+    {
+      "ok": true,
+      "what": "no agent browser op started/completed while the human held control for 69 s ()"
+    },
+    {
+      "ok": true,
+      "what": "release \u2192 200"
+    },
+    {
+      "ok": true,
+      "what": "task finished after release (done/STOPPED_LIMIT)"
+    },
+    {
+      "ok": true,
+      "what": "agent resumed after release (24 completed agent ops)"
+    }
+  ],
+  "dirtyTree": null,
+  "note": "incidental: first T5 run used a 45-turn fixture; outcome STOPPED_LIMIT \"model call budget exhausted (30/30)\"; teardown clean. Other checks in this file belong to the superseded T5 run."
+}

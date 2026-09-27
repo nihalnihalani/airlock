@@ -1,0 +1,7 @@
+{ "_comment": "ACCEPTANCE diagnostic (verifier_tester): web-research on https://example.com/ (egressAllow example.com).",
+  "turns": [
+    { "text": "Opening example.com.", "toolCalls": [{ "name": "browser_navigate", "args": { "url": "https://example.com/" } }] },
+    { "text": "Observing.", "toolCalls": [{ "name": "browser_observe", "args": {} }] },
+    { "text": "Screenshot.", "toolCalls": [{ "name": "browser_screenshot", "args": {} }] },
+    { "text": "Submitting.", "toolCalls": [{ "name": "submit_result", "args": { "summary": "Acceptance diagnostic: example.com was opened, observed and captured.", "sources": ["https://example.com/"] } }] }
+  ] }

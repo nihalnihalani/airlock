@@ -1,0 +1,125 @@
+{
+  "id": "T4-cancel-mid-run-browser",
+  "requirement": "Task behaviour: cancellation mid-run (general browser task) → cancelled only after teardown; cleanup confirmed; nothing after",
+  "command": "bun scripts/acceptance/local.ts T4-cancel-mid-run-browser",
+  "environment": "real local runc (dev-unsafe, Colima); stack = git archive of 42a41d4f5bf9",
+  "timestamp": "2026-09-27T09:10:42.816Z",
+  "revision": "42a41d4f5bf9a112810c47a522c54e11d477af25",
+  "result": "PASS",
+  "evidence": {
+    "task": {
+      "id": "task-c18bb9402f9fb044",
+      "status": "cancelled",
+      "outcome": null,
+      "cleanup": {
+        "at": "2026-09-27T09:10:34.719Z",
+        "detail": "supervisor confirmed teardown of 1 attempt(s)",
+        "status": "confirmed"
+      },
+      "result": null
+    },
+    "events": [
+      {
+        "seq": 1,
+        "at": "2026-09-27T09:10:26.737Z",
+        "kind": "lifecycle",
+        "title": "Task created",
+        "detail": "general task, profile web-research v1; destinations example.com; diagnostic (scripted:acc-web-long), not a model run"
+      },
+      {
+        "seq": 2,
+        "at": "2026-09-27T09:10:27.702Z",
+        "kind": "phase",
+        "title": "prepare",
+        "detail": "general task profile web-research v1; tools: browser_navigate, browser_observe, browser_click, browser_type, browser_key, browser_scroll, browser_screenshot, browser_tabs, browser_download_list, browser_download_save, browser_propose_submit, submit_result; destinations: example.com"
+      },
+      {
+        "seq": 3,
+        "at": "2026-09-27T09:10:27.702Z",
+        "kind": "check",
+        "title": "dev-unsafe runtime",
+        "detail": "supervisor host runs runc with AIRLOCK_DEV_UNSAFE; results are not a deployment measurement"
+      },
+      {
+        "seq": 4,
+        "at": "2026-09-27T09:10:27.703Z",
+        "kind": "phase",
+        "title": "execute",
+        "detail": "model loop for goal under profile web-research"
+      },
+      {
+        "seq": 5,
+        "at": "2026-09-27T09:10:27.705Z",
+        "kind": "model",
+        "title": "Model turn 1",
+        "detail": "Opening example.com."
+      },
+      {
+        "seq": 6,
+        "at": "2026-09-27T09:10:27.706Z",
+        "kind": "tool",
+        "title": "browser_navigate allowed",
+        "detail": "example.com is inside the task's destinations",
+        "tool": "browser_navigate",
+        "opState": "allowed",
+        "actor": "agent"
+      },
+      {
+        "seq": 7,
+        "at": "2026-09-27T09:10:27.706Z",
+        "kind": "lifecycle",
+        "title": "Creating browser sandbox",
+        "detail": "attempt att-6fc315fc1a2f0af47fdc, generation 1, deadline 2026-09-27T09:25:27.706Z; egress allowed to example.com"
+      },
+      {
+        "seq": 8,
+        "at": "2026-09-27T09:10:28.501Z",
+        "kind": "lifecycle",
+        "title": "Cancellation requested",
+        "detail": "by judge"
+      },
+      {
+        "seq": 9,
+        "at": "2026-09-27T09:10:34.372Z",
+        "kind": "lifecycle",
+        "title": "browser sandbox destroyed after the lease was lost",
+        "detail": "revoked; destroyed; remaining containers=0 volumes=0",
+        "opState": "completed"
+      },
+      {
+        "seq": 10,
+        "at": "2026-09-27T09:10:34.719Z",
+        "kind": "lifecycle",
+        "title": "Task cancelled",
+        "detail": "every attempt of this task is destroyed (1)"
+      }
+    ]
+  },
+  "checks": [
+    {
+      "ok": true,
+      "what": "browser task is running with a live browser (mid-run)"
+    },
+    {
+      "ok": true,
+      "what": "cancel → 200 cancelling"
+    },
+    {
+      "ok": true,
+      "what": "status cancelled (cancelled)"
+    },
+    {
+      "ok": true,
+      "what": "no browser/egress container when 'cancelled' first observed ([])"
+    },
+    {
+      "ok": true,
+      "what": "cleanup dimension confirmed (confirmed: supervisor confirmed teardown of 1 attempt(s))"
+    },
+    {
+      "ok": true,
+      "what": "stays cancelled; no tool events afterwards (outcome none)"
+    }
+  ],
+  "dirtyTree": null
+}

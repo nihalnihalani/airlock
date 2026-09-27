@@ -1,0 +1,453 @@
+{
+  "id": "A1-analysis-fresh-csv",
+  "requirement": "Useful work (a): fresh CSV upload → general analysis task → summary.json + chart.png downloaded via /api/artifacts match recorded sha256; summary reflects the fresh input; changed input → changed output",
+  "command": "bun scripts/acceptance/local.ts A1-analysis-fresh-csv",
+  "environment": "real local runc (dev-unsafe, Colima)",
+  "timestamp": "2026-09-27T08:58:50.081Z",
+  "revision": "42a41d4f5bf9a112810c47a522c54e11d477af25",
+  "result": "PASS",
+  "evidence": {
+    "run1": {
+      "taskId": "task-9145c223b6853133",
+      "outcome": "RESULT_VERIFIED",
+      "cleanup": {
+        "at": "2026-09-27T08:58:41.633Z",
+        "detail": "supervisor confirmed teardown of 1 attempt(s)",
+        "status": "confirmed"
+      },
+      "result": {
+        "checks": [
+          {
+            "name": "outputs-claimed",
+            "detail": "2 output(s) claimed",
+            "passed": true
+          },
+          {
+            "name": "outputs-valid",
+            "detail": "all 2 claimed output(s) collected and valid",
+            "passed": true
+          },
+          {
+            "name": "output:summary.json",
+            "detail": "valid JSON, 524 bytes",
+            "passed": true
+          },
+          {
+            "name": "output:chart.png",
+            "detail": "PNG 600x350, 13451 bytes",
+            "passed": true
+          },
+          {
+            "name": "summary-schema",
+            "detail": "answer: sum_a=9694.2000 sum_b=-460.7000 rows=15",
+            "passed": true
+          }
+        ],
+        "sources": [],
+        "summary": "Acceptance diagnostic: totals of the uploaded CSV with a chart.",
+        "outputArtifactIds": [
+          "art-006174dc306569685644",
+          "art-0cef30fd3f01df6f10cc"
+        ]
+      },
+      "inputCsvSha256": "d0c8174de90e3095ea7e27e648c5064edd601a6660020eea2cc524e16c4d2b9f",
+      "expected": {
+        "csv": "id,value_a,value_b\nr1,600.79,44.6\nr2,617.24,-87.5\nr3,779.53,483.3\nr4,640.7,30.6\nr5,451.23,344\nr6,562.73,-157.9\nr7,961.86,-373.2\nr8,561.7,-485.7\nr9,227.85,446.1\nr10,357.03,251.7\nr11,694.52,-230.6\nr12,732.13,-240.3\nr13,666.26,-282.3\nr14,984.82,-451.4\nr15,855.81,247.9\n",
+        "sumA": 9694.2,
+        "sumB": -460.7,
+        "rows": 15
+      },
+      "summary": {
+        "answer": "sum_a=9694.2000 sum_b=-460.7000 rows=15",
+        "sum_a": 9694.2,
+        "sum_b": -460.7,
+        "max_a": 984.82,
+        "rows": 15,
+        "input": {
+          "name": "acc-run1.csv",
+          "sha256": "d0c8174de90e3095ea7e27e648c5064edd601a6660020eea2cc524e16c4d2b9f"
+        },
+        "env_names": [
+          "GPG_KEY",
+          "HOME",
+          "HOSTNAME",
+          "LANG",
+          "MPLBACKEND",
+          "MPLCONFIGDIR",
+          "PATH",
+          "PIP_NO_INDEX",
+          "PWD",
+          "PYTHONDONTWRITEBYTECODE",
+          "PYTHONUNBUFFERED",
+          "PYTHON_SHA256",
+          "PYTHON_VERSION",
+          "SHLVL"
+        ]
+      },
+      "chart": {
+        "sha256": "11916c1f6271665b54e1547211b559f647a6e037fcf49defe2d476fb92ebaa8b",
+        "valid": true,
+        "width": 600,
+        "height": 350
+      },
+      "artifacts": [
+        {
+          "id": "art-006174dc306569685644",
+          "kind": "output",
+          "owner": "judge-cbd3613abf4fc6f6642e6869",
+          "sha256": "11916c1f6271665b54e1547211b559f647a6e037fcf49defe2d476fb92ebaa8b",
+          "source": {
+            "tool": "collect-outputs",
+            "attemptId": "att-ff9e6d987cd4d718901e"
+          },
+          "taskId": "task-9145c223b6853133",
+          "filename": "chart.png",
+          "createdAt": "2026-09-27T08:58:41.604Z",
+          "mediaType": "image/png",
+          "byteLength": 13451,
+          "schemaVersion": 1
+        },
+        {
+          "id": "art-0cef30fd3f01df6f10cc",
+          "kind": "output",
+          "owner": "judge-cbd3613abf4fc6f6642e6869",
+          "sha256": "2586c4478c75591c690c3109af076a871902675fa305b5efcdc51f13d04efa21",
+          "source": {
+            "tool": "collect-outputs",
+            "attemptId": "att-ff9e6d987cd4d718901e"
+          },
+          "taskId": "task-9145c223b6853133",
+          "filename": "summary.json",
+          "createdAt": "2026-09-27T08:58:41.605Z",
+          "mediaType": "application/json",
+          "byteLength": 524,
+          "schemaVersion": 1
+        }
+      ]
+    },
+    "run2": {
+      "taskId": "task-1ade75cfcb96a44a",
+      "outcome": "RESULT_VERIFIED",
+      "cleanup": {
+        "at": "2026-09-27T08:58:45.567Z",
+        "detail": "supervisor confirmed teardown of 1 attempt(s)",
+        "status": "confirmed"
+      },
+      "result": {
+        "checks": [
+          {
+            "name": "outputs-claimed",
+            "detail": "2 output(s) claimed",
+            "passed": true
+          },
+          {
+            "name": "outputs-valid",
+            "detail": "all 2 claimed output(s) collected and valid",
+            "passed": true
+          },
+          {
+            "name": "output:summary.json",
+            "detail": "valid JSON, 523 bytes",
+            "passed": true
+          },
+          {
+            "name": "output:chart.png",
+            "detail": "PNG 600x350, 12895 bytes",
+            "passed": true
+          },
+          {
+            "name": "summary-schema",
+            "detail": "answer: sum_a=3938.4600 sum_b=-17.6000 rows=10",
+            "passed": true
+          }
+        ],
+        "sources": [],
+        "summary": "Acceptance diagnostic: totals of the uploaded CSV with a chart.",
+        "outputArtifactIds": [
+          "art-13866da54880c65fba29",
+          "art-3260aa3cbd2a75e3e11c"
+        ]
+      },
+      "inputCsvSha256": "a5fd7805f16451edd107d0d9c41c42a75458adc20a4185fec8d5ee833c2db1fc",
+      "expected": {
+        "csv": "id,value_a,value_b\nr1,757.86,10.4\nr2,569.66,-292.7\nr3,95.53,45.3\nr4,451.28,-153.8\nr5,290.84,-35.4\nr6,697.8,-261.7\nr7,659.26,26.5\nr8,191.63,98.4\nr9,127.66,299.7\nr10,96.94,245.7\n",
+        "sumA": 3938.46,
+        "sumB": -17.6,
+        "rows": 10
+      },
+      "summary": {
+        "answer": "sum_a=3938.4600 sum_b=-17.6000 rows=10",
+        "sum_a": 3938.46,
+        "sum_b": -17.6,
+        "max_a": 757.86,
+        "rows": 10,
+        "input": {
+          "name": "acc-run2.csv",
+          "sha256": "a5fd7805f16451edd107d0d9c41c42a75458adc20a4185fec8d5ee833c2db1fc"
+        },
+        "env_names": [
+          "GPG_KEY",
+          "HOME",
+          "HOSTNAME",
+          "LANG",
+          "MPLBACKEND",
+          "MPLCONFIGDIR",
+          "PATH",
+          "PIP_NO_INDEX",
+          "PWD",
+          "PYTHONDONTWRITEBYTECODE",
+          "PYTHONUNBUFFERED",
+          "PYTHON_SHA256",
+          "PYTHON_VERSION",
+          "SHLVL"
+        ]
+      },
+      "chart": {
+        "sha256": "42d47233337f986099e474c64aa39b6ff04f45457dc0b3aa4e1e19c588e4ebf1",
+        "valid": true,
+        "width": 600,
+        "height": 350
+      },
+      "artifacts": [
+        {
+          "id": "art-13866da54880c65fba29",
+          "kind": "output",
+          "owner": "judge-cbd3613abf4fc6f6642e6869",
+          "sha256": "42d47233337f986099e474c64aa39b6ff04f45457dc0b3aa4e1e19c588e4ebf1",
+          "source": {
+            "tool": "collect-outputs",
+            "attemptId": "att-f6969d9abce7245433a9"
+          },
+          "taskId": "task-1ade75cfcb96a44a",
+          "filename": "chart.png",
+          "createdAt": "2026-09-27T08:58:45.539Z",
+          "mediaType": "image/png",
+          "byteLength": 12895,
+          "schemaVersion": 1
+        },
+        {
+          "id": "art-3260aa3cbd2a75e3e11c",
+          "kind": "output",
+          "owner": "judge-cbd3613abf4fc6f6642e6869",
+          "sha256": "4501a320e9f0bde1dd5f0e02169c2c023328e23c6e4ee1ad99e16fdc619403c8",
+          "source": {
+            "tool": "collect-outputs",
+            "attemptId": "att-f6969d9abce7245433a9"
+          },
+          "taskId": "task-1ade75cfcb96a44a",
+          "filename": "summary.json",
+          "createdAt": "2026-09-27T08:58:45.540Z",
+          "mediaType": "application/json",
+          "byteLength": 523,
+          "schemaVersion": 1
+        }
+      ]
+    },
+    "upstreamGeneralAnalysis": {
+      "taskId": "task-01e495eb4f79dab1",
+      "outcome": "RESULT_VERIFIED",
+      "summary": {
+        "answer": "14 rows x 3 columns",
+        "input": "acc-upstream-general-analysis.csv",
+        "columns": [
+          "id",
+          "value_a",
+          "value_b"
+        ]
+      },
+      "artifacts": [
+        {
+          "id": "art-67d2c27a4f2ad21c1f42",
+          "kind": "output",
+          "owner": "judge-cbd3613abf4fc6f6642e6869",
+          "sha256": "74560df3f46ca217f281722cd9312587ff248bc7ffc974f160b4809f219015a3",
+          "source": {
+            "tool": "collect-outputs",
+            "attemptId": "att-0b0260ee9cc3f97ea8f9"
+          },
+          "taskId": "task-01e495eb4f79dab1",
+          "filename": "columns.csv",
+          "createdAt": "2026-09-27T08:58:49.297Z",
+          "mediaType": "text/csv",
+          "byteLength": 49,
+          "schemaVersion": 1
+        },
+        {
+          "id": "art-1bd45f0e008fb5170090",
+          "kind": "output",
+          "owner": "judge-cbd3613abf4fc6f6642e6869",
+          "sha256": "41e4fd4ff13355f127bf9d4b596abb7923209a56974d7ea3b15eb7cdc9c14be1",
+          "source": {
+            "tool": "collect-outputs",
+            "attemptId": "att-0b0260ee9cc3f97ea8f9"
+          },
+          "taskId": "task-01e495eb4f79dab1",
+          "filename": "summary.json",
+          "createdAt": "2026-09-27T08:58:49.298Z",
+          "mediaType": "application/json",
+          "byteLength": 145,
+          "schemaVersion": 1
+        }
+      ]
+    }
+  },
+  "checks": [
+    {
+      "ok": true,
+      "what": "run1: upload → 201"
+    },
+    {
+      "ok": true,
+      "what": "run1: upload sha256 recorded = sha256(bytes sent)"
+    },
+    {
+      "ok": true,
+      "what": "run1: create general analysis task → 201 "
+    },
+    {
+      "ok": true,
+      "what": "run1: task-9145c223b6853133 done/RESULT_VERIFIED (done/RESULT_VERIFIED)"
+    },
+    {
+      "ok": true,
+      "what": "run1: cleanup confirmed (confirmed)"
+    },
+    {
+      "ok": true,
+      "what": "run1: /api/artifacts/art-006174dc306569685644 (chart.png) bytes sha256 = recorded 11916c1f6271"
+    },
+    {
+      "ok": true,
+      "what": "run1: /api/tasks/:id/artifacts/art-006174dc306569685644 bytes identical"
+    },
+    {
+      "ok": true,
+      "what": "run1: /api/artifacts/art-0cef30fd3f01df6f10cc (summary.json) bytes sha256 = recorded 2586c4478c75"
+    },
+    {
+      "ok": true,
+      "what": "run1: /api/tasks/:id/artifacts/art-0cef30fd3f01df6f10cc bytes identical"
+    },
+    {
+      "ok": true,
+      "what": "run2: upload → 201"
+    },
+    {
+      "ok": true,
+      "what": "run2: upload sha256 recorded = sha256(bytes sent)"
+    },
+    {
+      "ok": true,
+      "what": "run2: create general analysis task → 201 "
+    },
+    {
+      "ok": true,
+      "what": "run2: task-1ade75cfcb96a44a done/RESULT_VERIFIED (done/RESULT_VERIFIED)"
+    },
+    {
+      "ok": true,
+      "what": "run2: cleanup confirmed (confirmed)"
+    },
+    {
+      "ok": true,
+      "what": "run2: /api/artifacts/art-13866da54880c65fba29 (chart.png) bytes sha256 = recorded 42d47233337f"
+    },
+    {
+      "ok": true,
+      "what": "run2: /api/tasks/:id/artifacts/art-13866da54880c65fba29 bytes identical"
+    },
+    {
+      "ok": true,
+      "what": "run2: /api/artifacts/art-3260aa3cbd2a75e3e11c (summary.json) bytes sha256 = recorded 4501a320e9f0"
+    },
+    {
+      "ok": true,
+      "what": "run2: /api/tasks/:id/artifacts/art-3260aa3cbd2a75e3e11c bytes identical"
+    },
+    {
+      "ok": true,
+      "what": "run1: both summary.json and chart.png were produced (chart.png, summary.json)"
+    },
+    {
+      "ok": true,
+      "what": "run1: chart.png is a valid PNG 600x350"
+    },
+    {
+      "ok": true,
+      "what": "run1: summary sum_a=9694.2 rows=15 matches locally computed 9694.2/15"
+    },
+    {
+      "ok": true,
+      "what": "run1: summary names the uploaded input's sha256"
+    },
+    {
+      "ok": true,
+      "what": "run1: no secret-bearing env var names inside the analysis sandbox (names: GPG_KEY,HOME,HOSTNAME,LANG,MPLBACKEND,MPLCONFIGDIR,PATH,PIP_NO_INDEX,PWD,PYTHONDONTWRITEBYTECODE,PYTHONUNBUFFERED,PYTHON_SHA256,PYTHON_VERSION,SHLVL)"
+    },
+    {
+      "ok": true,
+      "what": "run2: both summary.json and chart.png were produced (chart.png, summary.json)"
+    },
+    {
+      "ok": true,
+      "what": "run2: chart.png is a valid PNG 600x350"
+    },
+    {
+      "ok": true,
+      "what": "run2: summary sum_a=3938.46 rows=10 matches locally computed 3938.46/10"
+    },
+    {
+      "ok": true,
+      "what": "run2: summary names the uploaded input's sha256"
+    },
+    {
+      "ok": true,
+      "what": "run2: no secret-bearing env var names inside the analysis sandbox (names: GPG_KEY,HOME,HOSTNAME,LANG,MPLBACKEND,MPLCONFIGDIR,PATH,PIP_NO_INDEX,PWD,PYTHONDONTWRITEBYTECODE,PYTHONUNBUFFERED,PYTHON_SHA256,PYTHON_VERSION,SHLVL)"
+    },
+    {
+      "ok": true,
+      "what": "different input → different summary.json and chart.png digests"
+    },
+    {
+      "ok": true,
+      "what": "upstream-general-analysis: upload → 201"
+    },
+    {
+      "ok": true,
+      "what": "upstream-general-analysis: upload sha256 recorded = sha256(bytes sent)"
+    },
+    {
+      "ok": true,
+      "what": "upstream-general-analysis: create general analysis task → 201 "
+    },
+    {
+      "ok": true,
+      "what": "upstream-general-analysis: task-01e495eb4f79dab1 done/RESULT_VERIFIED (done/RESULT_VERIFIED)"
+    },
+    {
+      "ok": true,
+      "what": "upstream-general-analysis: cleanup confirmed (confirmed)"
+    },
+    {
+      "ok": true,
+      "what": "upstream-general-analysis: /api/artifacts/art-67d2c27a4f2ad21c1f42 (columns.csv) bytes sha256 = recorded 74560df3f46c"
+    },
+    {
+      "ok": true,
+      "what": "upstream-general-analysis: /api/tasks/:id/artifacts/art-67d2c27a4f2ad21c1f42 bytes identical"
+    },
+    {
+      "ok": true,
+      "what": "upstream-general-analysis: /api/artifacts/art-1bd45f0e008fb5170090 (summary.json) bytes sha256 = recorded 41e4fd4ff133"
+    },
+    {
+      "ok": true,
+      "what": "upstream-general-analysis: /api/tasks/:id/artifacts/art-1bd45f0e008fb5170090 bytes identical"
+    },
+    {
+      "ok": true,
+      "what": "upstream general-analysis summary answer \"14 rows x 3 columns\" reflects the fresh input (14 rows)"
+    }
+  ],
+  "dirtyTree": null
+}

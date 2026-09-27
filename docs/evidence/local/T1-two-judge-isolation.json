@@ -1,0 +1,186 @@
+{
+  "id": "T1-two-judge-isolation",
+  "requirement": "Task behaviour: two judge sessions cannot access each other's tasks/events/artifacts/approvals/control/exports (404)",
+  "command": "bun scripts/acceptance/local.ts T1-two-judge-isolation",
+  "environment": "real local runc (dev-unsafe, Colima); stack = git archive of 42a41d4f5bf9",
+  "timestamp": "2026-09-27T09:09:30.827Z",
+  "revision": "42a41d4f5bf9a112810c47a522c54e11d477af25",
+  "result": "PASS",
+  "evidence": {
+    "crossOwnerProbes": [
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-4b612fb05936f19d",
+        "status": 404,
+        "body": "{\"error\":\"task not found\"}"
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-4b612fb05936f19d/events?lastEventId=0",
+        "status": 404,
+        "body": "{\"error\":\"task not found\"}"
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-4b612fb05936f19d/artifacts",
+        "status": 404,
+        "body": "{\"error\":\"task not found\"}"
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-4b612fb05936f19d/artifacts/art-dc846c8b85b4416ebdce",
+        "status": 404,
+        "body": "{\"error\":\"task not found\"}"
+      },
+      {
+        "method": "GET",
+        "path": "/api/artifacts/art-dc846c8b85b4416ebdce",
+        "status": 404,
+        "body": "{\"error\":\"artifact not found\"}"
+      },
+      {
+        "method": "GET",
+        "path": "/api/artifacts/art-9adea1803f0008cc34d3",
+        "status": 404,
+        "body": "{\"error\":\"artifact not found\"}"
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-df6fb2eea5bc0fc4/approvals",
+        "status": 404,
+        "body": "{\"error\":\"task not found\"}"
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-df6fb2eea5bc0fc4/control",
+        "status": 404,
+        "body": "{\"error\":\"task not found\"}"
+      },
+      {
+        "method": "POST",
+        "path": "/api/tasks/task-df6fb2eea5bc0fc4/control/take",
+        "status": 404,
+        "body": "{\"error\":\"task not found\"}"
+      },
+      {
+        "method": "POST",
+        "path": "/api/tasks/task-df6fb2eea5bc0fc4/control/release",
+        "status": 404,
+        "body": "{\"error\":\"task not found\"}"
+      },
+      {
+        "method": "GET",
+        "path": "/api/tasks/task-df6fb2eea5bc0fc4/live",
+        "status": 404,
+        "body": "{\"error\":\"task not found\"}"
+      },
+      {
+        "method": "POST",
+        "path": "/api/tasks/task-df6fb2eea5bc0fc4/approvals/prop-00000000/decide",
+        "status": 404,
+        "body": "{\"error\":\"task not found\"}"
+      },
+      {
+        "method": "POST",
+        "path": "/api/tasks/task-043fd7fb66e2177e/cancel",
+        "status": 404,
+        "body": "{\"error\":\"task not found\"}"
+      },
+      {
+        "method": "POST",
+        "path": "/api/tasks/task-043fd7fb66e2177e/export",
+        "status": 404,
+        "body": "{\"error\":\"task not found\"}"
+      },
+      {
+        "method": "GET",
+        "path": "/api/exports/grant-ce539a26db1f1b4d2641620e",
+        "status": 404,
+        "body": "{\"error\":\"grant not found\"}"
+      }
+    ]
+  },
+  "checks": [
+    {
+      "ok": true,
+      "what": "both sessions are judge"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-4b612fb05936f19d → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-4b612fb05936f19d/events?lastEventId=0 → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-4b612fb05936f19d/artifacts → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-4b612fb05936f19d/artifacts/art-dc846c8b85b4416ebdce → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/artifacts/art-dc846c8b85b4416ebdce → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/artifacts/art-9adea1803f0008cc34d3 → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-df6fb2eea5bc0fc4/approvals → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-df6fb2eea5bc0fc4/control → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B POST /api/tasks/task-df6fb2eea5bc0fc4/control/take → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B POST /api/tasks/task-df6fb2eea5bc0fc4/control/release → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/tasks/task-df6fb2eea5bc0fc4/live → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B POST /api/tasks/task-df6fb2eea5bc0fc4/approvals/prop-00000000/decide → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B POST /api/tasks/task-043fd7fb66e2177e/cancel → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B POST /api/tasks/task-043fd7fb66e2177e/export → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B GET /api/exports/grant-ce539a26db1f1b4d2641620e → 404"
+    },
+    {
+      "ok": true,
+      "what": "judge B's task list excludes judge A's tasks (0 tasks)"
+    },
+    {
+      "ok": true,
+      "what": "judge A still reads its own task (200)"
+    },
+    {
+      "ok": true,
+      "what": "anonymous GET task → 401"
+    },
+    {
+      "ok": true,
+      "what": "operator can read any task (200) — by design"
+    }
+  ],
+  "dirtyTree": null
+}
