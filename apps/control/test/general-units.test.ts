@@ -126,11 +126,15 @@ describe("completion checks", () => {
     expect(shotCheck(webResearch([{ url: "http://stats.example.org/table" }])).passed).toBe(false);
     expect(shotCheck(webResearch([{ url: "https://example.com/table" }])).passed).toBe(false);
   });
-  test("a screenshot of a cited source passes (query, hash and trailing slash ignored)", () => {
-    const checks = webResearch([{ url: "about:blank" }, { url: "https://STATS.example.org/table/?year=2023#top" }]);
+  test("a screenshot of a cited source passes (hash, trailing slash, host case and parameter order ignored)", () => {
+    const checks = webResearch([{ url: "about:blank" }, { url: "https://STATS.example.org/table/?year=2024#top" }]);
     expect(shotCheck(checks).passed).toBe(true);
     expect(shotCheck(checks).detail).toContain("https://stats.example.org/table?year=2024");
     expect(checks.every((c) => c.passed)).toBe(true);
+  });
+  test("a screenshot of the same path with a different query is a different document and does not count", () => {
+    const checks = webResearch([{ url: "https://stats.example.org/table?year=2023" }]);
+    expect(shotCheck(checks).passed).toBe(false);
   });
 });
 

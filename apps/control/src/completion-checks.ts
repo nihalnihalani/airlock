@@ -98,7 +98,11 @@ export function documentKey(raw: string): string | null {
     const url = new URL(raw);
     if (url.protocol !== "http:" && url.protocol !== "https:") return null;
     const path = url.pathname.length > 1 && url.pathname.endsWith("/") ? url.pathname.slice(0, -1) : url.pathname;
-    return `${url.protocol}//${url.host.toLowerCase()}${path}`;
+    // The query is part of the document (?variant=a and ?variant=b are different data); parameters are
+    // sorted so their order does not matter. The fragment is not sent to the server and is ignored.
+    url.searchParams.sort();
+    const query = url.searchParams.toString();
+    return `${url.protocol}//${url.host.toLowerCase()}${path}${query ? `?${query}` : ""}`;
   } catch {
     return null;
   }

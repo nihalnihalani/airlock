@@ -340,6 +340,11 @@ line of `README.txt` says so; a repair export's `README.txt` starts with the sam
 reaches it through VM B's egress, so all task browsers share one bucket there: one busy task can
 exhaust the limit for the others (the destination answers 429), and Airlock retries nothing on
 its behalf. A per-task key would need the destination to see something other than the client IP.
+Also: a page's own script can change the recorded URL within its origin (`history.pushState`), so a
+"visited" cited source proves the browser was on that origin and the page reported that path, not
+that the server served it; completion checks are structural evidence, not proof of correctness.
+Browser control state assumes a single control-plane process (the only supported topology: PGlite
+has one owning process); with several processes a restart reset could clear a hold owned by another.
 
 ## Model call sites (C21)
 
