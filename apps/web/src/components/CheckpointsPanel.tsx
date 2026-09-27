@@ -1,4 +1,6 @@
-import type { IsolationProbe, RuntimeInspection, TeardownRecord } from "@airlock/contracts";
+import type { HostCheck, IsolationProbe, RuntimeInspection, TeardownRecord } from "@airlock/contracts";
+import { attemptTeardownClean, hostListingSummary, type InstanceIds } from "../lib/evidence";
+import { HostListingView, InstanceIdRows, KernelCompare } from "./Evidence";
 import type { ReactNode } from "react";
 import type { Checkpoints } from "../lib/eventViews";
 import { formatDateTime } from "../lib/format";
@@ -58,7 +60,7 @@ function EntryHead({ label, children }: { label: string; children?: ReactNode })
   );
 }
 
-function InspectionView({ label, inspection }: { label: string; inspection: RuntimeInspection }) {
+function InspectionView({ label, inspection, host }: { label: string; inspection: RuntimeInspection; host: HostCheck | null }) {
   return (
     <div className="flex flex-col gap-1.5">
       <EntryHead label={label}>
@@ -66,11 +68,10 @@ function InspectionView({ label, inspection }: { label: string; inspection: Runt
         {inspection.devUnsafe ? <Badge tone="bad">dev-unsafe</Badge> : null}
         <Badge tone={inspection.allPassed ? "ok" : "bad"}>{inspection.allPassed ? "all checks passed" : "checks FAILED"}</Badge>
       </EntryHead>
+      <KernelCompare host={host} inspection={inspection} />
       <KeyValue
         className="text-xs"
         rows={[
-          { key: "hostname", value: <Mono>{inspection.guestHostname || "(empty)"}</Mono> },
-          { key: "uname", value: <Mono wrap>{inspection.guestUname || "(empty)"}</Mono> },
           { key: "container", value: <Mono wrap>{inspection.container}</Mono> },
           { key: "image digest", value: <Mono wrap>{inspection.imageDigest}</Mono> },
           { key: "inspected", value: formatDateTime(inspection.inspectedAt) },
@@ -97,13 +98,16 @@ function InspectionView({ label, inspection }: { label: string; inspection: Runt
 
 function TeardownView({ label, teardown }: { label: string; teardown: TeardownRecord }) {
   const remaining = teardown.containersRemaining.length + teardown.volumesRemaining.length;
-  const clean = teardown.clean && remaining === 0;
+  const clean = attemptTeardownClean(teardown);
   return (
     <div className="flex flex-col gap-1">
       <EntryHead label={label}>
-        <Badge tone={clean ? "ok" : "bad"}>{clean ? "(no sandboxes)" : "teardown incomplete"}</Badge>
+        <Badge tone={clean ? "ok" : "bad"} title="What the supervisor still owns for this attempt">
+          {clean ? "attempt removed" : "teardown incomplete"}
+        </Badge>
         <span className="text-[11px] text-muted-foreground">{formatDateTime(teardown.destroyedAt)}</span>
       </EntryHead>
+      <HostListingView summary={hostListingSummary(teardown)} />
       {remaining > 0 ? (
         <ul className="flex flex-col gap-0.5 text-xs">
           {teardown.containersRemaining.map((c) => (
@@ -122,9 +126,13 @@ function TeardownView({ label, teardown }: { label: string; teardown: TeardownRe
   );
 }
 
-export function CheckpointsPanel({ cp }: { cp: Checkpoints }) {
+export function CheckpointsPanel({ cp, ids }: { cp: Checkpoints; ids: InstanceIds }) {
   const probesBlocked = cp.probes.length > 0 && cp.probes.every((p) => p.probe.allBlocked);
-  const teardownsClean = cp.teardowns.length > 0 && cp.teardowns.every((t) => t.teardown.clean && t.teardown.containersRemaining.length + t.teardown.volumesRemaining.length === 0);
+  const teardownsClean = cp.teardowns.length > 0 && cp.teardowns.every((t) => attemptTeardownClean(t.teardown));
+  // "(no sandboxes)" is a host-wide claim: only the latest host listing, and only when empty.
+  const withHost = cp.teardowns.filter((t) => t.teardown.host).sort((a, b) => (a.teardown.host?.listedAt ?? "").localeCompare(b.teardown.host?.listedAt ?? ""));
+  const lastTeardown = withHost[withHost.length - 1]?.teardown ?? cp.teardowns[cp.teardowns.length - 1]?.teardown ?? null;
+  const lastListing = lastTeardown ? hostListingSummary(lastTeardown) : null;
   return (
     <ol className="flex flex-col gap-2">
       <Checkpoint n={1} title="Host check" status={cp.host ? <Chip tone={cp.host.selectedRuntime === "runc" ? "bad" : "ok"}>{cp.host.selectedRuntime}</Chip> : null}>
@@ -148,6 +156,10 @@ export function CheckpointsPanel({ cp }: { cp: Checkpoints }) {
                 ),
               },
               { key: "dev-unsafe", value: <BoolChip value={cp.host.devUnsafe} invert /> },
+              { key: "host uname", value: cp.host.hostUname ? <Mono wrap>{cp.host.hostUname}</Mono> : <span className="text-muted-foreground">not reported</span> },
+              { key: "host name", value: cp.host.hostHostname ? <Mono>{cp.host.hostHostname}</Mono> : <span className="text-muted-foreground">not reported</span> },
+              { key: "runtime image", value: cp.host.runtimeImageId ? <Mono wrap>{cp.host.runtimeImageId}</Mono> : <span className="text-muted-foreground">not pinned / not reported</span> },
+              ...InstanceIdRows(ids),
               { key: "checked", value: `${formatDateTime(cp.host.checkedAt)} (${cp.hostSource})` },
             ]}
           />
@@ -167,7 +179,7 @@ export function CheckpointsPanel({ cp }: { cp: Checkpoints }) {
         {cp.inspections.length === 0 ? (
           <Pending>No inspection recorded yet.</Pending>
         ) : (
-          cp.inspections.map((i, idx) => <InspectionView key={`${i.inspection.container}-${idx}`} {...i} />)
+          cp.inspections.map((i, idx) => <InspectionView key={`${i.inspection.container}-${idx}`} {...i} host={cp.host} />)
         )}
       </Checkpoint>
 
@@ -199,7 +211,15 @@ export function CheckpointsPanel({ cp }: { cp: Checkpoints }) {
       <Checkpoint
         n={5}
         title="Teardown"
-        status={cp.teardowns.length > 0 ? <Badge tone={teardownsClean ? "ok" : "bad"}>{teardownsClean ? "(no sandboxes)" : "incomplete"}</Badge> : null}
+        status={
+          cp.teardowns.length === 0 ? null : !teardownsClean ? (
+            <Badge tone="bad">incomplete</Badge>
+          ) : lastListing ? (
+            <Badge tone={lastListing.tone} title="Latest host-wide listing">
+              {lastListing.state === "empty" ? "(no sandboxes)" : lastListing.state === "remaining" ? "host not empty" : "attempts removed"}
+            </Badge>
+          ) : null
+        }
       >
         {cp.teardowns.length === 0 ? (
           <Pending>No teardown recorded yet.</Pending>

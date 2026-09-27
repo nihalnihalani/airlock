@@ -1,14 +1,29 @@
-import { IconArrowUp, IconBrandGithub, IconExternalLink, IconGitCommit, IconLock, IconShieldCheck } from "@tabler/icons-react";
+import {
+  IconAlertTriangle,
+  IconArrowUp,
+  IconBrandGithub,
+  IconCircleCheck,
+  IconExternalLink,
+  IconFlask,
+  IconGitCommit,
+  IconLock,
+  IconServer2,
+  IconShieldCheck,
+} from "@tabler/icons-react";
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import type { ProfileManifest } from "@airlock/contracts";
-import { Badge, Chip, ErrorBox, Mono, Notice } from "../components/common";
+import { Badge, BoolChip, Chip, ErrorBox, KeyValue, Mono, Notice } from "../components/common";
+import { DiagnosticBadge, InstanceIdRows, InstanceIdsLine } from "../components/Evidence";
+import { RuntimeChip } from "../components/PhaseRail";
 import { PageHeader } from "../components/layout/page-header";
 import { ComposerFrame } from "../components/thread/composer-frame";
 import { Button } from "../components/ui/button";
 import { Skeleton } from "../components/ui/skeleton";
 import { canOperate, useSession } from "../hooks/session";
+import { useDeployment } from "../hooks/useDeployment";
 import { useSharedTaskList } from "../hooks/useTaskList";
-import { createTask, describeError, getProfiles } from "../lib/api";
+import { ApiError, createTask, describeError, getDiagnostics, getProfiles, type DiagnosticScript } from "../lib/api";
+import { diagnosticIssueText, instanceIds, repairNotice } from "../lib/evidence";
 import { formatBytes, formatDurationMs, httpUrl, shortSha } from "../lib/format";
 import { hrefFor, navigate } from "../lib/router";
 
@@ -76,6 +91,134 @@ function ProfileCard({ profile }: { profile: ProfileManifest }) {
           {formatDurationMs(caps.attemptTimeoutMs)} per attempt · {caps.maxRepairAttempts} repair attempts · {caps.maxModelCalls} model calls
         </dd>
       </dl>
+    </div>
+  );
+}
+
+/** Checkpoint 1 as the deployment reports it now: needs a session (401 → sign in). */
+function HostCard() {
+  const { host, availability } = useDeployment();
+  const ids = instanceIds(availability, host.state === "ok" ? host.host : null);
+  return (
+    <div className="w-full rounded-xl border border-border bg-card p-4 text-left dark:border-transparent">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <span className="flex size-8 items-center justify-center rounded-lg bg-muted/60 text-muted-foreground">
+          <IconServer2 className="size-4" />
+        </span>
+        <span className="min-w-0 flex-1 text-sm font-medium">Execution host</span>
+        {host.state === "ok" ? (
+          <RuntimeChip tier={{ runtime: host.host.selectedRuntime, devUnsafe: host.host.devUnsafe, source: "host check" }} />
+        ) : null}
+      </div>
+      {host.state === "signed-out" ? (
+        <p className="text-xs text-muted-foreground">
+          <a className="font-medium text-foreground underline underline-offset-4" href={hrefFor({ name: "login" })}>
+            Sign in
+          </a>{" "}
+          to see host checks.
+        </p>
+      ) : host.state === "loading" ? (
+        <Skeleton className="h-16 w-full bg-muted/60" />
+      ) : host.state === "error" ? (
+        <p className="text-xs text-destructive">Host check unavailable: {host.error}</p>
+      ) : (
+        <KeyValue
+          className="text-xs"
+          rows={[
+            { key: "/dev/kvm", value: <BoolChip value={host.host.kvmPresent} yes="present" no="absent" /> },
+            { key: "runtimes", value: host.host.availableRuntimes.join(", ") || "none reported" },
+            { key: "host uname", value: host.host.hostUname ? <Mono wrap>{host.host.hostUname}</Mono> : <span className="text-muted-foreground">not reported</span> },
+            ...InstanceIdRows(ids),
+          ]}
+        />
+      )}
+      {host.state !== "ok" ? <InstanceIdsLine ids={ids} className="mt-2" /> : null}
+    </div>
+  );
+}
+
+function RepairAvailabilityNotice() {
+  const { availability, availabilityError } = useDeployment();
+  const n = repairNotice(availability, availabilityError);
+  return (
+    <Notice tone={n.tone === "ok" ? "info" : "warn"} className="flex gap-2 text-left text-xs" >
+      {n.tone === "ok" ? <IconCircleCheck className="mt-px size-4 shrink-0 text-success" /> : <IconAlertTriangle className="mt-px size-4 shrink-0 text-warning" />}
+      <span>
+        <span className="font-medium text-foreground">{n.title}.</span> {n.body}
+      </span>
+    </Notice>
+  );
+}
+
+/** G6: labelled diagnostics (scripted driver, never a model) for operator and judge. */
+function DiagnosticsSection({ profile, disabled, onLaunched }: { profile: ProfileManifest | null; disabled: boolean; onLaunched: (taskId: string) => void }) {
+  const [scripts, setScripts] = useState<DiagnosticScript[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [launchError, setLaunchError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    getDiagnostics(controller.signal)
+      .then(setScripts)
+      .catch((err: unknown) => {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setError(
+          err instanceof ApiError && err.status === 404
+            ? "This control plane does not offer diagnostics (it is not running with the scripted driver)."
+            : describeError(err),
+        );
+      });
+    return () => controller.abort();
+  }, []);
+
+  const launch = async (script: DiagnosticScript) => {
+    if (!profile) return;
+    setBusy(script.name);
+    setLaunchError(null);
+    try {
+      const task = await createTask(profile.id, diagnosticIssueText(script), script.name);
+      onLaunched(task.id);
+    } catch (err) {
+      setLaunchError(describeError(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="w-full rounded-xl border border-dashed border-warning/40 p-4 text-left">
+      <div className="mb-1 flex flex-wrap items-center gap-2">
+        <IconFlask className="size-4 text-warning" />
+        <span className="text-sm font-medium">Diagnostics</span>
+        <DiagnosticBadge />
+      </div>
+      <p className="mb-3 text-xs text-pretty text-muted-foreground">
+        Negative controls and limit checks: a scripted driver replays fixed turns through the same sandbox, freeze, comparator
+        and teardown. No model is called; the run is labelled as a diagnostic everywhere it appears.
+      </p>
+      {error ? <p className="text-xs text-muted-foreground">{error}</p> : null}
+      {!scripts && !error ? <Skeleton className="h-10 w-full bg-muted/60" /> : null}
+      {scripts && scripts.length === 0 ? <p className="text-xs text-muted-foreground">No diagnostic scripts are configured.</p> : null}
+      {scripts && scripts.length > 0 ? (
+        <ul className="flex flex-col gap-1.5">
+          {scripts.map((script) => (
+            <li key={script.name} className="flex items-start gap-3 rounded-lg bg-muted/50 px-3 py-2 dark:bg-background/50">
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-1.5 text-sm">
+                  <span className="font-medium">{script.title || script.name}</span>
+                  <Mono className="text-[11px] text-muted-foreground">{script.name}</Mono>
+                </div>
+                {script.description ? <p className="mt-0.5 text-xs text-pretty text-muted-foreground">{script.description}</p> : null}
+              </div>
+              <Button size="xs" variant="outline" disabled={disabled || busy !== null || !profile} onClick={() => void launch(script)}>
+                {busy === script.name ? "Starting…" : "Run diagnostic"}
+              </Button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {launchError ? <ErrorBox className="mt-2" message={launchError} /> : null}
     </div>
   );
 }
@@ -195,6 +338,17 @@ export function NewCasePage() {
           {!profiles && !loadError ? <Skeleton className="h-48 w-full rounded-xl bg-muted/60" /> : null}
           {profiles && profiles.length === 0 ? <Notice tone="warn">The control app lists no supported profiles.</Notice> : null}
           {selected ? <ProfileCard profile={selected} /> : null}
+          <HostCard />
+          {allowed ? (
+            <DiagnosticsSection
+              profile={selected}
+              disabled={busy}
+              onLaunched={(taskId) => {
+                roster.refresh();
+                navigate({ name: "task", id: taskId });
+              }}
+            />
+          ) : null}
           <p className="max-w-md text-xs text-pretty text-muted-foreground">
             Airlock supports exactly the profiles listed here; anything else is rejected by the API. The UI ships no issue text: copy
             it from the issue link. It is untrusted input that only reaches the sandbox and the model, never a host shell.
@@ -207,6 +361,7 @@ export function NewCasePage() {
         onSubmit={(e) => void submit(e)}
         above={
           <div className="mb-2 flex flex-col gap-2">
+            <RepairAvailabilityNotice />
             {!allowed && !session.loading ? (
               <Notice className="flex items-center gap-2 text-xs">
                 <IconLock className="size-4 shrink-0" />

@@ -26,7 +26,10 @@ import type { Task } from "@airlock/contracts";
 import { useNow, useSharedTaskList } from "../../hooks/useTaskList";
 import { canOperate, useSession } from "../../hooks/session";
 import { hrefFor, type Route } from "../../lib/router";
+import { useDeployment } from "../../hooks/useDeployment";
+import { DIAGNOSTIC_LABEL, instanceIds } from "../../lib/evidence";
 import { taskRowView, type TaskDot, type TaskRowView } from "../../lib/taskList";
+import { InstanceIdsLine } from "../Evidence";
 import { cn } from "../../lib/utils";
 import { Badge, Dot, TONE_TEXT, type Tone } from "../common";
 import { Button } from "../ui/button";
@@ -100,21 +103,21 @@ function TaskRow({ row, active, onNavigate }: { row: TaskRowView; active: boolea
           <span className="shrink-0">{row.profileId}</span>
           <span className="shrink-0 text-muted-foreground/50">·</span>
           <span className={cn("min-w-0 truncate font-medium", TONE_TEXT[row.badge.tone])}>{row.badge.label}</span>
-          {row.scripted ? (
-            <span
-              className="ml-auto shrink-0 rounded bg-foreground/5 px-1 font-mono text-[10px] leading-4"
-              title={`Diagnostic run driven by the scripted model "${row.scripted}"; never a live repair`}
-            >
-              scripted
-            </span>
-          ) : null}
         </div>
+        {row.scripted ? (
+          <div
+            className="mt-px truncate text-[11px] leading-4 font-medium text-warning"
+            title={`Script "${row.scripted}" replays fixed turns; no model is called and it is never a live repair`}
+          >
+            {DIAGNOSTIC_LABEL}
+          </div>
+        ) : null}
       </div>
     </a>
   );
 }
 
-function HostileRow({ active, onNavigate }: { active: boolean; onNavigate: () => void }) {
+function HostileRow({ active, onNavigate, judge }: { active: boolean; onNavigate: () => void; judge: boolean }) {
   return (
     <a href={hrefFor({ name: "hostile" })} className={rowClass(active)} aria-current={active ? "page" : undefined} onClick={onNavigate}>
       <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-destructive/10 text-destructive">
@@ -125,7 +128,9 @@ function HostileRow({ active, onNavigate }: { active: boolean; onNavigate: () =>
           <span className="min-w-0 flex-1 truncate text-[0.9rem] leading-5 font-medium tracking-[-0.01em]">Hostile input</span>
           <IconPinFilled className="size-3 shrink-0 text-muted-foreground/70" aria-label="Pinned" />
         </div>
-        <div className="mt-px truncate text-[12px] leading-4 text-muted-foreground">Run a command in a throwaway sandbox</div>
+        <div className="mt-px truncate text-[12px] leading-4 text-muted-foreground">
+          {judge ? "Run a command in a throwaway sandbox" : "Judge only: sign in as judge to run"}
+        </div>
       </div>
     </a>
   );
@@ -133,9 +138,12 @@ function HostileRow({ active, onNavigate }: { active: boolean; onNavigate: () =>
 
 function RoleFooter() {
   const session = useSession();
+  const deployment = useDeployment();
+  const ids = instanceIds(deployment.availability, deployment.host.state === "ok" ? deployment.host.host : null);
   const role = session.loading ? "…" : session.role;
   const initials = session.loading ? "·" : session.role.slice(0, 1).toUpperCase();
   return (
+    <div className="flex flex-col gap-1">
     <div className="flex h-10 items-center gap-2 rounded-md px-2">
       <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted-foreground/10 text-xs text-foreground/70">{initials}</div>
       <div className="min-w-0 flex-1 leading-tight">
@@ -144,7 +152,7 @@ function RoleFooter() {
           {session.role === "viewer" ? "Sign in to start or read cases" : session.role === "operator" ? "Sees every case" : "Sees the cases this session started"}
         </div>
       </div>
-      <Badge tone={session.role === "operator" ? "ok" : session.role === "judge" ? "info" : "neutral"} title="Roles are enforced by the control API: operator and judge may start cases and run hostile input; a judge reads only its own session's cases; signed out, no case data is shown.">
+      <Badge tone={session.role === "operator" ? "ok" : session.role === "judge" ? "info" : "neutral"} title="Roles are enforced by the control API: operator and judge may start cases; only the judge may run hostile input; a judge reads only its own session's cases; signed out, no case data is shown.">
         {role}
       </Badge>
       {session.role === "viewer" ? (
@@ -156,6 +164,8 @@ function RoleFooter() {
           <IconLogout />
         </Button>
       )}
+    </div>
+    <InstanceIdsLine ids={ids} className="px-2 pb-1" />
     </div>
   );
 }
@@ -214,7 +224,7 @@ export function AppSidebar({ route }: { route: Route }) {
             </SidebarMenuItem>
             <div className="h-2" />
             <SidebarMenuItem>
-              <HostileRow active={route.name === "hostile"} onNavigate={onNavigate} />
+              <HostileRow active={route.name === "hostile"} onNavigate={onNavigate} judge={session.role === "judge"} />
             </SidebarMenuItem>
             <div className="mx-2 my-1.5 h-px bg-sidebar-border" />
             {error ? (
@@ -249,8 +259,12 @@ export function AppSidebar({ route }: { route: Route }) {
               <div className="py-4">
                 <Empty className="min-h-[30dvh] border border-dashed">
                   <EmptyHeader>
-                    <EmptyTitle>No cases yet</EmptyTitle>
-                    <EmptyDescription className="text-pretty">Start a case from a pasted issue and it will appear here.</EmptyDescription>
+                    <EmptyTitle>{session.role === "viewer" && !session.loading ? "Signed out" : "No cases yet"}</EmptyTitle>
+                    <EmptyDescription className="text-pretty">
+                      {session.role === "viewer" && !session.loading
+                        ? "Sign in to see cases: task data needs a session."
+                        : "Start a case from a pasted issue and it will appear here."}
+                    </EmptyDescription>
                   </EmptyHeader>
                 </Empty>
               </div>

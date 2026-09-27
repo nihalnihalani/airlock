@@ -9,10 +9,13 @@ import {
   HostCheck,
   PreviewResult,
   ProfileManifest,
+  RepairAvailability,
   Role,
+  sha256Hex,
   Task,
   TaskView,
 } from "@airlock/contracts";
+import { refusalLead, refusalOf } from "./evidence";
 import type { CaseInput, PreviewResult as PreviewResultType } from "./types";
 
 const MAX_ERROR_TEXT = 600;
@@ -34,13 +37,19 @@ export const ExportResponse = z.object({
   grantId: z.string().min(1).max(128),
   url: z.string().min(1).max(2048),
   expiresAt: z.string(),
+  /** sha256 of the sealed zip the grant serves (also sent as `x-airlock-zip-sha256`). */
+  zipDigest: sha256Hex.optional(),
 });
 export type ExportResponse = z.infer<typeof ExportResponse>;
 
-const HealthResponse = z.object({
-  status: z.string(),
-  docker: z.boolean().optional(),
+/** `GET /api/diagnostics` (operator/judge): scripted-driver scripts a task may name. */
+export const DiagnosticScript = z.object({
+  name: z.string().min(1).max(64),
+  title: z.string().max(200),
+  description: z.string().max(2000),
 });
+export type DiagnosticScript = z.infer<typeof DiagnosticScript>;
+const DiagnosticsResponse = z.object({ scripts: z.array(DiagnosticScript).max(100) });
 
 type Method = "GET" | "POST" | "DELETE";
 
@@ -63,7 +72,7 @@ function statusFallback(status: number): string {
     case 409:
       return "Conflict: the request does not match the current state.";
     case 429:
-      return "Rate limited. Wait a moment and try again.";
+      return "Execution host at capacity or rate limited; try again shortly.";
     case 503:
       return "Service unavailable (supervisor or Docker unreachable).";
     default:
@@ -178,14 +187,19 @@ export function getHost(signal?: AbortSignal): Promise<HostCheck> {
   return request(HostCheck, "/api/host", { signal });
 }
 
-export function getHealth(signal?: AbortSignal): Promise<z.infer<typeof HealthResponse>> {
-  return request(HealthResponse, "/api/health", { signal });
+/** Public. Whether live repair is currently backed by a live-gate receipt, and the instance ids. */
+export function getRepairAvailability(signal?: AbortSignal): Promise<RepairAvailability> {
+  return request(RepairAvailability, "/api/repair-availability", { signal });
+}
+
+export async function getDiagnostics(signal?: AbortSignal): Promise<DiagnosticScript[]> {
+  return (await request(DiagnosticsResponse, "/api/diagnostics", { signal })).scripts;
 }
 
 // --- Tasks ------------------------------------------------------------------------------------
 
-export function createTask(profileId: string, issueText: string): Promise<Task> {
-  return request(Task, "/api/tasks", { method: "POST", body: { profileId, issueText } });
+export function createTask(profileId: string, issueText: string, scriptedDriver?: string): Promise<Task> {
+  return request(Task, "/api/tasks", { method: "POST", body: { profileId, issueText, ...(scriptedDriver ? { scriptedDriver } : {}) } });
 }
 
 export function listTasks(signal?: AbortSignal): Promise<Task[]> {
@@ -222,7 +236,12 @@ export function runHostile(command: string): Promise<BlastRadiusCard> {
 }
 
 export function describeError(err: unknown): string {
-  if (err instanceof ApiError) return err.message;
+  if (err instanceof ApiError) {
+    // Capacity and role refusals get a plain lead; the server's own words stay verbatim after it.
+    const kind = refusalOf(err.status);
+    const lead = kind === "capacity" || kind === "forbidden" ? refusalLead(err.status, err.message) : null;
+    return lead && !err.message.startsWith(statusFallback(err.status)) ? `${lead} ${err.message}` : err.message;
+  }
   if (err instanceof Error) return err.message;
   return String(err);
 }

@@ -13,11 +13,11 @@ import {
   IconTerminal2,
   IconTool,
 } from "@tabler/icons-react";
-import type { ComponentType } from "react";
+import type { ComponentType, ReactNode } from "react";
 import { formatDurationMs, tail } from "../../lib/format";
 import type { ToolCall, ToolState } from "../../lib/thread";
 import { cn } from "../../lib/utils";
-import { Badge, Chip, Mono, Pre, type Tone } from "../common";
+import { Badge, Chip, Digest, Mono, Pre, type Tone } from "../common";
 
 const LABEL: Record<string, string> = {
   run: "Ran",
@@ -59,7 +59,82 @@ function Stream({ label, text }: { label: string; text: string }) {
   );
 }
 
-export function ToolCard({ call }: { call: ToolCall }) {
+const MODEL_TOOL_NAMES = new Set(["run", "read_file", "edit_file", "write_file", "submit_candidate"]);
+
+/** Plan → dispatch → observation → verification, as recorded. */
+function DispatchTrail({ call, onOpenDetails }: { call: ToolCall; onOpenDetails?: (() => void) | undefined }) {
+  const fromModel = MODEL_TOOL_NAMES.has(call.name);
+  const v = call.verification;
+  const steps: { label: string; body: ReactNode }[] = [
+    {
+      label: "plan",
+      body: fromModel ? (
+        <span>
+          model requested <Mono>{call.name}</Mono>
+          {call.target ? (
+            <>
+              {" "}
+              on <Mono wrap>{call.target.length > 120 ? `${call.target.slice(0, 120)}…` : call.target}</Mono>
+            </>
+          ) : null}
+        </span>
+      ) : (
+        <span>controller step (no model request)</span>
+      ),
+    },
+    {
+      label: "dispatch",
+      body: call.operation ? (
+        <span>
+          {call.operation}
+          {call.operationId ? (
+            <>
+              {" "}
+              · op <Mono>{call.operationId}</Mono>
+            </>
+          ) : null}
+        </span>
+      ) : (
+        <span className="text-destructive">not dispatched: stopped by the controller before any sandbox effect</span>
+      ),
+    },
+    { label: "observation", body: <span className="break-words">{call.observation}</span> },
+  ];
+  if (call.name === "submit_candidate") {
+    steps.push({
+      label: "verification",
+      body: v ? (
+        <span className="flex flex-wrap items-center gap-1">
+          candidate #{v.index} <Digest value={v.candidateDigest} /> <Badge tone={v.tone}>{v.outcome}</Badge>
+          {v.verificationRecordId ? (
+            onOpenDetails ? (
+              <button type="button" className="font-mono text-[11px] underline underline-offset-4 hover:text-foreground" onClick={onOpenDetails}>
+                {v.verificationRecordId}
+              </button>
+            ) : (
+              <Mono>{v.verificationRecordId}</Mono>
+            )
+          ) : null}
+        </span>
+      ) : (
+        <span className="text-muted-foreground">no sealed candidate recorded for this submission yet</span>
+      ),
+    });
+  }
+  return (
+    <ol className="flex flex-col gap-1 text-xs" aria-label="Dispatch trail">
+      {steps.map((step, i) => (
+        <li key={step.label} className="grid grid-cols-[1.25rem_5.5rem_minmax(0,1fr)] items-baseline gap-1">
+          <span className="text-[11px] tabular-nums text-muted-foreground">{i + 1}.</span>
+          <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">{step.label}</span>
+          <span className="min-w-0">{step.body}</span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+export function ToolCard({ call, onOpenDetails }: { call: ToolCall; onOpenDetails?: (() => void) | undefined }) {
   const Icon = ICON[call.name] ?? IconTool;
   const label = LABEL[call.name] ?? call.name;
   const r = call.result;
@@ -97,9 +172,11 @@ export function ToolCard({ call }: { call: ToolCall }) {
             </>
           ) : null}
           {call.readTruncated ? <Badge tone="warn">truncated</Badge> : null}
+          {call.verification ? <Badge tone={call.verification.tone}>{call.verification.outcome}</Badge> : null}
         </span>
       </summary>
       <div className="flex flex-col gap-2.5 border-t border-border px-3 py-3 dark:border-foreground/5">
+        <DispatchTrail call={call} onOpenDetails={onOpenDetails} />
         {call.target ? (
           <div className="flex flex-col gap-1">
             <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">{call.name === "run" || r ? "command" : "path"}</span>

@@ -21,7 +21,9 @@ import { Skeleton } from "../components/ui/skeleton";
 import { canOperate, useSession } from "../hooks/session";
 import { useSharedTaskList } from "../hooks/useTaskList";
 import { useTaskEvents, type StreamStatus } from "../hooks/useTaskEvents";
-import { cancelTask, describeError, getTask } from "../lib/api";
+import { CleanupBadge, DiagnosticBadge, RepairDisabledBanner } from "../components/Evidence";
+import { ApiError, cancelTask, describeError, getTask } from "../lib/api";
+import { cleanupStatus, isDiagnostic, type CleanupStatus } from "../lib/evidence";
 import { extractCheckpoints, runtimeTier } from "../lib/eventViews";
 import { isTerminalStatus, PHASE_LABEL, STATUS_LABEL } from "../lib/format";
 import { hrefFor } from "../lib/router";
@@ -85,18 +87,18 @@ function writeDetailPref(open: boolean) {
   }
 }
 
-function ThreadRow({ item, view, onOpenDetails }: { item: ThreadItem; view: TaskView | null; onOpenDetails: () => void }) {
+function ThreadRow({ item, view, cleanup, onOpenDetails }: { item: ThreadItem; view: TaskView | null; cleanup: CleanupStatus; onOpenDetails: () => void }) {
   switch (item.type) {
     case "user":
       return <UserMessage item={item} />;
     case "assistant":
-      return <AssistantMessage item={item} />;
+      return <AssistantMessage item={item} onOpenDetails={onOpenDetails} />;
     case "tool":
       return <StandaloneTool item={item} />;
     case "mark":
       return <MarkRow item={item} />;
     case "result":
-      return <ResultCard item={item} view={view} onOpenDetails={onOpenDetails} />;
+      return <ResultCard item={item} view={view} cleanup={cleanup} onOpenDetails={onOpenDetails} />;
     case "working":
       return <WorkingRow item={item} />;
   }
@@ -141,7 +143,13 @@ export function TaskPage({ id }: { id: string }) {
       setLastFetch(new Date().toISOString());
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
-      setLoadError(describeError(err));
+      setLoadError(
+        err instanceof ApiError && err.status === 401
+          ? "Sign in to read this case: task data needs a session."
+          : err instanceof ApiError && (err.status === 404 || err.status === 403)
+            ? `This case does not exist or is not visible to this session (HTTP ${err.status}). A judge sees only the cases its own session started.`
+            : describeError(err),
+      );
     }
   }, [id]);
 
@@ -186,6 +194,7 @@ export function TaskPage({ id }: { id: string }) {
   const tier = useMemo(() => runtimeTier(checkpoints), [checkpoints]);
   const items = useMemo(() => buildThread(view?.task ?? null, stream.log.events), [view?.task, stream.log.events]);
   const groups = useMemo(() => groupItems(items), [items]);
+  const cleanup = useMemo(() => cleanupStatus({ status: view?.task.status ?? "queued" }, stream.log.events), [view?.task.status, stream.log.events]);
   const scroller = useStickToBottom(`${lastSeq ?? -1}:${items.length}:${status ?? ""}`);
 
   const setDetails = (open: boolean) => {
@@ -241,6 +250,7 @@ export function TaskPage({ id }: { id: string }) {
       <span className="min-w-0 truncate text-sm tracking-tight" title={title}>
         {title}
       </span>
+      {task && isDiagnostic(task) ? <DiagnosticBadge className="shrink-0" /> : null}
       {task?.outcome ? (
         <span className="hidden shrink-0 lg:inline-flex">
           <OutcomeBadge outcome={task.outcome} />
@@ -290,13 +300,14 @@ export function TaskPage({ id }: { id: string }) {
             <MessageScroller>
               <MessageScrollerViewport ref={scroller.viewportRef}>
                 <MessageScrollerContent ref={scroller.contentRef} className="mx-auto w-full max-w-2xl px-4 py-6" aria-busy={!terminal}>
+                  {task?.repairDisabledReason ? <RepairDisabledBanner reason={task.repairDisabledReason} className="mb-4" /> : null}
                   {stream.log.dropped > 0 ? (
                     <Notice className="text-xs">{stream.log.dropped} older events were dropped from this view; the full log is in the export.</Notice>
                   ) : null}
                   {groups.map((group) => (
                     <MessageScrollerItem key={group.key} className="flex flex-col gap-1.5 animate-in fade-in-0 duration-300 motion-reduce:animate-none">
                       {group.items.map((item) => (
-                        <ThreadRow key={item.key} item={item} view={view} onOpenDetails={() => setDetails(true)} />
+                        <ThreadRow key={item.key} item={item} view={view} cleanup={cleanup} onOpenDetails={() => setDetails(true)} />
                       ))}
                     </MessageScrollerItem>
                   ))}
@@ -327,15 +338,20 @@ export function TaskPage({ id }: { id: string }) {
                     <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                       <OutcomeBadge outcome={task.outcome} />
                       <span className="text-pretty text-muted-foreground">Finished in the {PHASE_LABEL[task.phase].toLowerCase()} phase</span>
+                      <CleanupBadge cleanup={cleanup} />
                     </span>
                   ) : terminal ? (
                     <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
                       <Badge tone={task.status === "cancelled" ? "neutral" : "bad"}>{STATUS_LABEL[task.status]}</Badge>
                       <span className="text-pretty text-muted-foreground">No outcome was recorded</span>
+                      <CleanupBadge cleanup={cleanup} />
                     </span>
                   ) : (
-                    <span className="tool-line-running text-muted-foreground">
-                      {STATUS_LABEL[task.status]} · {PHASE_LABEL[task.phase]} phase
+                    <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <span className="tool-line-running text-muted-foreground">
+                        {STATUS_LABEL[task.status]} · {PHASE_LABEL[task.phase]} phase
+                      </span>
+                      {task.status === "cancelling" ? <CleanupBadge cleanup={cleanup} /> : null}
                     </span>
                   )
                 ) : null}

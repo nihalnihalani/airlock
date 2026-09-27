@@ -10,7 +10,10 @@ import type { StreamStatus } from "../../hooks/useTaskEvents";
 import type { Checkpoints, RuntimeTier } from "../../lib/eventViews";
 import { modelCallRows, totalUsage } from "../../lib/eventViews";
 import { formatDateTime, formatTime } from "../../lib/format";
+import { useDeployment } from "../../hooks/useDeployment";
+import { budgetRows, instanceIds } from "../../lib/evidence";
 import { CaseTable } from "../CaseTable";
+import { CandidatesList, DiagnosticBadge, InstanceIdRows, RepairDisabledBanner } from "../Evidence";
 import { CheckpointsPanel } from "../CheckpointsPanel";
 import { Badge, Chip, Digest, KeyValue, Mono, Notice, PanelSection } from "../common";
 import { ExportPanel } from "../ExportPanel";
@@ -55,6 +58,8 @@ export function TaskDetail({
   onRefresh: () => void;
 }) {
   const { task } = view;
+  const deployment = useDeployment();
+  const ids = instanceIds(deployment.availability, checkpoints.host ?? (deployment.host.state === "ok" ? deployment.host.host : null));
   const calls = modelCallRows(events);
   const usage = totalUsage(calls);
   const models = distinct(calls.map((c) => c.model));
@@ -80,11 +85,13 @@ export function TaskDetail({
           {task.outcome ? <OutcomeBadge outcome={task.outcome} /> : null}
           <Chip>{task.profileId}</Chip>
           {task.scriptedDriver ? (
-            <Badge tone="warn" title="Diagnostic run: a scripted model replays a fixed script. Never a live repair.">
-              scripted: {task.scriptedDriver}
-            </Badge>
+            <>
+              <DiagnosticBadge />
+              <Chip>script {task.scriptedDriver}</Chip>
+            </>
           ) : null}
         </div>
+        {task.repairDisabledReason ? <RepairDisabledBanner reason={task.repairDisabledReason} className="mb-3" /> : null}
         <KeyValue
           className="text-xs"
           rows={[
@@ -92,7 +99,6 @@ export function TaskDetail({
             { key: "owner", value: task.owner },
             { key: "attempt", value: task.attemptId ? <Mono wrap>{task.attemptId}</Mono> : <span className="text-muted-foreground">none yet</span> },
             { key: "generation", value: String(task.generation) },
-            { key: "budget", value: `${task.budget.modelCallsUsed} model calls · ${task.budget.repairAttemptsUsed} repair attempts` },
             {
               key: "candidate digest",
               value: task.candidateDigest ? <Digest value={task.candidateDigest} /> : <span className="text-muted-foreground">not sealed</span>,
@@ -102,6 +108,24 @@ export function TaskDetail({
           ]}
         />
         {task.error ? <Notice tone="bad" className="mt-3 text-xs whitespace-pre-wrap break-words">Task error: {task.error}</Notice> : null}
+      </PanelSection>
+
+      <Separator />
+      <PanelSection title="Budget used" aside={<span>charged by the controller</span>}>
+        <KeyValue className="text-xs" rows={budgetRows(task.budget)} />
+      </PanelSection>
+
+      <Separator />
+      <PanelSection title="Candidates" aside={<span>one per repair attempt</span>}>
+        <CandidatesList task={task} />
+      </PanelSection>
+
+      <Separator />
+      <PanelSection title="Vultr instances" aside={<span>{ids.deployed ? "deployed" : "local"}</span>}>
+        <KeyValue className="text-xs" rows={InstanceIdRows(ids, "control plane (/api/repair-availability) and the execution host check")} />
+        {!ids.deployed ? (
+          <p className="mt-2 text-[11px] text-muted-foreground">No Vultr instance id was reported: this stack is not a Vultr deployment.</p>
+        ) : null}
       </PanelSection>
 
       <Separator />
@@ -132,7 +156,7 @@ export function TaskDetail({
 
       <Separator />
       <PanelSection title="Five checkpoints">
-        <CheckpointsPanel cp={checkpoints} />
+        <CheckpointsPanel cp={checkpoints} ids={ids} />
       </PanelSection>
 
       <Separator />

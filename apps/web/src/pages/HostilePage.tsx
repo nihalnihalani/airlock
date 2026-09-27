@@ -17,7 +17,7 @@ import {
   MessageScrollerViewport,
   useStickToBottom,
 } from "../components/ui/message-scroller";
-import { canOperate, useSession } from "../hooks/session";
+import { useSession } from "../hooks/session";
 import { describeError, runHostile } from "../lib/api";
 import { formatTime } from "../lib/format";
 import { hrefFor } from "../lib/router";
@@ -80,7 +80,8 @@ export function HostilePage() {
   const editor = useRef<HTMLTextAreaElement>(null);
   const scroller = useStickToBottom(history.map((h) => `${h.id}:${h.state}`).join(","));
 
-  const allowed = canOperate(session.role);
+  // Judge only: the control API answers 403 to the operator and 401 when signed out.
+  const allowed = session.role === "judge";
   const trimmed = command.trim();
 
   useEffect(() => {
@@ -146,8 +147,9 @@ export function HostilePage() {
                     <EmptyTitle className="text-base">Try to break out</EmptyTitle>
                     <EmptyDescription className="text-pretty">
                       Each command runs once in a disposable author-profile sandbox with the author caps, then the sandbox is destroyed.
-                      The command is passed to the sandbox shell as data; nothing runs on the control host. The reply says what died and
-                      what survived.
+                      The command is passed to the sandbox shell as data; nothing runs on the control host. The reply says what died
+                      (container, guest kernel, workspace files) and what survived (control plane, supervisor, host sentinel, every
+                      other running attempt), then the host-wide sandbox listing. Judge role only.
                     </EmptyDescription>
                   </EmptyHeader>
                 </Empty>
@@ -179,13 +181,19 @@ export function HostilePage() {
             {!allowed && !session.loading ? (
               <Notice className="flex items-center gap-2 text-xs">
                 <IconLock className="size-4 shrink-0" />
-                <span>
-                  This panel is for judges and operators.{" "}
-                  <a className="font-medium text-foreground underline underline-offset-4" href={hrefFor({ name: "login" })}>
-                    Sign in
-                  </a>{" "}
-                  to use it.
-                </span>
+                {session.role === "operator" ? (
+                  <span>
+                    Hostile input is judge-only. The control API refuses it for the operator role (403), so it is disabled here.
+                  </span>
+                ) : (
+                  <span>
+                    Hostile input is judge-only.{" "}
+                    <a className="font-medium text-foreground underline underline-offset-4" href={hrefFor({ name: "login" })}>
+                      Sign in
+                    </a>{" "}
+                    with the judge password to use it.
+                  </span>
+                )}
               </Notice>
             ) : null}
             {error ? <ErrorBox message={error} /> : null}
