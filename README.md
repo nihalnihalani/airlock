@@ -7,7 +7,7 @@
 [![The Agent Arena Hackathon](https://img.shields.io/badge/The%20Agent%20Arena%20Hackathon-2026-007BFC?style=for-the-badge)](#hackathon-fit)
 [![Challenge 1](https://img.shields.io/badge/Challenge%201-Blast%20Radius%20Zero-dc2626?style=for-the-badge)](#hackathon-fit)
 [![Live repair gate](https://img.shields.io/badge/live%20repair%20gate-3%2F3%20on%20Vultr-16a34a?style=for-the-badge)](#status)
-[![Live demo](https://img.shields.io/badge/live%20demo-Kata%20on%20VX1-007BFC?style=for-the-badge)](https://155-138-198-12.sslip.io)
+[![Live demo](https://img.shields.io/badge/live%20demo-Kata%20on%20VX1-007BFC?style=for-the-badge)](https://96-30-198-46.sslip.io)
 
 [![Vultr Serverless Inference](https://img.shields.io/badge/Vultr-Serverless%20Inference%20%C2%B7%20glm--5.3-007BFC?style=flat-square&logo=vultr&logoColor=white)](https://www.vultr.com/products/serverless-inference/)
 [![Vultr VX1](https://img.shields.io/badge/Vultr-VX1%20sandbox%20host-007BFC?style=flat-square&logo=vultr&logoColor=white)](https://docs.vultr.com/how-to-set-up-agent-sandboxing-on-vultr-cloud-compute)
@@ -46,13 +46,15 @@ Built at **The Agent Arena Hackathon** (Vultr, NetBird, Cerebral Valley; San Fra
 
 ## Status
 
-**Deployed on Vultr (27 Sep 2026): https://155-138-198-12.sslip.io** — `main` (merged from `fix/milestone-1-guarantees`), control plane on VM A (`vc2-2c-4gb`, atl), supervisor on a **VX1** host (`vx1-g-4c-16g-240s`) with **Kata Containers** (guest kernel 6.18.35 vs host 6.8.0-139), live model **glm-5.3 on Vultr Serverless Inference**. It closes the gap audit ([research/42](research/42-AIRLOCK-GAP-AUDIT.md)) and adds doc 40's browser and general execution (stages 0–6); the per-finding ledger is [docs/implementation-status.md](docs/implementation-status.md) and the independent requirement-to-evidence matrix is [docs/acceptance-matrix.md](docs/acceptance-matrix.md).
+**Deployed on Vultr (27 Sep 2026, redeployed from the maintainer's machine): https://96-30-198-46.sslip.io** — `main` (merged from `fix/milestone-1-guarantees`), control plane on VM A (`vc2-2c-4gb`, atl), supervisor on a **VX1** host (`vx1-g-4c-16g-240s`) with **Kata Containers** (guest kernel 6.18.35 vs host 6.8.0-139), live model **glm-5.3 on Vultr Serverless Inference**, about $0.18/hour for both. The preflight (49/49), the smoke and the live gate (3/3) were re-run on this pair; the 9/9 acceptance below was measured on the previous pair at `155-138-198-12.sslip.io` (retired). It closes the gap audit ([research/42](research/42-AIRLOCK-GAP-AUDIT.md)) and adds doc 40's browser and general execution (stages 0–6); the per-finding ledger is [docs/implementation-status.md](docs/implementation-status.md) and the independent requirement-to-evidence matrix is [docs/acceptance-matrix.md](docs/acceptance-matrix.md).
 
 - **Preflight on VM B: 49/49** ([evidence](docs/evidence/vultr/)): KVM, Kata guest kernel, every sandbox inspected as `kata` with the isolation probe fully BLOCKED, the workspace quota holding with post-stop collection, detached children dying with the sandbox, Chromium's own sandbox active under Kata, egress through the per-attempt proxy only, metadata and form POSTs refused, an offline analysis sandbox, and a host-wide empty listing.
 - **Live repair gate: 3/3** through the public URL, each judged by the external comparator ([receipt](docs/evidence/live-gate/)); repair is available in production because that receipt matches the running model, runtime, image, adapter and contract.
 - **Vultr acceptance: 9/9** with the live model ([evidence](docs/evidence/vultr/acceptance-f223c19/)): repair with a byte-identical sealed export, CSV analysis with correct answers on fresh data, browser research with screenshots, the combined hero (public page → CSV download → offline analysis → chart with sources) for two data variants, an approved form submission confirmed by the destination's receipt, human takeover within policy, Kata containment of hostile commands with a healthy control plane, cross-session isolation, and an empty host afterwards.
 - **Also verified locally** (Colima runc, labelled dev-unsafe): the full acceptance suite and C41 crash/restart cases (control plane or supervisor killed mid-operation: nothing uncertain is replayed).
 - **Documented limitations:** GET requests to sites the task owner allowed can carry data; pages that need web workers do not run in the sandboxed browser; "Result verified" means the profile's structural checks passed, not that an answer is correct; one control-plane process (PGlite).
+
+The first deployment of this revision, at `155-138-198-12.sslip.io` (retired; control `vc2-2c-4gb`, VX1 `vx1-g-4c-16g-240s`, provisioned from a teammate's machine), served from 27 Sep until the redeploy above and its instances were deleted the same day; the acceptance evidence in `docs/evidence/vultr/acceptance-f223c19/` was recorded against it.
 
 The earlier deployment of `main` (before the `fix/milestone-1-guarantees` merge) was torn down and replaced on 27 Sep. It is described below for history only; its measurements apply to that revision, and its URL no longer resolves to Airlock.
 
