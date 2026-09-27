@@ -1,0 +1,16 @@
+## 2026-09-27T15:35:52Z before dev-down
+$ supervisor GET /listing
+{"listedAt":"2026-09-27T15:35:52.779Z","scope":"host","containers":[],"volumes":[],"networks":[]}
+control: stopped (pid 54148)
+supervisor: stopped (pid 54489)
+fixtures: stopped (pid 50650)
+(no sandboxes)
+## 2026-09-27T15:35:54Z after scripts/dev-down.sh
+$ docker ps -a --filter label=airlock.supervisor=true
+(end)
+$ docker network ls --filter label=airlock.supervisor=true
+(end)
+$ docker volume ls --filter label=airlock.supervisor=true
+(end)
+$ listeners 3000/3100/4300
+(none)

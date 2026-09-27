@@ -1,0 +1,346 @@
+{
+  "id": "M1-browser-mutation-guard",
+  "requirement": "Browser mutation guard: a form POST on an allowlisted public site (httpbin.org/forms/post → POST /post) is blocked by the runner, on the human path and the agent path; reads still work",
+  "command": "bun scripts/acceptance/local.ts M1-browser-mutation-guard",
+  "environment": "real local runc (dev-unsafe, Colima); stack = git archive of a07cf3228ef7",
+  "timestamp": "2026-09-27T15:35:39.167Z",
+  "revision": "a07cf3228ef791f5bb1f44aae751df80077edc00",
+  "result": "PASS",
+  "evidence": {
+    "human": {
+      "submitRef": "e44",
+      "generation": 2,
+      "click": "{\"ok\":true,\"result\":{\"response\":{\"schemaVersion\":1,\"id\":\"op-49191b2317f5e595b796c969\",\"op\":\"click\",\"ok\":true,\"result\":{\"generation\":3,\"invalidated\":true,\"url\":\"chrome-error://chromewebdata/\"}},\"status\":\"completed\",\"durationMs\":325,\"generationBefore\":2}}",
+      "afterObserve": {
+        "url": "chrome-error://chromewebdata/",
+        "events": [
+          {
+            "at": "2026-09-27T15:35:22.930Z",
+            "type": "mutation_blocked",
+            "method": "POST",
+            "url": "https://httpbin.org/post",
+            "tabId": "tab-1",
+            "count": 1
+          }
+        ],
+        "text": ""
+      }
+    },
+    "humanTask": {
+      "id": "task-e3f84567d12089c7",
+      "status": "done",
+      "outcome": "RESULT_PARTIAL",
+      "cleanup": {
+        "at": "2026-09-27T15:35:30.896Z",
+        "detail": "supervisor confirmed teardown of 1 attempt(s)",
+        "status": "confirmed"
+      }
+    },
+    "agentTask": {
+      "id": "task-f5a2241969680ed0",
+      "status": "done",
+      "outcome": "RESULT_PARTIAL",
+      "cleanup": {
+        "at": "2026-09-27T15:35:39.031Z",
+        "detail": "supervisor confirmed teardown of 1 attempt(s)",
+        "status": "confirmed"
+      },
+      "mutationMentions": [
+        "mutation_blocked"
+      ]
+    },
+    "agentEvents": [
+      {
+        "seq": 1,
+        "at": "2026-09-27T15:35:31.120Z",
+        "kind": "lifecycle",
+        "title": "Task created",
+        "detail": "general task, profile web-research v1; destinations httpbin.org; diagnostic (scripted:acc-form-agent), not a model run"
+      },
+      {
+        "seq": 2,
+        "at": "2026-09-27T15:35:31.435Z",
+        "kind": "phase",
+        "title": "prepare",
+        "detail": "general task profile web-research v1; tools: browser_navigate, browser_observe, browser_click, browser_type, browser_key, browser_scroll, browser_screenshot, browser_tabs, browser_download_list, browser_download_save, browser_propose_submit, submit_result; destinations: httpbin.org"
+      },
+      {
+        "seq": 3,
+        "at": "2026-09-27T15:35:31.436Z",
+        "kind": "check",
+        "title": "dev-unsafe runtime",
+        "detail": "supervisor host runs runc with AIRLOCK_DEV_UNSAFE; results are not a deployment measurement"
+      },
+      {
+        "seq": 4,
+        "at": "2026-09-27T15:35:31.437Z",
+        "kind": "phase",
+        "title": "execute",
+        "detail": "model loop for goal under profile web-research"
+      },
+      {
+        "seq": 5,
+        "at": "2026-09-27T15:35:31.439Z",
+        "kind": "model",
+        "title": "Model turn 1",
+        "detail": "Open."
+      },
+      {
+        "seq": 6,
+        "at": "2026-09-27T15:35:31.440Z",
+        "kind": "tool",
+        "title": "browser_navigate allowed",
+        "detail": "httpbin.org is inside the task's destinations",
+        "tool": "browser_navigate",
+        "opState": "allowed",
+        "actor": "agent"
+      },
+      {
+        "seq": 7,
+        "at": "2026-09-27T15:35:31.442Z",
+        "kind": "lifecycle",
+        "title": "Creating browser sandbox",
+        "detail": "attempt att-bb04bc123074c8ba35bb, generation 1, deadline 2026-09-27T15:50:31.441Z; egress allowed to httpbin.org"
+      },
+      {
+        "seq": 8,
+        "at": "2026-09-27T15:35:37.405Z",
+        "kind": "lifecycle",
+        "title": "browser sandbox created",
+        "detail": "container airlock-browser-task-f5a2241969680ed0-att-bb04bc123074c8ba35bb; runtime runc (dev-unsafe)",
+        "opState": "completed"
+      },
+      {
+        "seq": 9,
+        "at": "2026-09-27T15:35:37.407Z",
+        "kind": "tool",
+        "title": "browser_navigate started",
+        "tool": "browser_navigate",
+        "opState": "started"
+      },
+      {
+        "seq": 10,
+        "at": "2026-09-27T15:35:38.164Z",
+        "kind": "tool",
+        "title": "browser_navigate https://httpbin.org/forms/post",
+        "detail": "status 200",
+        "tool": "browser_navigate",
+        "opState": "completed"
+      },
+      {
+        "seq": 11,
+        "at": "2026-09-27T15:35:38.165Z",
+        "kind": "model",
+        "title": "Model turn 2",
+        "detail": "Observe."
+      },
+      {
+        "seq": 12,
+        "at": "2026-09-27T15:35:38.166Z",
+        "kind": "tool",
+        "title": "browser_observe started",
+        "tool": "browser_observe",
+        "opState": "started"
+      },
+      {
+        "seq": 13,
+        "at": "2026-09-27T15:35:38.222Z",
+        "kind": "tool",
+        "title": "browser_observe https://httpbin.org/forms/post",
+        "detail": " — 207 chars, 13 controls, 1 tab(s)\n\nCustomer name: \n\nTelephone: \n\nE-mail address: \n\nPizza Size\n\n Small\n\n Medium\n\n Large\n\nPizza Toppings\n\n Bacon\n\n Extra Cheese\n\n Onion\n\n Mushroom\n\nPreferred delivery time: \n\nDelivery instructions: \n\nSubmit order",
+        "tool": "browser_observe",
+        "opState": "completed"
+      },
+      {
+        "seq": 14,
+        "at": "2026-09-27T15:35:38.223Z",
+        "kind": "model",
+        "title": "Model turn 3",
+        "detail": "Submit the form."
+      },
+      {
+        "seq": 15,
+        "at": "2026-09-27T15:35:38.224Z",
+        "kind": "tool",
+        "title": "browser_click started",
+        "tool": "browser_click",
+        "opState": "started"
+      },
+      {
+        "seq": 16,
+        "at": "2026-09-27T15:35:38.567Z",
+        "kind": "tool",
+        "title": "browser_click ref e44",
+        "detail": "generation 3; page changed; chrome-error://chromewebdata/",
+        "tool": "browser_click",
+        "opState": "completed"
+      },
+      {
+        "seq": 17,
+        "at": "2026-09-27T15:35:38.569Z",
+        "kind": "model",
+        "title": "Model turn 4",
+        "detail": "Observe after."
+      },
+      {
+        "seq": 18,
+        "at": "2026-09-27T15:35:38.573Z",
+        "kind": "tool",
+        "title": "browser_observe started",
+        "tool": "browser_observe",
+        "opState": "started"
+      },
+      {
+        "seq": 19,
+        "at": "2026-09-27T15:35:38.632Z",
+        "kind": "tool",
+        "title": "browser_observe chrome-error://chromewebdata/",
+        "detail": " — 0 chars, 0 controls, 1 tab(s)\n\n",
+        "tool": "browser_observe",
+        "opState": "completed"
+      },
+      {
+        "seq": 20,
+        "at": "2026-09-27T15:35:38.633Z",
+        "kind": "model",
+        "title": "Model turn 5",
+        "detail": "Screenshot."
+      },
+      {
+        "seq": 21,
+        "at": "2026-09-27T15:35:38.634Z",
+        "kind": "tool",
+        "title": "browser_screenshot started",
+        "tool": "browser_screenshot",
+        "opState": "started"
+      },
+      {
+        "seq": 22,
+        "at": "2026-09-27T15:35:38.684Z",
+        "kind": "artifact",
+        "title": "Screenshot stored art-5550f6f5250d964b5d0f",
+        "detail": "chrome-error://chromewebdata/ (1280x800, sha256 3eab349ebf404dae5a2a20d041325042a032d46aeab4b9730d8f8962686fb9b0)",
+        "tool": "browser_screenshot",
+        "actor": "agent"
+      },
+      {
+        "seq": 23,
+        "at": "2026-09-27T15:35:38.685Z",
+        "kind": "tool",
+        "title": "browser_screenshot chrome-error://chromewebdata/",
+        "detail": "stored as art-5550f6f5250d964b5d0f",
+        "tool": "browser_screenshot",
+        "opState": "completed"
+      },
+      {
+        "seq": 24,
+        "at": "2026-09-27T15:35:38.686Z",
+        "kind": "model",
+        "title": "Model turn 6",
+        "detail": "Done."
+      },
+      {
+        "seq": 25,
+        "at": "2026-09-27T15:35:38.686Z",
+        "kind": "tool",
+        "title": "submit_result",
+        "detail": "Acceptance diagnostic: tried to submit the httpbin form.\noutputs: (none)\nsources: https://httpbin.org/forms/post",
+        "tool": "submit_result",
+        "opState": "completed"
+      },
+      {
+        "seq": 26,
+        "at": "2026-09-27T15:35:38.687Z",
+        "kind": "phase",
+        "title": "freeze",
+        "detail": "stopping the sandboxes and collecting outputs/ read-only"
+      },
+      {
+        "seq": 27,
+        "at": "2026-09-27T15:35:39.028Z",
+        "kind": "lifecycle",
+        "title": "browser sandbox destroyed (result submitted)",
+        "detail": "revoked; destroyed; remaining containers=0 volumes=0",
+        "opState": "completed"
+      },
+      {
+        "seq": 28,
+        "at": "2026-09-27T15:35:39.030Z",
+        "kind": "check",
+        "title": "failed: screenshot-evidence",
+        "detail": "1 screenshot(s) stored, none of an http(s) page (e.g. about:blank)"
+      },
+      {
+        "seq": 29,
+        "at": "2026-09-27T15:35:39.030Z",
+        "kind": "check",
+        "title": "passed: sources-cited",
+        "detail": "1 source(s) cited"
+      },
+      {
+        "seq": 30,
+        "at": "2026-09-27T15:35:39.030Z",
+        "kind": "check",
+        "title": "passed: sources-visited",
+        "detail": "every cited source was reached by this task's browser"
+      },
+      {
+        "seq": 31,
+        "at": "2026-09-27T15:35:39.031Z",
+        "kind": "check",
+        "title": "passed: sources-in-policy",
+        "detail": "every cited source is inside the allowed destinations"
+      },
+      {
+        "seq": 32,
+        "at": "2026-09-27T15:35:39.031Z",
+        "kind": "phase",
+        "title": "Outcome RESULT_PARTIAL",
+        "detail": "1 of 4 completion checks failed: screenshot-evidence"
+      }
+    ]
+  },
+  "checks": [
+    {
+      "ok": true,
+      "what": "create (egressAllow httpbin.org) → 201"
+    },
+    {
+      "ok": true,
+      "what": "live browser"
+    },
+    {
+      "ok": true,
+      "what": "take → 200"
+    },
+    {
+      "ok": true,
+      "what": "human observe: https://httpbin.org/forms/post, submit button ref e44 at generation 2"
+    },
+    {
+      "ok": true,
+      "what": "human click Submit → runner reports mutation_blocked POST https://httpbin.org/post ([{\"at\":\"2026-09-27T15:35:22.930Z\",\"type\":\"mutation_blocked\",\"method\":\"POST\",\"url\":\"https://httpbin.org/post\",\"tabId\":\"tab-1\",\"count\":1}])"
+    },
+    {
+      "ok": true,
+      "what": "page did not reach httpbin's /post echo (url chrome-error://chromewebdata/)"
+    },
+    {
+      "ok": true,
+      "what": "GET on the same site still works (200)"
+    },
+    {
+      "ok": true,
+      "what": "agent browser_click dispatched (browser_click started/started, browser_click ref e44/completed)"
+    },
+    {
+      "ok": true,
+      "what": "agent path: blocked mutation recorded in the task's events; last observe browser_observe chrome-error://chromewebdata/"
+    },
+    {
+      "ok": true,
+      "what": "agent path: the screenshot after the blocked POST is a chrome-error page: outcome RESULT_PARTIAL, screenshot-evidence failed (1 screenshot(s) stored, none of an http(s) page (e.g. about:blank))"
+    }
+  ],
+  "dirtyTree": null
+}

@@ -1,0 +1,206 @@
+{
+  "id": "T3-cancel-mid-run-repair",
+  "requirement": "Task behaviour: cancellation mid-run (repair, command executing) → cancelled only after teardown; late results don't overwrite",
+  "command": "bun scripts/acceptance/local.ts T3-cancel-mid-run-repair",
+  "environment": "real local runc (dev-unsafe, Colima); stack = git archive of a07cf3228ef7",
+  "timestamp": "2026-09-27T15:17:36.362Z",
+  "revision": "a07cf3228ef791f5bb1f44aae751df80077edc00",
+  "result": "PASS",
+  "evidence": {
+    "task": {
+      "id": "task-4843f9ffe1a87725",
+      "final": {
+        "status": "cancelled",
+        "outcome": null,
+        "phase": "reproduce"
+      },
+      "containersBeforeCancel": [
+        "airlock-author-task-4843f9ffe1a87725-att-56a76656d85bcc6ae22e Up 5 seconds"
+      ],
+      "containersAtCancelled": []
+    },
+    "events": [
+      {
+        "seq": 1,
+        "at": "2026-09-27T15:16:52.356Z",
+        "kind": "lifecycle",
+        "title": "Task created",
+        "detail": "profile tabulate-365; diagnostic (scripted:slow), not a model repair"
+      },
+      {
+        "seq": 2,
+        "at": "2026-09-27T15:16:53.265Z",
+        "kind": "phase",
+        "title": "prepare",
+        "detail": "profile tabulate-365 @ e13a4d0dd292cade200e653eb9155a1ca0f1dbea; 6 contract cases"
+      },
+      {
+        "seq": 3,
+        "at": "2026-09-27T15:16:53.267Z",
+        "kind": "check",
+        "title": "dev-unsafe runtime",
+        "detail": "supervisor host runs runc with AIRLOCK_DEV_UNSAFE; results are not a deployment measurement"
+      },
+      {
+        "seq": 4,
+        "at": "2026-09-27T15:16:53.270Z",
+        "kind": "phase",
+        "title": "baseline",
+        "detail": "creating and probing the author sandbox, then measuring the pristine tree: one fresh one-shot sandbox for each of 6 cases"
+      },
+      {
+        "seq": 5,
+        "at": "2026-09-27T15:16:53.271Z",
+        "kind": "lifecycle",
+        "title": "Creating author sandbox",
+        "detail": "attempt att-56a76656d85bcc6ae22e, generation 1, deadline 2026-09-27T15:21:53.270Z; execution authorized for 40 s at a time, renewed while this run holds its lease"
+      },
+      {
+        "seq": 6,
+        "at": "2026-09-27T15:16:53.507Z",
+        "kind": "lifecycle",
+        "title": "Author sandbox created",
+        "detail": "container airlock-author-task-4843f9ffe1a87725-att-56a76656d85bcc6ae22e; runtime runc; probe all BLOCKED"
+      },
+      {
+        "seq": 7,
+        "at": "2026-09-27T15:16:53.508Z",
+        "kind": "check",
+        "title": "Isolation checkpoints",
+        "detail": "runtime runc (dev-unsafe); guest Linux sandbox 6.8.0-64-generic #67-Ubuntu SMP PREEMPT_DYNAMIC Sun Jun 15 20:23:40 UTC 2025 aarch64 GNU/Linux; hostname sandbox; probe all BLOCKED"
+      },
+      {
+        "seq": 8,
+        "at": "2026-09-27T15:16:53.751Z",
+        "kind": "exec",
+        "title": "baseline invocation reported-empty-headers-maxheader succeeded",
+        "detail": "exit=0 45ms observations=1 protocolErrors=0",
+        "tool": "baseline"
+      },
+      {
+        "seq": 9,
+        "at": "2026-09-27T15:16:53.995Z",
+        "kind": "exec",
+        "title": "baseline invocation reg-small-table-maxheader succeeded",
+        "detail": "exit=0 49ms observations=1 protocolErrors=0",
+        "tool": "baseline"
+      },
+      {
+        "seq": 10,
+        "at": "2026-09-27T15:16:54.251Z",
+        "kind": "exec",
+        "title": "baseline invocation reg-small-table-plain succeeded",
+        "detail": "exit=0 48ms observations=1 protocolErrors=0",
+        "tool": "baseline"
+      },
+      {
+        "seq": 11,
+        "at": "2026-09-27T15:16:54.490Z",
+        "kind": "exec",
+        "title": "baseline invocation reg-empty-headers-no-option succeeded",
+        "detail": "exit=0 45ms observations=1 protocolErrors=0",
+        "tool": "baseline"
+      },
+      {
+        "seq": 12,
+        "at": "2026-09-27T15:16:54.735Z",
+        "kind": "exec",
+        "title": "baseline invocation reg-maxcolwidths-wrap succeeded",
+        "detail": "exit=0 50ms observations=1 protocolErrors=0",
+        "tool": "baseline"
+      },
+      {
+        "seq": 13,
+        "at": "2026-09-27T15:16:54.989Z",
+        "kind": "exec",
+        "title": "baseline invocation reg-scalar-maxheader-int succeeded",
+        "detail": "exit=0 44ms observations=1 protocolErrors=0",
+        "tool": "baseline"
+      },
+      {
+        "seq": 14,
+        "at": "2026-09-27T15:16:54.991Z",
+        "kind": "check",
+        "title": "Baseline reproduces the reported failure",
+        "detail": "6/6 cases completed; 6 passed, 0 failed; exec succeeded"
+      },
+      {
+        "seq": 15,
+        "at": "2026-09-27T15:16:54.992Z",
+        "kind": "phase",
+        "title": "reproduce",
+        "detail": "model reproduction in author sandbox (attempt att-56a76656d85bcc6ae22e, generation 1, deadline 2026-09-27T15:21:53.270Z)"
+      },
+      {
+        "seq": 16,
+        "at": "2026-09-27T15:16:54.994Z",
+        "kind": "model",
+        "title": "Model turn 1",
+        "detail": "Starting a long-running command in the sandbox."
+      },
+      {
+        "seq": 17,
+        "at": "2026-09-27T15:16:58.361Z",
+        "kind": "lifecycle",
+        "title": "Cancellation requested",
+        "detail": "by judge"
+      },
+      {
+        "seq": 18,
+        "at": "2026-09-27T15:17:00.453Z",
+        "kind": "lifecycle",
+        "title": "Attempt destroyed after the lease was lost",
+        "detail": "revoked; destroyed; remaining containers=0 volumes=0"
+      },
+      {
+        "seq": 19,
+        "at": "2026-09-27T15:17:01.297Z",
+        "kind": "lifecycle",
+        "title": "Attempt destroyed after cancellation",
+        "detail": "attempt already destroyed (supervisor journal status: destroyed)",
+        "opState": "completed"
+      },
+      {
+        "seq": 20,
+        "at": "2026-09-27T15:17:01.298Z",
+        "kind": "lifecycle",
+        "title": "Task cancelled"
+      }
+    ]
+  },
+  "checks": [
+    {
+      "ok": true,
+      "what": "a sandbox command (sleep 25) was dispatched"
+    },
+    {
+      "ok": true,
+      "what": "cancel → 200 status=cancelling"
+    },
+    {
+      "ok": true,
+      "what": "status reached cancelled (cancelled) in 2987 ms"
+    },
+    {
+      "ok": true,
+      "what": "no container of the task existed when 'cancelled' was first observed ([]; before cancel: 1)"
+    },
+    {
+      "ok": true,
+      "what": "teardown event (#19 \"Attempt destroyed after cancellation\") after the request (#17)"
+    },
+    {
+      "ok": true,
+      "what": "35 s later still cancelled, no outcome/candidate (cancelled/undefined)"
+    },
+    {
+      "ok": true,
+      "what": "no late exec/phase events after cancellation (0 new events: )"
+    },
+    {
+      "ok": true,
+      "what": "supervisor lists no live attempt for the task (0)"
+    }
+  ],
+  "dirtyTree": null
+}

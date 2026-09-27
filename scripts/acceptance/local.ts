@@ -688,6 +688,15 @@ async function testCancelBrowser() {
   saveRow(t);
 }
 
+/**
+ * O3/N1 (509a832, d3746a2): screenshot-evidence requires a screenshot of a cited source. These
+ * fixtures take their only agent screenshot after the page became chrome-error (a proxy-denied
+ * link, a failed approved submit, a blocked form POST), so the honest outcome is RESULT_PARTIAL.
+ */
+function checkErrorPageScreenshotPartial(t: Test, task: any, why: string) {
+  const shot = (task.result?.checks ?? []).find((c: any) => c.name === "screenshot-evidence");
+  t.check(task.outcome === "RESULT_PARTIAL" && shot?.passed === false, `${why}: outcome ${task.outcome}, screenshot-evidence ${shot?.passed ? "passed" : "failed"} (${shot?.detail ?? "no check"})`);
+}
 async function testTakeover() {
   const t = new Test("T5-takeover-and-stale-ref", "Task behaviour: human takeover prevents agent ops; stale browser refs rejected (human path); release resumes; no secrets in browser/egress container env");
   const cookie = await judgeA();
@@ -752,6 +761,7 @@ async function testTakeover() {
   const evs = await allEvents(cookie, id);
   const afterRelease = evs.filter((e) => e.seq > seqAtTake && e.kind === "tool" && e.data?.opState === "completed" && !String(e.data?.tool).startsWith("human"));
   t.check(afterRelease.length > 0, `agent resumed after release (${afterRelease.length} completed agent ops)`);
+  checkErrorPageScreenshotPartial(t, v.task, "the agent's only screenshot is of the chrome-error page left by the proxy-denied iana.org link");
   t.ev("task", { id, status: v.task.status, outcome: v.task.outcome, cleanup: v.task.cleanup, control: v.task.control });
   t.ev("events", slim(evs));
   saveRow(t);
@@ -818,6 +828,7 @@ async function testProposals() {
   t.check(decideAfter.status === 409 || decideAfter.status === 410, `decide after the task ended → ${decideAfter.status}`);
   const evs = await allEvents(cookie, id);
   t.ev("proposals", props.map((p) => ({ id: p.id, status: p.status, formId: p.formId, destination: p.destination, payloadDigest: p.payloadDigest, expiresAt: p.expiresAt, receipt: p.receipt ?? null })));
+  checkErrorPageScreenshotPartial(t, v.task, "the agent's screenshot is of the chrome-error page left by the failed approved submit");
   t.ev("task", { id, status: v.task.status, outcome: v.task.outcome, cleanup: v.task.cleanup });
   t.ev("events", slim(evs));
   t.note = "forms.example.com is a configured-but-unreachable airlock-forms-v1 origin; the loopback fixtures destination is not reachable from the sandboxed browser (egress allows public addresses only), so an approved submission cannot be confirmed locally";
@@ -1059,6 +1070,7 @@ async function testMutationGuard() {
   const all = JSON.stringify(evs.filter((e) => e.seq >= (clickEv[0]?.seq ?? 0)));
   t.check(clickEv.length > 0, `agent browser_click dispatched (${clickEv.map((e) => `${e.title}/${e.data?.opState}`).join(", ")})`);
   t.check(/mutation/i.test(all) && !/httpbin\.org\/post"?\s*$/.test(after2?.title ?? ""), `agent path: blocked mutation recorded in the task's events; last observe ${after2?.title}`);
+  checkErrorPageScreenshotPartial(t, v2.task, "agent path: the screenshot after the blocked POST is a chrome-error page");
   t.ev("agentTask", { id: a.json.id, status: v2.task.status, outcome: v2.task.outcome, cleanup: v2.task.cleanup, mutationMentions: (all.match(/[^"]{0,80}mutation[^"]{0,160}/gi) ?? []).slice(0, 6) });
   t.ev("agentEvents", slim(evs));
   saveRow(t);
@@ -1259,6 +1271,13 @@ async function c41EndState(t: Test, cookie: string, id: string, oldAttempt: stri
   t.check(ns.length === 0, `no network of the task remains (${ns.join(", ") || "none"})`);
   return { view: v, task, attempts };
 }
+/** C41 O2 (509a832): the reconciliation line for an op must carry the supervisor's own record of it, matching GET /operations/:id. */
+function checkSupervisorRecordInReconciliation(t: Test, evs: Ev[], opId: string, atEnd: { status: number; body: any }) {
+  const line = evs.find((e) => e.title === "Reconciled outstanding supervisor operations" && (e.detail ?? "").includes(opId))?.detail?.split("\n").find((l) => l.includes(opId)) ?? "";
+  const b = atEnd.body ?? {};
+  const expected = b.interruptedByRestart ? "supervisor: interrupted" : b.state === "completed" ? "supervisor: completed" : b.state ? "supervisor: still pending" : "supervisor has no record";
+  t.check(line.includes(expected) && /not replayed/.test(line), `recovery recorded the supervisor's own record of ${opId} and still did not replay it ("${line.slice(0, 220)}"; supervisor journal: state=${b.state} http=${b.httpStatus} interruptedByRestart=${b.interruptedByRestart})`);
+}
 function opTrail(evs: Ev[], operationId: string | undefined) {
   return slimC41(evs.filter((e) => operationId && e.data?.operationId === operationId));
 }
@@ -1312,6 +1331,10 @@ async function testC41Browser(proc: "control" | "supervisor") {
   if (sup) {
     const unk = evs.find((e) => e.data?.operationId === opId && (e.data?.opState === "unknown" || e.data?.opState === "failed"));
     t.check(unk, `the controller recorded the navigate's outcome as ${unk?.data?.opState ?? "?"} ("${unk?.title ?? "none"}")`);
+    // O3/N1 (509a832, d3746a2): after the supervisor kill the scripted run continues in a fresh
+    // about:blank session; its only screenshot shows no cited source, so the result is partial.
+    const shot = (end.task.result?.checks ?? []).find((c: any) => c.name === "screenshot-evidence");
+    t.check(end.task.outcome === "RESULT_PARTIAL" && shot?.passed === false, `outcome ${end.task.outcome}: screenshot-evidence ${shot?.passed ? "passed" : "failed"} (${shot?.detail ?? "no check"})`);
   } else {
     const recon = evs.find((e) => e.title === "Reconciled outstanding supervisor operations" && (e.detail ?? "").includes(opId));
     t.check(recon, `recovery reconciled the outstanding operation ${opId} ("${recon?.detail?.split("\n").find((l) => l.includes(opId)) ?? "none"}")`);
@@ -1319,6 +1342,9 @@ async function testC41Browser(proc: "control" | "supervisor") {
     t.check(discarded && discarded.data?.opState === "completed", `the old browser attempt was discarded, not reused ("${discarded?.detail ?? "no event"}")`);
     t.check((end.task.budget?.recoveries ?? 0) >= 1, `recovery counted (task.budget.recoveries = ${end.task.budget?.recoveries})`);
     t.check(end.task.outcome !== "RESULT_VERIFIED" || (end.task.budget?.recoveries ?? 0) >= 1, `outcome ${end.task.outcome} is honest (a verified result only after a counted recovery)`);
+    const shot = (end.task.result?.checks ?? []).find((c: any) => c.name === "screenshot-evidence");
+    t.check(end.task.outcome !== "RESULT_VERIFIED" || shot?.passed === true, `a verified result carries a screenshot of a cited source (${shot?.detail ?? "no check"})`);
+    checkSupervisorRecordInReconciliation(t, evs, opId, await supOp(opId));
   }
   const pivot = sup ? w.hit.seq : (evs.find((e) => e.title === "Recovering task")?.seq ?? Infinity);
   const lateOld = evs.filter((e) => e.seq > pivot && e.kind === "tool" && e.data?.attemptId === oldAttempt && e.data?.opState === "completed");
@@ -1369,6 +1395,7 @@ async function testC41Code() {
   t.check(trail.every((e) => e.opState !== "completed"), `the uncertain code_run ${opId} never completed and was never recorded as a success (trail: ${trail.map((e) => `${e.title}[${e.opState ?? "-"}]`).join(" → ")})`);
   const recon = evs.find((e) => e.title === "Reconciled outstanding supervisor operations" && (e.detail ?? "").includes(opId));
   t.check(recon, `recovery reconciled ${opId}: "${recon?.detail?.split("\n").find((l) => l.includes(opId)) ?? "none"}"`);
+  checkSupervisorRecordInReconciliation(t, evs, opId, await supOp(opId));
   const runsCompleted = evs.filter((e) => e.kind === "exec" && e.data?.tool === "code_run" && e.data?.opState === "completed");
   t.check(runsCompleted.every((e) => e.data?.operationId !== opId && e.data?.attemptId !== oldAttempt), `every completed code_run is a new operation on a fresh attempt (${runsCompleted.map((e) => `${e.data?.operationId}@${e.data?.attemptId}`).join(", ") || "none"})`);
   t.check(runsCompleted.length <= 1, `at most one completed code_run recorded (${runsCompleted.length})`);
@@ -1419,6 +1446,9 @@ async function testC41Takeover() {
   t.check(up.code === 0, `control restarted via dev-up.sh (exit ${up.code}, ${up.ms} ms)`);
   // Before the worker reclaims the task (lease up to 60 s): what the API says and does.
   const ctlGap = await call(cookie, "GET", `/api/tasks/${id}/control`);
+  // O1 (509a832): the restarted process resets a stale human holder at start, before any reclaim.
+  t.check(ctlGap.status === 200 && ctlGap.json?.control?.holder === "agent" && /restarted/.test(String(ctlGap.json?.control?.reason ?? "")), `immediately after the restart (before reclaim) GET /control reports holder=${ctlGap.json?.control?.holder} ("${ctlGap.json?.control?.reason ?? ""}")`);
+  const taskGap = (await getTask(cookie, id)).task;
   const actGap = await call(cookie, "POST", `/api/tasks/${id}/control/action`, { request: { op: "observe" } });
   const clickGap = await call(cookie, "POST", `/api/tasks/${id}/control/action`, { request: { op: "scroll", args: { dy: 50 } } });
   const takeGap = await call(cookie, "POST", `/api/tasks/${id}/control/take`, {});
@@ -1432,6 +1462,7 @@ async function testC41Takeover() {
   const evs = await allEvents(cookie, id);
   const recSeq = evs.find((e) => e.title === "Recovering task")?.seq ?? Infinity;
   const retSeq = evs.find((e) => e.title === "Control returned to the agent" && e.seq > (before.at(-1)?.seq ?? 0))?.seq ?? Infinity;
+  t.check(retSeq < recSeq, `"Control returned to the agent" (#${retSeq}) was recorded at restart, before the reclaim ("Recovering task" #${recSeq})`);
   const firstAgentOp = evs.find((e) => e.seq > recSeq && e.kind === "tool" && e.data?.opState === "started" && String(e.data?.tool ?? "").startsWith("browser_"));
   t.check(retSeq < (firstAgentOp?.seq ?? Infinity), `control returned to the agent (#${retSeq}) before the recovered run's first browser op (#${firstAgentOp?.seq} ${firstAgentOp?.data?.tool})`);
   const postRecBrowser = evs.filter((e) => e.seq > recSeq && e.kind === "tool" && e.data?.opState === "completed" && String(e.data?.tool ?? "").startsWith("browser_"));
@@ -1440,7 +1471,7 @@ async function testC41Takeover() {
   const humanAfter = evs.filter((e) => e.seq > (before.at(-1)?.seq ?? 0) && e.data?.actor === "human" && e.data?.opState === "completed");
   t.check(humanAfter.length === 0, `no human browser op completed after the kill (${humanAfter.length})`);
   t.check(end.task.control === undefined || end.task.control?.holder === "agent", `final Task.control holder = ${end.task.control?.holder ?? "(unset)"}`);
-  t.ev("timeline", { taskId: id, oldAttempt, kill, whileDown, restart: up, controlBefore: ctlBefore?.control, afterRestartBeforeReclaim: { control: { status: ctlGap.status, body: ctlGap.json }, humanObserve: { status: actGap.status, body: actGap.text.slice(0, 300) }, humanScroll: { status: clickGap.status, body: clickGap.text.slice(0, 300) }, take: { status: takeGap.status, body: takeGap.text.slice(0, 300) } }, controlAfterReclaim: ctlAfter });
+  t.ev("timeline", { taskId: id, oldAttempt, kill, whileDown, restart: up, controlBefore: ctlBefore?.control, afterRestartBeforeReclaim: { taskStatus: taskGap.status, control: { status: ctlGap.status, body: ctlGap.json }, humanObserve: { status: actGap.status, body: actGap.text.slice(0, 300) }, humanScroll: { status: clickGap.status, body: clickGap.text.slice(0, 300) }, take: { status: takeGap.status, body: takeGap.text.slice(0, 300) } }, controlAfterReclaim: ctlAfter });
   t.ev("final", { status: end.task.status, outcome: end.task.outcome ?? null, recoveries: end.task.budget?.recoveries ?? 0, cleanup: end.task.cleanup, control: end.task.control ?? null, attempts: end.attempts });
   t.ev("events", slimC41(evs));
   saveRow(t);
@@ -1606,6 +1637,7 @@ async function testC41Download(variant: "read" | "transfer") {
   if (read) {
     t.check(supOpBeforeKill.status === 200, `the kill landed after the supervisor had accepted download.read ${opId} (supervisor journal: ${JSON.stringify(supOpBeforeKill.body)?.slice(0, 200)})`);
     t.check(trail.every((e) => e.opState !== "completed"), `the interrupted download.read ${opId} never completed at the controller (${trail.map((e) => `${e.title}[${e.opState ?? "-"}]`).join(" → ")})`);
+    checkSupervisorRecordInReconciliation(t, evs, opId, await supOp(opId));
   }
   const arts = ((await call(cookie, "GET", `/api/tasks/${id}/artifacts`)).json as any[]) ?? [];
   const downloads = arts.filter((a) => a.kind === "download");

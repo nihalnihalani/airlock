@@ -223,3 +223,63 @@ Everything after the restart is the product's own code: settling, the receipt re
 - **O1: stale control display during the lease gap.** Between the restart and the reclaim (49–58 s, which is the 60 s worker lease), `GET /api/tasks/:id` still says `running`, and `GET /api/tasks/:id/control` still says `holder: "human"` with `live: null`. Every human action is refused (409), so control is never simultaneous. The durable record is reset only when the run re-attaches (`apps/control/src/browser-control.ts:118-121`).
 - **O2: reconciliation does not read the supervisor's operation record.** Recovery marks outstanding ops "(intent): not replayed" without calling the supervisor's `GET /operations/:id`. In C41A, C41B and C41E that record shows the operation **did complete** in the orphaned sandbox (httpStatus 200): in C41B the old `sleep 20` ran to the end (`docker top` while the control plane was down). This is safe, because the result is discarded along with the sandbox and never recorded. But the event could state "completed at the supervisor; result discarded" (`apps/control/src/general-handler.ts:1727-1748`).
 - **O3: the recovery replay and a weak completion check (C41F).** A recovered run replays the scripted diagnostic from turn 1 (the recovery note says "start again"), so re-issued ops are new operations on new attempts. In C41F the script continued after the supervisor kill with observe and screenshot of a fresh `about:blank` session, and still ended `RESULT_VERIFIED`. That happened because `screenshot-evidence` counts any screenshot and `sources-visited` accepted example.com visited in the lost session. This is a scripted-driver artifact, but the checks do not bind the screenshot to a cited source (`apps/control/src/completion-checks.ts:131-144`).
+
+## Full re-run at `a07cf32`: 2026-09-27, verifier_tester
+
+**Revision:** `a07cf3228ef791f5bb1f44aae751df80077edc00` (HEAD). The product changes since the C41 run are:
+- `509a832`: O1, O2 and O3
+- `d3746a2`: N1
+- `f688a6d`: web
+- `3165226`: budget counters and scripted token charging
+
+`runtime/`, `apps/egress`, `apps/supervisor` and `packages/` did not change, so the images from the `033531b` run are still current.
+
+**How it was run:**
+- The stack ran from a fresh `git archive` of `a07cf32` with `bun install`, using `env -i`, throwaway passwords (`verify-*`) and the "How to reproduce" variables. Nothing was copied in except `scripts/acceptance/`.
+- Driver: `bun scripts/acceptance/local.ts A1 B1 K4 C1 T1 T2 T3 T4 T5 T6 K1 K2 K3 K5 D1 M1 K7 C41A C41B C41C C41D C41E C41E2 C41F K6`, from 15:15Z to 15:32Z. T5, T6, M1 and K6 were re-run at 15:33–15:35Z after their expectations were updated (see below).
+- The stack was stopped afterwards and the host left empty (`final-host-listing.txt`).
+
+**Evidence:** `docs/evidence/local/run-a07cf32/` (per-row JSON, `results.json`, both driver logs, `unit/`).
+
+**Scope:** real local runc (dev-unsafe) with scripted drivers only. The Vultr and live-model rows stay **BLOCKED**, as listed above.
+
+### Integration: 25 PASS, 0 FAIL
+
+Every row passed: A1, B1, K4, C1, T1–T6, K1, K2, K3, K5, D1, M1 (A25), K7 (A26), C41A–C41F, C41E2 and K6.
+
+**Lead's questions:**
+- **C41C: control returns to the agent at restart, not only at reclaim.** Immediately after `dev-up.sh`, before the worker reclaimed the task, `GET /control` reports `holder=agent` ("control plane restarted; control returned to the agent"). The "Control returned to the agent" event (#17) comes before "Recovering task" (#20). Human actions in the gap still get 409. Observation O1 is resolved.
+- **C41F now ends `RESULT_PARTIAL`.** `screenshot-evidence` failed with "1 screenshot(s) stored, none of an http(s) page (e.g. about:blank)". Observation O3 is resolved. This is now an explicit check.
+- **O2 is resolved.** In C41A, C41B and C41E, the reconciliation event now carries the supervisor's own operation record: "(intent): not replayed; supervisor: completed (HTTP 200); result discarded, not replayed". It matches `GET /operations/:id`, and the operation is still never replayed. This is now an explicit check.
+
+### Expectations changed because of O3/N1
+
+The screenshot must now show a cited source. I changed only fixture and expectation text, never the product.
+
+- **T5 (A8), T6 (A10) and M1 agent path (A25) now end `RESULT_PARTIAL`, not `RESULT_VERIFIED`.** In each, the agent's only screenshot is of a `chrome-error://chromewebdata/` page:
+  - T5: after the human clicked example.com's outbound link, which the proxy denied.
+  - T6: after the approved submit to the unreachable `forms.example.com` failed.
+  - M1: after the blocked form POST.
+
+  The earlier `RESULT_VERIFIED` was over-generous. The new outcome is correct, and each row now asserts it explicitly with `checkErrorPageScreenshotPartial`.
+- **`acc-c41-slow-nav.json` now cites both pages** (`example.com` and `httpbin.org/delay/8`), because its screenshot is taken on the slow page. With that, C41A ends `RESULT_VERIFIED` after a counted recovery, with the check "screenshot shows a cited source: httpbin.org/delay/8". C41F ends `RESULT_PARTIAL` as described above.
+
+Every other row's outcome is unchanged from `run-c39340c`.
+
+### Unit suites at `a07cf32`: all PASS
+
+All suites ran from the fresh export with `env -i` (`unit/`):
+
+| Suite | Result |
+|---|---|
+| apps/control | 398 pass / 0 fail |
+| apps/supervisor (real Docker) | 207 pass / 0 fail |
+| apps/web | 132 pass / 0 fail |
+| apps/egress | 35 pass / 0 fail |
+| apps/fixtures | 41 pass / 0 fail |
+| scripts | 11 pass / 0 fail |
+| runtime/browser | 27 pass / 0 fail |
+| pytest | 134 passed, 3 skipped |
+| typecheck | clean |
+
+`browser-node.log` records the correct invocation, `node --test runtime/browser/test/*.test.mjs`. My first attempt passed the directory instead, which is a harness error: it matched no tests.
