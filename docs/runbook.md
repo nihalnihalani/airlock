@@ -65,7 +65,7 @@ Production refuses dev-unsafe hosts, runc, and unpinned images on both planes. R
 | Human takeover and approvals | verified on Vultr (approval confirmed by the destination's receipt) | acceptance-f223c19 |
 | Runtime tier measured (Kata on VX1) | verified: preflight 49/49 | docs/evidence/vultr/preflight-*.txt |
 | Live Vultr inference (repair, general, vision) | verified (glm-5.3; vision probe) | docs/evidence/live |
-| Public demo URL on this revision | https://155-138-198-12.sslip.io (revision dfbba65) | deploy logs, acceptance |
+| Public demo URL on this revision | https://155-138-198-12.sslip.io (revision ee94b83; acceptance at f223c19, demo at dfbba65) | deploy logs, acceptance |
 | Demo video (useful work + containment + teardown) | done: Vultr recording (live model, Kata) and the local labelled recording | [docs/demo/vultr-demo.mp4](demo/vultr-demo.mp4), [docs/demo/README.md](demo/README.md) |
 | Independent review | verifier: local acceptance, C41 crash/restart 7/7; devil's advocate: R1, S1–S4, L1, N1 closed; L2, L3, N2 documented limitations | [acceptance-matrix.md](acceptance-matrix.md), ledger |
 | NetBird bonus | not attempted (optional) | — |
