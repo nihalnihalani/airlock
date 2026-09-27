@@ -16,13 +16,17 @@ import { Hono, type Context } from "hono";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 import {
+  ApprovalDecision,
   CreateTaskRequest,
+  HumanBrowserAction,
   PreviewRequest,
   canonicalJson,
   sha256,
   type AdapterRequest,
   type Artifact,
   type BlastRadiusCard,
+  type BrowserAnyOp,
+  type BrowserOpResult,
   type CandidateBundle,
   type ExportGrant,
   type ExportSeal,
@@ -38,6 +42,8 @@ import {
 } from "@airlock/contracts";
 import { ArtifactError, ArtifactService, OWNER_QUOTA_BYTES, OWNER_QUOTA_FILES, UPLOAD_MAX_BYTES, dispositionFor, inlineAllowed } from "./artifact-service.ts";
 import type { AvailabilityService, DiagnosticScript } from "./availability.ts";
+import { ControlError, type ControlService } from "./browser-control.ts";
+import { decideProposal, listProposals } from "./proposals.ts";
 import { buildGeneralBundle, type GeneralExportGrant, type GeneralExportSeal } from "./general-export.ts";
 import { STORE_KIND_GENERAL_CODE } from "./general-handler.ts";
 import { TASK_PROFILES, publicTaskProfile, validateEgressAllow, type TaskProfile } from "./task-profiles.ts";
@@ -126,6 +132,30 @@ export interface ApiDeps {
   now?: () => number;
   /** SSE poll interval (ms) as a safety net behind the bus. */
   ssePollMs?: number;
+  /** Exclusive browser control, live view and approvals (shared with the general handler). */
+  control?: ControlService;
+}
+
+/** A human action: contracts HumanBrowserAction, or a file operation naming the caller's artifact (never bytes or paths). */
+const HumanActionBody = z.union([
+  HumanBrowserAction,
+  z
+    .object({
+      request: z.discriminatedUnion("op", [
+        z.object({ op: z.literal("download.list"), args: z.object({}).strict().optional() }),
+        z.object({ op: z.literal("download.read"), args: z.object({ downloadId: z.string().regex(/^dl-[0-9]{1,6}$/) }).strict() }),
+        z.object({ op: z.literal("upload"), args: z.object({ ref: z.string().regex(/^[a-z0-9]{1,16}$/i), generation: z.number().int().nonnegative(), artifactId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/) }).strict() }),
+      ]),
+    })
+    .strict(),
+]);
+
+/** The runner's reply for the UI: image and file bytes are replaced by the stored artifact. */
+function redactBrowserResult(raw: BrowserOpResult): BrowserOpResult {
+  const response = raw.response;
+  if (!response || !response.ok || !response.result || typeof response.result !== "object") return raw;
+  const { png: _png, contentBase64: _content, ...rest } = response.result as Record<string, unknown>;
+  return { ...raw, response: { ...response, result: rest } };
 }
 
 type Env = { Variables: { session: SessionRecord | null; role: Role; token: string | null } };
@@ -189,6 +219,7 @@ export function createApp(deps: ApiDeps) {
   app.onError((error, c) => {
     if (error instanceof AppError) return c.json({ error: error.message }, error.status);
     if (error instanceof ArtifactError) return c.json({ error: error.message }, error.status);
+    if (error instanceof ControlError) return c.json({ error: error.message }, error.status);
     if (error instanceof z.ZodError) return c.json({ error: `invalid body: ${error.issues.map((i) => `${i.path.join(".")} ${i.message}`).join("; ").slice(0, 500)}` }, 400);
     if (error instanceof LoginRateLimited) return c.json({ error: error.message }, 429);
     if (error instanceof ExportIntegrityError) {
@@ -678,6 +709,110 @@ export function createApp(deps: ApiDeps) {
     const event = await deps.store.appendEvent(owner, task.id, { id: `evt-${randomBytes(8).toString("hex")}`, at, kind: "lifecycle", title: next.status === "cancelled" ? "Task cancelled before it started" : "Cancellation requested", detail: `by ${session.role}` });
     deps.bus.publish(event);
     return c.json(next);
+  });
+
+  // ---- human control, live view, supported final actions (40 Stage 5; audit 42 C22–C27) ------------
+  // Owner or operator (authorizeTask), general browser tasks only, while the task runs in this
+  // process. A human action keeps the task's egress policy, deadline and budgets and is never an
+  // approval; there is no debugger/CDP endpoint.
+  const controlService = (): ControlService => {
+    if (!deps.control) throw new AppError("human control is not available on this control plane", 409);
+    return deps.control;
+  };
+  const authorizeBrowserTask = async (c: Context<Env>) => {
+    const ctx = await authorizeTask(c);
+    if (ctx.task.kind !== "general" || !taskProfiles.get(ctx.task.profileId)?.browser) throw new AppError("only general tasks with a browser support human control", 422);
+    return ctx;
+  };
+  const requireRunning = (task: Task) => {
+    if (task.status !== "running") throw new AppError(`the task is ${task.status}; this needs a running task`, 409);
+  };
+  app.get("/api/tasks/:id/control", async (c) => {
+    const { task } = await authorizeBrowserTask(c);
+    return c.json({ control: task.control ?? { holder: "agent", since: task.updatedAt }, live: deps.control?.state(task.id) ?? null, idleMs: deps.control?.idleMs ?? null });
+  });
+  app.post("/api/tasks/:id/control/take", async (c) => {
+    const { session, task } = await authorizeBrowserTask(c);
+    requireRunning(task);
+    return c.json(await controlService().take(task.id, { owner: session.owner, role: session.role }));
+  });
+  app.post("/api/tasks/:id/control/release", async (c) => {
+    const { session, task } = await authorizeBrowserTask(c);
+    return c.json(await controlService().release(task.id, { owner: session.owner, role: session.role }));
+  });
+  app.post("/api/tasks/:id/control/action", async (c) => {
+    const { session, task } = await authorizeBrowserTask(c);
+    requireRunning(task);
+    const body = await readJson(c, HumanActionBody);
+    let request: BrowserAnyOp;
+    let tool: string;
+    if (body.request.op === "upload") {
+      // Only the caller's own artifacts can be uploaded, as their exact recorded bytes.
+      const args = body.request.args;
+      const found = await artifactService.find(args.artifactId);
+      if (!found || found.owner !== session.owner) throw new AppError("artifact not found among your files", 404);
+      if (found.artifact.byteLength > UPLOAD_MAX_BYTES) throw new AppError("artifact too large to upload", 413);
+      const bytes = await artifactService.bytes(found.artifact);
+      const filename = found.artifact.filename.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^[^A-Za-z0-9]+/, "").slice(0, 128) || "upload.bin";
+      request = { op: "upload", args: { ref: args.ref, generation: args.generation, filename, artifactSha256: found.artifact.sha256, contentBase64: Buffer.from(bytes).toString("base64") } };
+      tool = "human_upload";
+    } else {
+      request = body.request as BrowserAnyOp;
+      tool = `human_${request.op.replace(/[^a-z]+/g, "_")}`;
+    }
+    const outcome = await controlService().humanAction(task.id, { owner: session.owner }, request, request.op === "screenshot" ? "human_screenshot" : tool);
+    if (!outcome.ok && !outcome.raw) return c.json({ ok: false, error: outcome.error, detail: outcome.payload }, 422);
+    return c.json({ ok: outcome.ok, ...(outcome.ok ? {} : { error: outcome.error }), ...(outcome.ok && outcome.artifactId ? { artifactId: outcome.artifactId } : {}), result: redactBrowserResult(outcome.raw!) });
+  });
+
+  app.get("/api/tasks/:id/live", async (c) => {
+    const { owner, task } = await authorizeBrowserTask(c);
+    const frames = (await artifactService.listForTask(owner, task)).filter((a) => a.kind === "screenshot");
+    const latest = frames.at(-1);
+    return c.json({
+      frame: latest ? { artifactId: latest.id, url: `/api/tasks/${task.id}/artifacts/${latest.id}`, sourceUrl: latest.source?.url ?? null, tool: latest.source?.tool ?? null, createdAt: latest.createdAt, sha256: latest.sha256, byteLength: latest.byteLength } : null,
+      frames: frames.length,
+      control: task.control ?? { holder: "agent", since: task.updatedAt },
+      liveBrowser: deps.control?.state(task.id)?.liveBrowser ?? false,
+      refreshMinIntervalMs: deps.control?.refreshMinIntervalMs ?? null,
+    });
+  });
+  app.post("/api/tasks/:id/live/refresh", async (c) => {
+    const { task } = await authorizeBrowserTask(c);
+    requireRunning(task);
+    const outcome = await controlService().liveRefresh(task.id);
+    if (!outcome.ok) return c.json({ ok: false, error: outcome.error }, outcome.raw ? 502 : 409);
+    return c.json({ ok: true, artifactId: outcome.artifactId, url: `/api/tasks/${task.id}/artifacts/${outcome.artifactId}` });
+  });
+
+  app.get("/api/tasks/:id/approvals", async (c) => {
+    const { owner, task } = await authorizeBrowserTask(c);
+    return c.json(await listProposals(deps.store, owner, task.id));
+  });
+  app.post("/api/tasks/:id/approvals/:aid/decide", async (c) => {
+    const { session, owner, task } = await authorizeBrowserTask(c);
+    const aid = c.req.param("aid") ?? "";
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(aid)) throw new AppError("invalid proposal id", 400);
+    const body = await readJson(c, ApprovalDecision);
+    // Only a running task can carry an approval out (its run expires open proposals when it ends).
+    if (task.status !== "running") {
+      const existing = (await listProposals(deps.store, owner, task.id)).find((p) => p.id === aid);
+      if (!existing) throw new AppError("proposal not found", 404);
+      throw new AppError(existing.status === "expired" ? "the proposal expired" : `the task is ${task.status}; the proposal can no longer be decided`, existing.status === "expired" ? 410 : 409);
+    }
+    const result = await decideProposal(deps.store, { owner, taskId: task.id, proposalId: aid, decision: body.decision, payloadDigest: body.payloadDigest, decidedBy: session.owner, now: now() });
+    if (!result.ok) throw new AppError(result.error, result.status);
+    deps.control?.notify(task.id);
+    const event = await deps.store.appendEvent(owner, task.id, {
+      id: `evt-${randomBytes(8).toString("hex")}`,
+      at: iso(),
+      kind: "lifecycle",
+      title: body.decision === "approve" ? "Proposal approved" : "Proposal rejected",
+      detail: `${result.proposal.formId} on ${result.proposal.destination} by ${session.role}; payload digest ${result.proposal.payloadDigest}`,
+      data: { proposalId: aid, status: result.proposal.status, decidedBy: session.owner, payloadDigest: result.proposal.payloadDigest },
+    });
+    deps.bus.publish(event);
+    return c.json(result.proposal);
   });
 
   // Preview is owner-or-operator like every task route. It writes nothing and is bound to the sealed

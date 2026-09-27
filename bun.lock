@@ -19,6 +19,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@airlock/contracts": "workspace:*",
+        "@airlock/fixtures": "workspace:*",
         "@electric-sql/pglite": "^0.3.4",
         "hono": "^4.10.0",
         "zod": "^3.23.8",

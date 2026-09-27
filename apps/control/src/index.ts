@@ -8,6 +8,7 @@ import type { Task } from "@airlock/contracts";
 import { createApp } from "./api.ts";
 import { ArtifactService } from "./artifact-service.ts";
 import { RepairAvailabilityService, describeDiagnostics, type DiagnosticScript } from "./availability.ts";
+import { ControlService } from "./browser-control.ts";
 import { ArtifactStore, buildManifest, exportBundle, validateEnvelope, zipFiles } from "./artifacts/index.ts";
 import { inferenceFetch, loadConfig, redactConfig, ConfigError } from "./config.ts";
 import { TaskEventBus } from "./events.ts";
@@ -67,9 +68,10 @@ async function main() {
     config.driver.kind === "vultr"
       ? createVultrDriver({ apiKey: config.vultr.apiKey ?? "", baseUrl: config.vultr.baseUrl, model: config.vultr.model, fetch: inferenceFetch(config.vultr.baseUrl) })
       : null;
-  const driverCatalog: ScriptedCatalog | null = config.driver.kind === "scripted" ? await openScriptedCatalog(config.driver.scriptPath) : null;
-  const diagnosticCatalog: ScriptedCatalog | null = config.diagnosticScriptsDir ? await openScriptedCatalog(config.diagnosticScriptsDir) : null;
-  const generalCatalog: ScriptedCatalog | null = config.generalDiagnosticScriptsDir ? await openScriptedCatalog(config.generalDiagnosticScriptsDir) : null;
+  const scriptVars = { fixturesOrigin: config.fixturesOrigin };
+  const driverCatalog: ScriptedCatalog | null = config.driver.kind === "scripted" ? await openScriptedCatalog(config.driver.scriptPath, scriptVars) : null;
+  const diagnosticCatalog: ScriptedCatalog | null = config.diagnosticScriptsDir ? await openScriptedCatalog(config.diagnosticScriptsDir, scriptVars) : null;
+  const generalCatalog: ScriptedCatalog | null = config.generalDiagnosticScriptsDir ? await openScriptedCatalog(config.generalDiagnosticScriptsDir, scriptVars) : null;
   const catalogFor = (name: string): ScriptedCatalog | null =>
     diagnosticCatalog?.names.includes(name) ? diagnosticCatalog : generalCatalog?.names.includes(name) ? generalCatalog : driverCatalog?.names.includes(name) ? driverCatalog : null;
   const scriptedDrivers = [...new Set([...(diagnosticCatalog?.names ?? []), ...(generalCatalog?.names ?? []), ...(driverCatalog?.names ?? [])])].sort();
@@ -126,7 +128,15 @@ async function main() {
   });
   // General tasks (kind "general") run the general handler at the same worker seam; repair is unchanged.
   const artifactService = new ArtifactService(store, artifacts);
+  // Exclusive browser control, live view and approvals: one service shared by the handler and the API.
+  const control = new ControlService({ store, bus, idleMs: config.controlIdleMs, settleTimeoutMs: config.controlSettleMs });
+  const forms = config.formsOrigins.length > 0 && config.formsSecret ? { origins: config.formsOrigins, secret: config.formsSecret } : null;
+  if (forms) log.info("supported final actions: airlock-forms-v1 destinations", { origins: forms.origins });
+  else log.info("no AIRLOCK_FORMS_ORIGINS: browser_propose_submit is refused (no supported final-action destination)");
   const generalHandler = createGeneralHandler({
+    control,
+    forms,
+    proposalTtlMs: config.proposalTtlMs,
     supervisor,
     driver,
     store,
@@ -170,6 +180,7 @@ async function main() {
     webDist: config.webDist,
     trustedProxies: config.trustedProxies,
     production: config.production,
+    control,
   });
   if (config.trustedProxies.length > 0)
     log.info("AIRLOCK_TRUST_PROXY: the login rate limit keys on the reverse proxy's X-Forwarded-For hop for requests arriving from these peers; other peers are keyed on their own address", { trustedProxies: config.trustedProxies });

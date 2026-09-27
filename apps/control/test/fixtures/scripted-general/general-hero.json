@@ -1,8 +1,8 @@
 {
   "title": "General hero (scripted diagnostic): web page -> analysis -> chart",
-  "description": "DIAGNOSTIC fixture, not a model run: a scripted driver for the web-analysis profile. It opens the hosted fixture page (regional-sales.html in this directory, served at the URL below; create the task with egressAllow [\"airlock-fixtures.example.com\"] or edit the URL to where you host it), observes it, stores a screenshot, saves the page text as inputs/regions.csv, writes and runs the labelled analysis.py, and submits outputs/summary.json + outputs/chart.png. Every model event is labelled scripted.",
+  "description": "DIAGNOSTIC fixture, not a model run: a scripted driver for the web-analysis profile. It opens the hosted fixture page /data/regional-sales on the Airlock fixtures service (apps/fixtures; {{AIRLOCK_FIXTURES_ORIGIN}} is replaced with AIRLOCK_FIXTURES_ORIGIN, default https://airlock-fixtures.example.com; create the task with egressAllow set to that host), observes it, stores a screenshot, saves the page text as inputs/regions.csv, writes and runs the labelled analysis.py, and submits outputs/summary.json + outputs/chart.png. Every model event is labelled scripted.",
   "turns": [
-    { "text": "Opening the data page.", "toolCalls": [{ "name": "browser_navigate", "args": { "url": "https://airlock-fixtures.example.com/regional-sales.html" } }] },
+    { "text": "Opening the data page.", "toolCalls": [{ "name": "browser_navigate", "args": { "url": "{{AIRLOCK_FIXTURES_ORIGIN}}/data/regional-sales" } }] },
     { "text": "Reading the page.", "toolCalls": [{ "name": "browser_observe", "args": {} }] },
     { "text": "Capturing the page as evidence and handing its text to the code sandbox.", "toolCalls": [{ "name": "browser_screenshot", "args": {} }, { "name": "browser_save_text", "args": { "filename": "regions.csv" } }] },
     { "text": "Writing the analysis.", "toolCalls": [{ "name": "code_write", "args": { "path": "code/analysis.py", "contentFile": "analysis.py" } }] },
@@ -15,7 +15,7 @@
           "args": {
             "summary": "Scripted diagnostic: the region with the lowest revenue/target ratio on the fixture page, with a chart.",
             "outputs": ["outputs/summary.json", "outputs/chart.png"],
-            "sources": ["https://airlock-fixtures.example.com/regional-sales.html"]
+            "sources": ["{{AIRLOCK_FIXTURES_ORIGIN}}/data/regional-sales"]
           }
         }
       ]

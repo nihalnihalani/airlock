@@ -12,7 +12,7 @@ import type {
   AuthorToolResult,
   BlastRadiusCard,
   BrowserEvidence,
-  BrowserOp,
+  BrowserAnyOp,
   BrowserOpResult,
   BrowserResponse,
   CandidateBundle,
@@ -151,12 +151,14 @@ export interface FakeSupervisorOptions {
   /** Pages the simulated browser runner serves (browser role). */
   pages?: Record<string, FakePage>;
   /** Scripted browser replies: return a result to override the simulated runner, or undefined to fall through. */
-  browserOp?: (attempt: FakeAttempt, request: BrowserOp, callIndex: number) => BrowserOpResult | undefined | Promise<BrowserOpResult | undefined>;
+  browserOp?: (attempt: FakeAttempt, request: BrowserAnyOp, callIndex: number) => BrowserOpResult | undefined | Promise<BrowserOpResult | undefined>;
   /** Collect-outputs: extra collector rejections, and whether the stop is confirmed (default true). */
   collectRejected?: (attempt: FakeAttempt) => { path: string; reason: string }[];
   collectStopConfirmed?: boolean;
   /** Make destroy fail (docker error) for matching attempts; the attempt stays live. */
   destroyFails?: (attempt: FakeAttempt) => boolean;
+  /** Refuse createAttempt for a role the way the real supervisor does (status + machine-readable code). */
+  createRefusal?: (role: SandboxRole) => { status: number; code: string; message: string } | undefined;
   /** Browser evidence override (e.g. a --no-sandbox Chromium). */
   browserEvidence?: Partial<BrowserEvidence["status"]["sandbox"]>;
 }
@@ -175,7 +177,7 @@ export class FakeSupervisor implements SupervisorClient {
   /** Every mutating call in dispatch order, with the operation id its caller journaled. */
   readonly operations: { kind: string; operationId: string; attemptId?: string }[] = [];
   /** Every browser runner request, in order. */
-  readonly browserRequests: { attemptId: string; request: BrowserOp }[] = [];
+  readonly browserRequests: { attemptId: string; request: BrowserAnyOp }[] = [];
   readonly collected: string[] = [];
   private operationCounter = 0;
   hostCheck: HostCheck;
@@ -217,6 +219,12 @@ export class FakeSupervisor implements SupervisorClient {
   async createAttempt(input: { ref: AttemptRef; profileId: string; role: SandboxRole; absoluteDeadline: string; authorizedUntil?: string; egressAllow?: string[] }, opts?: CallOptions): Promise<AttemptState> {
     await this.dispatch("createAttempt", input, opts, input.ref.attemptId);
     this.createdAttempts.push({ attemptId: input.ref.attemptId, absoluteDeadline: input.absoluteDeadline, ...(input.authorizedUntil ? { authorizedUntil: input.authorizedUntil } : {}) });
+    const refusal = this.options.createRefusal?.(input.role);
+    if (refusal) {
+      const error = refusal.status === 409 ? new SupervisorFenceError(`supervisor 409: ${refusal.message}`) : new SupervisorError(`supervisor ${refusal.status}: ${refusal.message}`, refusal.status);
+      error.code = refusal.code;
+      throw error;
+    }
     const general = input.role === "browser" || input.role === "analysis" || input.role === "node";
     if (general ? input.profileId !== input.role : input.profileId !== this.options.profile.manifest.id) throw new SupervisorFenceError("unknown profile");
     if (input.egressAllow && input.role !== "browser") throw new SupervisorError("egressAllow is for browser attempts only", 400);
@@ -315,7 +323,7 @@ export class FakeSupervisor implements SupervisorClient {
     return { teardown: cleanTeardown(this.options.teardownHost?.()), ...(attempt.browser ? { egressSummary: { allowed: attempt.browser.allowed, denied: attempt.browser.denied } } : {}) };
   }
 
-  async browserOp(input: { ref: AttemptRef; request: BrowserOp }, opts?: CallOptions): Promise<BrowserOpResult> {
+  async browserOp(input: { ref: AttemptRef; request: BrowserAnyOp }, opts?: CallOptions): Promise<BrowserOpResult> {
     await this.dispatch("browserOp", input, opts, input.ref.attemptId);
     const attempt = this.fence(input.ref);
     this.authorized(attempt);

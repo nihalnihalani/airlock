@@ -25,6 +25,10 @@ bunx tsc --noEmit -p tsconfig.json  # from apps/control
 | `AIRLOCK_DIAGNOSTIC_SCRIPTS_DIR` | no | unset (dev-up: `apps/control/test/fixtures/scripted`) | Directory of labelled diagnostic scripts (`<name>.json`, optional `title`/`description`) that an operator or judge may launch with `scriptedDriver` **whatever the model driver**. Such tasks carry `task.scriptedDriver`, are labelled diagnostic in their events, and never count as model repairs. |
 | `AIRLOCK_GENERAL_DIAGNOSTIC_SCRIPTS_DIR` | no | unset | Labelled scripted diagnostics for **general** tasks (e.g. `apps/control/test/fixtures/scripted-general`), merged into the diagnostics catalog; a general task selects one with `scriptedDriver`. Never a model run. |
 | `AIRLOCK_MODEL_VISION` | no | unset | `1` marks the configured model as vision-capable: general tasks attach each screenshot (PNG) to the next model turn as an `image_url` content part. Set it only after `bun scripts/probe-model.ts --vision <model>` passed (an actual image round trip). Unset: no image is ever sent. |
+| `AIRLOCK_FORMS_ORIGINS` | no | unset | Comma-separated origins (`https://host[:port]`) of **supported final-action destinations**: services implementing the `airlock-forms-v1` adapter (apps/fixtures). Only forms there can be submitted, only through `browser_propose_submit` and a person's approval. Unset: every final action is unsupported. |
+| `AIRLOCK_FORMS_SECRET` | with `AIRLOCK_FORMS_ORIGINS` | — | ≥ 32 chars, shared with the destination. The control plane mints one-use approval codes and the receipts read token from it; never logged, never in an event, never shown to the model or a page before approval. |
+| `AIRLOCK_FIXTURES_ORIGIN` | no | unset | Public origin of the fixtures service; replaces `{{AIRLOCK_FIXTURES_ORIGIN}}` in scripted diagnostics (default `https://airlock-fixtures.example.com`). |
+| `AIRLOCK_CONTROL_IDLE_MS` / `AIRLOCK_CONTROL_SETTLE_MS` / `AIRLOCK_PROPOSAL_TTL_MS` | no | 5 min / 10 s / 15 min | Human control returns to the agent after this long without a human action; how long a take waits for the in-flight browser op; lifetime of an action proposal and its approval code. |
 | `AIRLOCK_LIVE_GATE_EVIDENCE_DIR` | no | `<repo>/docs/evidence/live-gate` | Committed `LiveGateReceipt` files. See *Repair availability*. |
 | `AIRLOCK_INSTANCE_ID` | no | unset | Vultr instance id of this VM, reported by `GET /api/repair-availability` beside the execution host's. |
 | `AIRLOCK_MODEL` | with `vultr` | — | Model name chosen by the measured tool-call probe. |
@@ -93,6 +97,14 @@ script; `'unsafe-inline'` for styles covers the `<style>` element Radix injects 
 | `GET /api/artifacts/:id` | owner or operator | Bytes of one artifact (404 for anyone else). Re-hashed on read; `content-type` = the stored type, `x-content-type-options: nosniff`, `cache-control: private, no-store`, `x-airlock-sha256`, and a stricter `content-security-policy` (`default-src 'none'; … sandbox`). `inline` disposition only for PNG/JPEG (`?download=1` forces attachment); everything else `attachment`. |
 | `GET /api/tasks/:id/artifacts` → `Artifact[]` | owner or operator | The task's inputs, screenshots, saved page text (`download`) and collected outputs, with provenance (`source.url/step/tool/attemptId`). |
 | `GET /api/tasks/:id/artifacts/:artifactId` | owner or operator | The same bytes, scoped to the task. |
+| `GET /api/tasks/:id/control` → `{control, live, idleMs}` | owner or operator | General browser tasks. `control` is `Task.control` (`holder` agent/human/transferring, `humanOwner`, `since`, `fenceGeneration`, `reason`); `live` adds `epoch`, `liveBrowser`, `idleExpiresAt` while the run is attached. |
+| `POST /api/tasks/:id/control/take` → `ControlState` | owner or operator | Running general browser task. `transferring` → agent dispatch revoked → waits ≤ `AIRLOCK_CONTROL_SETTLE_MS` for the in-flight op → `human` (caller's session owner, fence = current browser generation). Not settled: **409**, stays `transferring` (never dual control) until retried, released or idle-expired. Another session holding: 409. |
+| `POST /api/tasks/:id/control/release` → `ControlState` | holder or operator | Back to `agent`; the agent must `browser_observe` before any ref-bound action. |
+| `POST /api/tasks/:id/control/action {request}` → `{ok, artifactId?, result: BrowserOpResult}` | the human holder | `request` is a contracts `BrowserOp` (`HumanBrowserAction`) or `download.list` / `download.read {downloadId}` / `upload {ref, generation, artifactId}` (the caller's own artifact, sent as its recorded bytes). Same egress policy (422 before dispatch), deadline and browser-op budget as the agent; journaled through the supervisor; screenshots and downloads become artifacts (bytes stripped from `result`). Not the holder: 409. Never an approval. |
+| `GET /api/tasks/:id/live` → `{frame, frames, control, liveBrowser, refreshMinIntervalMs}` | owner or operator | The newest screenshot artifact of the task (`frame.url` serves it). New frames are announced on the event stream (`artifact` events with `data.frame: true`). No debugger/CDP endpoint exists. |
+| `POST /api/tasks/:id/live/refresh` → `{artifactId, url}` | owner or operator | A fresh read-only screenshot through the supervisor, serialized with the other browser ops, allowed whoever holds control, never starts a browser (409 without one); 1 per 2 s per task (429). Not counted against the agent's budget; not screenshot evidence. |
+| `GET /api/tasks/:id/approvals` → `ActionProposal[]` | owner or operator | The task's proposals with status and receipt. |
+| `POST /api/tasks/:id/approvals/:aid/decide {decision, payloadDigest}` → `ActionProposal` | owner or operator | Running task. `payloadDigest` must restate the proposal's digest (409 otherwise); one-use compare-and-swap `pending → approved/rejected` (a second decision: 409); expired: 410; another owner's task or an unknown id: 404. |
 | `POST /api/hostile {command, profileId?}` → `BlastRadiusCard` | judge | One per 10 s per client key, one per 3 s overall, one at a time (429; the per-client memory is bounded by evicting expired, then least recently used keys, never by clearing it). The control plane fills `survived.controlPlane {healthyBefore, healthyAfter, checkedAt}`: a store query plus the worker heartbeat record being fresh (≤ 15 s), checked right before and after the supervisor call. `survived.siblings` and `teardown.host` entries that are not the caller's own tasks keep role, state and counts but read `taskId: "other"`, `"other-task container"` / `"other-task volume"` (operators see them unredacted). Host listings stored in verification records and teardown events are redacted the same way to the task's own entries. |
 
 ## Repair availability
@@ -172,7 +184,7 @@ network policy and checks):
 | Profile | Sandboxes | Tools | Checks | Uploads |
 |---|---|---|---|---|
 | `analysis` | code (`analysis` Python image, or `node`) | code_write, code_run, code_read, files_list, submit_result | outputs-claimed, outputs-valid, required-outputs, summary-schema | yes |
-| `web-research` | browser (task `egressAllow`) | browser_navigate/observe/click/type/key/scroll/screenshot/tabs, submit_result | screenshot-evidence, sources-cited, sources-visited, sources-in-policy | no |
+| `web-research` | browser (task `egressAllow`) | browser_navigate/observe/click/type/key/scroll/screenshot/tabs, browser_download_list/save, browser_propose_submit, submit_result | screenshot-evidence, sources-cited, sources-visited, sources-in-policy | no |
 | `web-analysis` | browser + code | all of the above + browser_save_text, files_list | all eight; `outputs/summary.json` required | yes |
 
 Budgets per profile: model calls, tokens (M3 reserve/settle), wall clock (persisted across
@@ -186,11 +198,16 @@ code attempt lazily (`analysis` for Python, `node` for Node; one per task), `put
 under `inputs/` (digest-checked) and then write/run under `code/`; `code_run` executes
 `/opt/airlock/run.sh code/<file>` (the image's fixed runner), never a model command line.
 `browser_save_text` copies the latest observation's text (≤ 32 KiB) into `inputs/<name>` as a
-`download` artifact: the only thing that crosses from the browser to code, done by the controller.
+`page_text` artifact; `browser_download_list` lists the browser's downloads (untrusted names) and
+`browser_download_save {downloadId, name}` reads one (`download.read`; bytes re-checked against size
+and sha256), stores it as a `download` artifact with its source URL and `put`s it at `inputs/<name>`
+(now if the code sandbox runs, else when it starts). These are the only things that cross from the
+browser to code, done by the controller. A task may hold one live browser attempt and one live code
+attempt at once (the supervisor allows one per role family).
 `browser_screenshot` validates the PNG and its sha256, stores it as a `screenshot` artifact
 (`source.url/step/tool/attemptId`) and, with `AIRLOCK_MODEL_VISION=1`, attaches it to the next turn
 (only the newest image stays in the history). `stale_reference` and `pending_review` come back as
-observations (no human review yet: the model is told to continue without the action or submit).
+observations (dialogs are never accepted: the model is told to continue without the action or submit).
 A browser op that ends `interrupted` (or whose supervisor call did not complete) is never replayed:
 the browser attempt is torn down, counted (`general-usage.browserInterruptions`), and the next
 browser tool starts a fresh session within the session budget.
@@ -206,15 +223,22 @@ every cited URL reached by this task's own browser per its events; every cited h
 `RESULT_PARTIAL`; nothing acceptable → `RESULT_FAILED`; declared missing capability (or only
 unavailable tools and nothing produced) → `UNSUPPORTED`; budget/wall clock/repeated identical
 failure (3×) → `STOPPED_LIMIT`; driver failures, unconfirmed stop, malformed envelope or an
-infrastructure error → `INCONCLUSIVE`. `Task.result` carries the checks with detail.
+infrastructure error → `INCONCLUSIVE`. A sandbox the supervisor refused (create 4xx/409, or a failed
+inspection/probe) is an infrastructure outcome, never `RESULT_FAILED`: when no acceptable result
+exists the task ends `UNSUPPORTED` if the role is not configured on this deployment (400
+`unsupported_profile`) and `INCONCLUSIVE` otherwise; after a definitive refusal
+(`unsupported_profile`, `probe_failed`, `inspection_failed`) that role is not requested again in
+the task and its tools answer "not retried" (the attempt counts against the session budget).
+`Task.result` carries the checks with detail.
 
-**State dimensions (C35/C36).** Workflow = `status`/`phase` (general runs record `prepare → repair`
-(the model loop; the contract Phase enum has no "execute") `→ freeze → verify → ready`); result =
+**State dimensions (C35/C36).** Workflow = `status`/`phase` (general runs record `prepare → execute`
+(the model loop) `→ freeze → verify → ready`); result =
 `outcome` + `result`; cleanup = `Task.cleanup` (`none` → `pending` while any attempt lives →
 `confirmed` only after every attempt's destroy returned a clean teardown; `failed`, or `retrying`
 while a cancel pass retries). The repair handler maintains `cleanup` the same way. Every tool event
-carries `data.opState` (`started` before dispatch with its `operationId`, then `completed`,
-`failed` or `unknown`); `completed` is written only from the supervisor's answer.
+carries `data.opState` (`allowed` when a policy check passed, `started` before dispatch with its
+`operationId`, then `completed`, `failed` or `unknown`); `completed` is written only from the
+supervisor's answer. The prepare event records the supervisor host check (`data.host`).
 
 **Records.** `task-attempts` (one row per attempt: role, generation, live/destroyed/teardown-failed;
 the cancel pass and recoveries tear down from these), `general-usage` (browser ops, code runs,
@@ -227,6 +251,67 @@ recovery and restarts the model loop with a note; nothing uncertain is replayed.
 `/attempts/:id/tool` (`put` under `inputs/`, `read`, `write`, `exec`), `/attempts/:id/browser`,
 `/attempts/:id/collect-outputs`, `/renew`, `/revoke`, `/destroy`; reads `GET /attempts/:id/browser`
 (evidence, recorded on the lifecycle event) and `/attempts/:id/egress` (recorded before teardown).
+
+## Human control, live view and supported final actions (doc 40 Stage 5)
+
+**Exclusive control** (`src/browser-control.ts`, one `ControlService` per process shared by the
+handler and the API). A running general task's handler attaches its browser executor; the agent's
+browser ops, a human holder's actions, live-view frames and the controller's approved submission
+all run through one per-task lock, so the supervisor sees one serial stream.
+
+```
+agent ──take──▶ transferring ──(in-flight op settled ≤ settle timeout)──▶ human
+                     └─ not settled: take 409, stays transferring (nobody dispatches) until a retried
+                        take, a release or the idle expiry
+human ──release / idle (no action for AIRLOCK_CONTROL_IDLE_MS) / run ended──▶ agent
+```
+
+While the holder is not the agent, the agent's next browser op waits (bounded by the task's wall
+clock, which keeps running) and never dispatches; a `lifecycle` event says the agent is paused.
+Every grant bumps a control epoch: after release a ref-bound agent action (click/type/key/upload)
+is refused as `stale_reference` with "control returned; observe first" until the agent observes, and
+the next tool result carries that note (`control_note`). Human actions keep egress policy,
+deadline and budgets, are journaled, and are recorded as `tool` events with `data.actor: "human"`
+(not counted as visited sources). Task.control is the durable record for the UI; a restart hands
+control back to the agent.
+
+**Supported final actions (C25–C27).** Only form submissions to a configured `airlock-forms-v1`
+destination (`AIRLOCK_FORMS_ORIGINS`, also inside the task's `egressAllow`), whose server enforces
+the approval, are supported. Generic irreversible actions on arbitrary sites (purchases, messages,
+account changes) are **not** supported and no semantic intent detection from button labels is
+claimed.
+
+1. The model calls `browser_propose_submit {formUrl, formId, fields, summary}`. The controller
+   checks the URL is exactly `<origin>/f/<formId>` on a configured origin, normalizes the fields
+   with the destination's own `normalizeFields` (`@airlock/fixtures`; refusal reasons go back to
+   the model), computes `payloadDigestOf({adapter, destination, formId, fields})`, and inserts an
+   immutable `ActionProposal` (owner, task, browser attempt, browser generation, destination,
+   adapter, form, fields, digest, 15-min expiry, `pending`). The run waits (status stays `running`;
+   a `Waiting for review` event carries the proposal).
+2. `decide` restates the digest; the one-use CAS makes it `approved` or `rejected`. Rejected,
+   expired (or the wall clock ran out) → the model is told; nothing is submitted.
+3. Approved → the **controller** claims it (`claimed`), navigates to the form, observes, types each
+   approved value into the single control whose accessible name is the field's label (refuses if a
+   field, the "Approval code" input or the "Submit" button is not matched uniquely), types the
+   approval code (`${proposalId}.${expiresAtEpoch}.${HMAC}` minted here from
+   `AIRLOCK_FORMS_SECRET`; never shown to the model, never in an event), clicks Submit
+   (`submitted`) and observes the result page.
+4. Verification reads `GET <origin>/api/receipts/:proposalId` from VM A (URL built from the
+   configured origin, bearer read token, `redirect: "error"`, bounded time and size): a receipt
+   with the approved digest → `confirmed` (receipt stored on the proposal); no receipt after a
+   refusal page → `failed`; a lost click response or unreadable receipt → `outcome_unknown`,
+   reconciled by **reads only** (bounded retries, and once more when the run ends). The
+   submission is never repeated.
+
+The model may fill fields of an adapter form, but a click on a button, Enter, or type-with-submit
+there is refused before dispatch (`final_action_requires_approval`, best effort). Whatever reaches
+the destination without the code (a person's manual click included) is refused there (403, nothing
+recorded); the controller records such arrivals as `check` events with `data.adapterRefusal`.
+
+**What the web UI renders:** `Task.control` (holder, since, reason) and take/release buttons; a
+live panel from `GET /live` with refresh; human actions through `/control/action`; proposals from
+`GET /approvals` and the `Waiting for review` event (fields, destination, digest, expiry) with
+approve/reject that send the displayed digest; proposal status transitions and receipt.
 
 ## Model call sites (C21)
 
@@ -271,6 +356,21 @@ API: upload auth/type (415)/size/quota (413), sniffing and names, cross-owner ar
 headers, general task validation (profile, egressAllow, inputs), and the evidence bundle sealed
 once and served byte for byte. Units: PNG, CSV, egress policy, completion checks, envelope
 re-validation, `image_url` wire format and the vision probe.
+
+Milestone 5 (`test/control.test.ts`; the forms destination is the real fixtures service behind a
+simulated browser, `test/helpers/forms.ts`): take → human actions (outside egress refused) →
+release with the agent paused meanwhile and stale refs refused until it observes; bounded wait →
+`human_control`; take while an op is in flight waits for its supervisor answer; take whose op does
+not settle → 409, `transferring`, no dispatch by anyone until release; idle expiry; cross-owner
+404s; live view rate limit, frames while a person holds control and frames not counted as
+evidence; proposal → wrong digest 409 → approve → controller submission → receipt confirmed →
+replay 409, code never in events or model input; reject; expiry 410; lost submit response →
+`outcome_unknown` → receipt reconciliation → confirmed with exactly one POST; model click/Enter/
+type-submit on an adapter form refused before dispatch; a manual submission refused by the
+destination and recorded; unconfigured destination and missing field refused; downloads →
+`download` artifacts → `inputs/` lazily and immediately, digest mismatch refused; sandbox refusal
+→ `UNSUPPORTED`/`INCONCLUSIVE` with a single create; normalization/digest/approval-code vectors
+from `apps/fixtures/test/vectors.json`; config and the scripted fixtures-origin placeholder.
 
 `bun test` uses an in-memory PGlite store, an in-memory fake supervisor and thin doubles for the
 verifier/artifacts modules. Covered: happy path, unchanged-tree submit, forged "all tests passed"

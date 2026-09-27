@@ -32,13 +32,16 @@ import {
   BrowserObserveResult,
   BrowserScreenshotResult,
   DEFAULT_MAX_RECOVERIES,
+  SCHEMA_VERSION,
   TaskResult,
   canonicalJson,
   relPath,
   sha256,
+  type ActionProposal,
   type Artifact,
   type AttemptRef,
   type AttemptState,
+  type BrowserAnyOp,
   type BrowserOp,
   type BrowserOpResult,
   type CleanupState,
@@ -46,9 +49,12 @@ import {
   type Task,
 } from "@airlock/contracts";
 import type { ArtifactService } from "./artifact-service.ts";
+import { ControlService, type Actor, type BrowserExecOutcome } from "./browser-control.ts";
+import { APPROVAL_FIELD, adapterPath, approvalCodeFor, formPayloadDigest, normalizeFields, readReceipt, resolveFormUrl, type FormsConfig, type ReceiptRead } from "./forms-adapter.ts";
+import { PROPOSAL_TTL_MS, STORE_KIND_PROPOSALS, transitionProposal } from "./proposals.ts";
 import { decodeBase64Strict } from "./artifacts/index.ts";
 import { runCompletionChecks, type CollectedOutput } from "./completion-checks.ts";
-import { GENERAL_TOOL_ARGS, CODE_FILE_EXTENSIONS, generalSystemPrompt, generalTaskMessage, isGeneralToolName, toolSpecsFor } from "./general-tools.ts";
+import { GENERAL_TOOL_ARGS, CODE_FILE_EXTENSIONS, DOWNLOAD_NAME, generalSystemPrompt, generalTaskMessage, isGeneralToolName, toolSpecsFor } from "./general-tools.ts";
 import { STORE_KIND_OPERATIONS, createJournal, teardownAttempt, type Journal, type OperationRecord, type TeardownOutcome } from "./journal.ts";
 import { log } from "./log.ts";
 import { inspectPng } from "./png.ts";
@@ -82,6 +88,17 @@ export interface GeneralDeps {
   renewIntervalMs?: number;
   capacityRetryDelaysMs?: number[];
   production?: boolean;
+  /** Exclusive browser control shared with the API (one per process); a private one when absent. */
+  control?: ControlService;
+  /** Supported final-action destinations (airlock-forms-v1); absent: browser_propose_submit is refused. */
+  forms?: FormsConfig | null;
+  /** How long an agent browser op waits while a person holds control (default: until the wall clock). */
+  controlHoldWaitMs?: number;
+  /** Proposal lifetime (default 15 min) and the poll interval while waiting for a decision. */
+  proposalTtlMs?: number;
+  proposalPollMs?: number;
+  /** Delays between receipt reads when reconciling a submission (its length is the number of reads). */
+  receiptRetryDelaysMs?: number[];
 }
 
 /** One row per attempt a general task created; the cancel pass and recoveries tear down from these. */
@@ -139,6 +156,9 @@ const MIN_COMPLETION_ALLOWANCE = 1024;
 const REASONING_EXCERPT_CHARS = 600;
 /** The fixed in-image runner every code run goes through (cwd /workspace, no network). */
 export const CODE_RUNNER = "/opt/airlock/run.sh";
+const CONTROL_RETURNED_NOTE = "control returned; observe first: a person held the browser, the page may have changed and every earlier ref is invalid. Call browser_observe before any click, type, key or upload.";
+/** Supervisor refusal codes after which a sandbox role is not tried again in the same task. */
+const DEFINITIVE_REFUSALS = new Set(["unsupported_profile", "probe_failed", "inspection_failed"]);
 const PENDING_REVIEW_NOTE =
   "A confirm/prompt/beforeunload dialog is waiting for human review. Airlock never accepts dialogs, and human review is not available in this deployment yet. Continue without that action (observe first), or call submit_result explaining what was blocked.";
 const RECOVERY_NOTE =
@@ -156,6 +176,7 @@ export function createGeneralHandler(deps: GeneralDeps): TaskHandler {
   const authorizationMs = Math.max(1, deps.authorizationMs ?? DEFAULT_AUTHORIZATION_MS);
   const renewIntervalMs = Math.max(1, deps.renewIntervalMs ?? Math.floor(authorizationMs / 2));
   const capacityRetryDelaysMs = deps.capacityRetryDelaysMs ?? [1000, 2000, 4000, 8000, 8000];
+  const control = deps.control ?? new ControlService({ store: deps.store });
   const journalFor = (owner: string, taskId: string): Journal => createJournal({ store: deps.store, owner, taskId, now, capacityRetryDelaysMs });
 
   const attemptRows = async (owner: string, taskId: string): Promise<TaskAttemptRow[]> =>
@@ -218,6 +239,13 @@ export function createGeneralHandler(deps: GeneralDeps): TaskHandler {
     const live = new Map<string, Live>();
     let renewTimer: ReturnType<typeof setInterval> | null = null;
     let workStarted = false;
+    /** Detaches this run from the ControlService (control returns to the agent; no more human actions). */
+    let detachControl: (() => Promise<void>) | null = null;
+    const detach = async () => {
+      const d = detachControl;
+      detachControl = null;
+      await d?.().catch((error) => log.warn("control detach failed", { taskId: task.id, error }));
+    };
     const checkpoint = async (patch: Partial<Task>) => {
       task = await ctx.checkpoint(patch);
       return task;
@@ -263,7 +291,9 @@ export function createGeneralHandler(deps: GeneralDeps): TaskHandler {
         egressAllow,
         selectedRuntime: host.selectedRuntime,
         devUnsafe: host.devUnsafe,
+        host,
         vision: deps.vision === true,
+        finalActions: deps.forms?.origins.length ? { adapter: "airlock-forms-v1", destinations: deps.forms.origins } : null,
       });
       if (host.devUnsafe) await ctx.event("check", "dev-unsafe runtime", `supervisor host runs ${host.selectedRuntime} with AIRLOCK_DEV_UNSAFE; results are not a deployment measurement`);
 
@@ -298,10 +328,22 @@ export function createGeneralHandler(deps: GeneralDeps): TaskHandler {
         inputs.push({ name, artifact: found.artifact });
       }
       /** Page text saved by browser_save_text, placed under inputs/ in the code sandbox. */
-      const saved = new Map<string, { bytes: Uint8Array; artifactId: string; sha256: string }>();
+      const saved = new Map<string, { bytes: Uint8Array; artifactId: string; sha256: string; mediaType: string }>();
       const codeFiles: Record<string, { sha256: string; byteLength: number }> = (await deps.store.get<{ files: Record<string, { sha256: string; byteLength: number }> }>(owner, STORE_KIND_GENERAL_CODE, task.id))?.files ?? {};
       let codeLanguage: "python" | "node" | null = null;
-      let lastObservation: { url: string; text: string; generation: number } | null = null;
+      let lastObservation: { url: string; text: string; generation: number; controls: { ref: string; role: string; name: string }[] } | null = null;
+      /** The active tab's URL as last reported by any browser op (for the final-action guard). */
+      let currentUrl: string | null = null;
+      /** The control epoch under which the agent last observed; ref-bound actions need the current one. */
+      let observedEpoch = 0;
+      let announcedEpoch = 0;
+      /**
+       * A sandbox role the supervisor refused definitively (not configured, inspection or probe
+       * failed) is not requested again in this task; the first refusal decides the outcome when the
+       * task could not produce a result (UNSUPPORTED for a role not configured, else INCONCLUSIVE).
+       */
+      const refusedFamilies = new Map<"browser" | "code", string>();
+      const infra: { refusal: { outcome: "UNSUPPORTED" | "INCONCLUSIVE"; reason: string } | null } = { refusal: null };
 
       // ---- attempts --------------------------------------------------------------------------
       const authorizedUntil = (deadlineMs: number) => iso(Math.min(now() + authorizationMs, deadlineMs));
@@ -379,9 +421,14 @@ export function createGeneralHandler(deps: GeneralDeps): TaskHandler {
           );
         } catch (error) {
           if (ctx.signal.aborted || error instanceof LostLeaseError) throw error;
-          await ctx.event("error", `${role} sandbox refused`, bounded(errorMessage(error), 2000), { attemptId, role, opState: error instanceof SupervisorError && error.status >= 400 && error.status < 500 ? "failed" : "unknown", ...(createOp ? { operationId: createOp } : {}) });
+          const code = error instanceof SupervisorError ? error.code : undefined;
+          const definitive = code !== undefined && DEFINITIVE_REFUSALS.has(code);
+          await ctx.event("error", `${role} sandbox refused`, bounded(errorMessage(error), 2000), { attemptId, role, opState: error instanceof SupervisorError && error.status >= 400 && error.status < 500 ? "failed" : "unknown", ...(createOp ? { operationId: createOp } : {}), ...(code ? { code } : {}), definitive });
           await closeLive(l, "create refused");
-          return `the ${role} sandbox could not be started (${errorMessage(error).slice(0, 300)})`;
+          const why = `the ${role} sandbox could not be started (${errorMessage(error).slice(0, 300)})`;
+          if (definitive) refusedFamilies.set(role === "browser" ? "browser" : "code", why);
+          infra.refusal ??= { outcome: code === "unsupported_profile" ? "UNSUPPORTED" : "INCONCLUSIVE", reason: why };
+          return why;
         }
         startRenewal();
         let refusal: string | null = null;
@@ -410,7 +457,10 @@ export function createGeneralHandler(deps: GeneralDeps): TaskHandler {
         });
         if (refusal) {
           await closeLive(l, refusal);
-          return `the ${role} sandbox was refused: ${refusal}; no work was run in it`;
+          const why = `the ${role} sandbox was refused: ${refusal}; no work was run in it`;
+          refusedFamilies.set(role === "browser" ? "browser" : "code", why);
+          infra.refusal ??= { outcome: "INCONCLUSIVE", reason: why };
+          return why;
         }
         return l;
       };
@@ -446,6 +496,8 @@ export function createGeneralHandler(deps: GeneralDeps): TaskHandler {
           await closeLive(existing, "execution authority lost");
           return `browser_session_lost: ${why}. The next browser tool starts a fresh session with no pages open.`;
         }
+        const refused = refusedFamilies.get("browser");
+        if (refused) return `browser unavailable in this task: ${refused}. It is not retried; call submit_result explaining what could not be done.`;
         if (usage.browserSessions >= b.browserSessions) return `browser session limit reached (${b.browserSessions} per task)`;
         usage.browserSessions += 1;
         await saveUsage();
@@ -473,6 +525,8 @@ export function createGeneralHandler(deps: GeneralDeps): TaskHandler {
         const chosen = existing ? (existing.role === "node" ? "node" : "python") : codeLanguage;
         if (chosen && chosen !== language) return `this task's code sandbox runs ${chosen}; ${language} is not available in the same task (one code sandbox per task)`;
         if (existing) return existing;
+        const refused = refusedFamilies.get("code");
+        if (refused) return `code sandbox unavailable in this task: ${refused}. It is not retried; call submit_result explaining what could not be done.`;
         if (usage.codeSandboxes >= b.codeSandboxes) return `code sandbox limit reached (${b.codeSandboxes} per task)`;
         usage.codeSandboxes += 1;
         await saveUsage();
@@ -488,10 +542,10 @@ export function createGeneralHandler(deps: GeneralDeps): TaskHandler {
           }
         }
         for (const [name, s] of saved) {
-          const failed = await placeInput(made, name, s.bytes, s.sha256, "browser_save_text");
+          const failed = await placeInput(made, name, s.bytes, s.sha256, "inputs");
           if (failed) {
             await closeLive(made, "inputs not placed");
-            return `saved page text could not be placed in the code sandbox (${failed.slice(0, 300)})`;
+            return `saved page text or a saved download could not be placed in the code sandbox (${failed.slice(0, 300)})`;
           }
         }
         return made;
@@ -503,34 +557,59 @@ export function createGeneralHandler(deps: GeneralDeps): TaskHandler {
         return `${l.role === "browser" ? "browser_session_lost" : "code_sandbox_lost"}: the supervisor closed this sandbox (${errorMessage(error).slice(0, 200)}); the next ${l.role === "browser" ? "browser" : "code"} tool starts a fresh one`;
       };
 
-      type BrowserCall = { kind: "ok"; result: unknown; operationId?: string; attemptId: string } | { kind: "error"; payload: Payload };
-      const browserCall = async (tool: string, request: BrowserOp): Promise<BrowserCall> => {
-        if (usage.browserOps >= b.browserOps) return { kind: "error", payload: { error: `browser operation budget exhausted (${b.browserOps}); call submit_result` } };
-        const l = await ensureBrowser();
+      type BrowserCall = { kind: "ok"; result: unknown; raw: BrowserOpResult; operationId?: string; attemptId: string } | { kind: "error"; payload: Payload; raw?: BrowserOpResult };
+      const REF_BOUND = new Set(["click", "type", "key", "upload"]);
+      /**
+       * One browser operation on the task's browser attempt, for any actor: the agent (through
+       * browserCall's control gate), a human holder, a live-view observer, or the controller's
+       * approved submission (the latter three through the ControlService lock). Journaled, egress
+       * policy and budgets checked for every actor; an uncertain operation is never replayed.
+       */
+      const execBrowser = async (tool: string, request: BrowserAnyOp, actor: Actor, create = true): Promise<BrowserCall> => {
+        if (actor !== "observer" && usage.browserOps >= b.browserOps) return { kind: "error", payload: { error: `browser operation budget exhausted (${b.browserOps}); call submit_result` } };
+        if (now() >= wallDeadline) return { kind: "error", payload: { error: "the task's wall-clock budget is used up; call submit_result" } };
+        if (request.op === "navigate") {
+          const host = urlHost(request.args.url);
+          if (!host || !hostAllowed(host, egressAllow)) {
+            const why = host ? `${host} is not an allowed destination for this task. Allowed: ${egressAllow.join(", ")}. The list is set by the user and cannot be changed.` : "not an http(s) URL without credentials";
+            await toolEvent(`${tool} refused by policy`, why, { tool, actor, opState: "failed", policy: "egress", ...(host ? { host } : {}) });
+            return { kind: "error", payload: { error: why } };
+          }
+          await toolEvent(`${tool} allowed`, `${host} is inside the task's destinations`, { tool, actor, opState: "allowed", policy: "egress", host });
+        }
+        let l: Live | string;
+        if (create) l = await ensureBrowser();
+        else {
+          const existing = browserLive();
+          l = existing && !existing.lost ? existing : "the task has no live browser session";
+        }
         if (typeof l === "string") {
-          await toolEvent(`${tool} refused`, l, { tool, opState: "failed" });
+          await toolEvent(`${tool} refused`, l, { tool, actor, opState: "failed" });
           return { kind: "error", payload: { error: l } };
         }
-        usage.browserOps += 1;
-        await saveUsage();
-        const step = await supervised(tool, "browserOp", l.ref, (opts) => deps.supervisor.browserOp({ ref: l.ref, request }, opts));
-        const base = { tool, attemptId: l.ref.attemptId, ...(step.operationId ? { operationId: step.operationId } : {}) };
+        const live = l;
+        if (actor !== "observer") {
+          usage.browserOps += 1;
+          await saveUsage();
+        }
+        const step = await supervised(tool, "browserOp", live.ref, (opts) => deps.supervisor.browserOp({ ref: live.ref, request }, opts));
+        const base = { tool, actor, attemptId: live.ref.attemptId, ...(step.operationId ? { operationId: step.operationId } : {}) };
         if (!step.ok) {
-          const gone = await attemptGone(l, step.error);
+          const gone = await attemptGone(live, step.error);
           if (gone) {
             await toolEvent(`${tool} failed`, gone, { ...base, opState: "failed" });
             return { kind: "error", payload: { error: gone } };
           }
           // Transport failure: the runner may or may not have acted. Never replay; close the session.
-          return { kind: "error", payload: await interrupted(l, tool, base, `the supervisor call did not complete (${errorMessage(step.error).slice(0, 200)})`) };
+          return { kind: "error", payload: await interrupted(live, tool, base, `the supervisor call did not complete (${errorMessage(step.error).slice(0, 200)})`) };
         }
         const r: BrowserOpResult = step.value;
-        if (r.status === "interrupted") return { kind: "error", payload: await interrupted(l, tool, base, "the browser runner was lost during the operation") };
+        if (r.status === "interrupted") return { kind: "error", payload: await interrupted(live, tool, base, "the browser runner was lost during the operation"), raw: r };
         const response = r.response;
         if (r.status === "refused" || !response) {
           const why = response && !response.ok ? `${response.error}: ${response.message}` : "the supervisor refused the operation";
           await toolEvent(`${tool} refused`, why, { ...base, opState: "failed", durationMs: r.durationMs });
-          return { kind: "error", payload: { error: why } };
+          return { kind: "error", payload: { error: why }, raw: r };
         }
         if (!response.ok) {
           const code = response.error;
@@ -541,12 +620,52 @@ export function createGeneralHandler(deps: GeneralDeps): TaskHandler {
               : code === "pending_review"
                 ? { error: "pending_review", message, next: PENDING_REVIEW_NOTE }
                 : code === "navigation_failed"
-                  ? { error: "navigation_failed", message, next: "The page could not be loaded. A destination outside the allowed list is refused by the egress proxy." }
+                  ? { error: "navigation_failed", message, next: "The page could not be loaded. A destination outside the allowed list is refused by the egress proxy; a link that downloads a file shows up in browser_download_list." }
                   : { error: code, message };
           await toolEvent(`${tool} ${code}`, message, { ...base, opState: "failed", errorCode: code, durationMs: r.durationMs, ...(code === "pending_review" ? { pendingReview: true } : {}) });
-          return { kind: "error", payload };
+          return { kind: "error", payload, raw: r };
         }
-        return { kind: "ok", result: response.result, attemptId: l.ref.attemptId, ...(step.operationId ? { operationId: step.operationId } : {}) };
+        const result = response.result as { generation?: unknown; url?: unknown } | null;
+        control.noteGeneration(task.id, result?.generation);
+        if (typeof result?.url === "string" && request.op !== "screenshot" && !request.op.startsWith("download.")) currentUrl = result.url.slice(0, 2048);
+        // A browser that reaches an adapter form's submit path without the controller carries no
+        // approval code: the destination refuses it (403, nothing recorded). Recorded as such.
+        const submitHit = actor !== "controller" && typeof result?.url === "string" ? adapterPath(deps.forms, result.url) : null;
+        if (submitHit?.submit)
+          await ctx.event("check", "Unapproved submission refused by the destination", `a ${actor} action reached ${submitHit.origin}/f/${submitHit.formId}/submit without an approval code; the airlock-forms-v1 destination refuses it (403) and records nothing. A manual click is never an approval.`, {
+            adapterRefusal: true,
+            actor,
+            tool,
+            formId: submitHit.formId,
+            destination: submitHit.origin,
+          });
+        return { kind: "ok", result: response.result, raw: r, attemptId: live.ref.attemptId, ...(step.operationId ? { operationId: step.operationId } : {}) };
+      };
+      /** The agent's browser op: waits (bounded) while a person holds control; observe-first after a handover. */
+      const browserCall = async (tool: string, request: BrowserAnyOp): Promise<BrowserCall> => {
+        const gate = await control.runAgent(
+          task.id,
+          async (): Promise<BrowserCall> => {
+            const epoch = control.epochOf(task.id);
+            if (REF_BOUND.has(request.op) && observedEpoch !== epoch) {
+              await toolEvent(`${tool} refused: observe first`, CONTROL_RETURNED_NOTE, { tool, opState: "failed", errorCode: "stale_reference", controlEpoch: epoch });
+              return { kind: "error", payload: { error: "stale_reference", message: CONTROL_RETURNED_NOTE } };
+            }
+            const call = await execBrowser(tool, request, "agent");
+            if (call.kind === "ok" && request.op === "observe") observedEpoch = epoch;
+            return call;
+          },
+          {
+            deadlineMs: Math.min(wallDeadline, now() + (deps.controlHoldWaitMs ?? wallDeadline)),
+            guard: ctx.guard,
+            onPaused: (holder) => ctx.event("lifecycle", "Agent paused: human control", `${tool} waits while ${holder === "human" ? "a person holds" : "someone is taking"} control of the browser; the task's wall clock keeps running`, { tool, control: holder }),
+          },
+        );
+        if (!gate.ran) {
+          await toolEvent(`${tool} not run: human control`, gate.reason, { tool, opState: "failed", control: control.holderOf(task.id) });
+          return { kind: "error", payload: { error: "human_control", message: `${gate.reason}; nothing was done. Try again later, or call submit_result.` } };
+        }
+        return gate.value;
       };
       const interrupted = async (l: Live, tool: string, base: Record<string, unknown>, why: string): Promise<Payload> => {
         usage.browserInterruptions += 1;
@@ -554,6 +673,7 @@ export function createGeneralHandler(deps: GeneralDeps): TaskHandler {
         await toolEvent(`${tool} outcome unknown`, `${why}; the operation is not replayed and the browser session is closed (interruption ${usage.browserInterruptions})`, { ...base, opState: "unknown", interrupted: true });
         await closeLive(l, "browser session interrupted");
         lastObservation = null;
+        currentUrl = null;
         return {
           error: "browser_session_lost",
           message: `${why}. Whether the ${tool} took effect is unknown and it was NOT replayed. The browser session is closed; your next browser tool starts a fresh session with no pages open (${Math.max(0, b.browserSessions - usage.browserSessions)} session(s) left).`,
@@ -564,6 +684,293 @@ export function createGeneralHandler(deps: GeneralDeps): TaskHandler {
       let screenshotSeq = 0;
       /** Set by tools, read by the loop (a holder, so control-flow narrowing does not assume null). */
       const turnState: { pendingImage: { artifactId: string; sha256: string; base64: string; url: string } | null; submitted: SubmitArgs | null } = { pendingImage: null, submitted: null };
+
+      /** Validate a runner screenshot, store it as an immutable artifact and announce the frame. */
+      const storeScreenshot = async (call: Extract<BrowserCall, { kind: "ok" }>, tool: string, actor: Actor): Promise<{ artifact: Artifact; shot: BrowserScreenshotResult } | string> => {
+        const parsed = BrowserScreenshotResult.safeParse(call.result);
+        const bytes = parsed.success ? decodeBase64Strict(parsed.data.png) : null;
+        const png = bytes ? inspectPng(bytes) : null;
+        const digest = bytes ? await sha256(bytes) : null;
+        if (!parsed.success || !bytes || !png?.ok || digest !== parsed.data.sha256 || bytes.byteLength !== parsed.data.bytes) {
+          await toolEvent(`${tool} rejected`, "the runner's screenshot is malformed or does not match its digest", { tool, actor, opState: "failed", operationId: call.operationId, attemptId: call.attemptId });
+          return "the screenshot was malformed and was not stored";
+        }
+        screenshotSeq += 1;
+        const s = parsed.data;
+        const prefix = actor === "observer" ? "live" : actor === "human" ? "human" : "screenshot";
+        const artifact = await deps.artifacts.record(owner, {
+          taskId: task.id,
+          kind: "screenshot",
+          filename: `${prefix}-${String(task.budget.modelCallsUsed).padStart(3, "0")}-${screenshotSeq}.png`,
+          mediaType: "image/png",
+          bytes,
+          source: { url: s.url, step: task.budget.modelCallsUsed, tool, attemptId: call.attemptId },
+        });
+        await ctx.event("artifact", actor === "observer" ? `Live frame ${artifact.id}` : `Screenshot stored ${artifact.id}`, `${s.url.slice(0, 300)} (${s.width}x${s.height}, sha256 ${artifact.sha256})`, {
+          artifactId: artifact.id,
+          kind: "screenshot",
+          sha256: artifact.sha256,
+          url: s.url.slice(0, 2048),
+          width: s.width,
+          height: s.height,
+          capturedAt: s.capturedAt,
+          generation: s.generation,
+          step: task.budget.modelCallsUsed,
+          actor,
+          frame: true,
+        });
+        return { artifact, shot: s };
+      };
+
+      /**
+       * Keep a completed browser download: re-verify its bytes against the supervisor's size and
+       * digest, store it as a "download" artifact with its source URL and, for the model, place it
+       * under inputs/ in the code sandbox (now, or when the sandbox starts).
+       */
+      const saveDownload = async (call: Extract<BrowserCall, { kind: "ok" }>, name: string, tool: string, actor: Actor, place: boolean): Promise<Payload> => {
+        const r = (call.result ?? null) as { downloadId?: unknown; suggestedFilename?: unknown; url?: unknown; mediaType?: unknown; bytes?: unknown; sha256?: unknown; contentBase64?: unknown } | null;
+        const bytes = typeof r?.contentBase64 === "string" ? decodeBase64Strict(r.contentBase64) : null;
+        if (!r || !bytes || bytes.byteLength !== r.bytes || typeof r.sha256 !== "string" || (await sha256(bytes)) !== r.sha256) {
+          await toolEvent(`${tool} rejected`, "the download's bytes do not match their recorded size and digest; nothing was stored", { tool, actor, opState: "failed", operationId: call.operationId, attemptId: call.attemptId });
+          return { error: "the download's bytes did not match their recorded size and digest; nothing was stored" };
+        }
+        const mediaType = typeof r.mediaType === "string" && /^[a-z]+\/[a-z0-9.+-]{1,100}$/.test(r.mediaType) ? r.mediaType : "application/octet-stream";
+        const url = typeof r.url === "string" ? r.url.slice(0, 2048) : undefined;
+        const artifact = await deps.artifacts.record(owner, { taskId: task.id, kind: "download", filename: name, mediaType, bytes, source: { ...(url ? { url } : {}), step: task.budget.modelCallsUsed, tool, attemptId: call.attemptId } });
+        await ctx.event("artifact", `Download stored ${artifact.id}`, `${name} (${bytes.byteLength} bytes, ${mediaType}) from ${url?.slice(0, 300) ?? "an unknown URL"}${place ? `; inputs/${name}` : ""}`, {
+          artifactId: artifact.id,
+          kind: "download",
+          sha256: artifact.sha256,
+          byteLength: bytes.byteLength,
+          mediaType,
+          actor,
+          downloadId: typeof r.downloadId === "string" ? r.downloadId : null,
+          suggestedFilename: typeof r.suggestedFilename === "string" ? r.suggestedFilename.slice(0, 200) : null,
+          ...(url ? { url } : {}),
+          ...(place ? { path: `inputs/${name}` } : {}),
+        });
+        if (!place) return { artifactId: artifact.id, sha256: artifact.sha256, bytes: bytes.byteLength, mediaType };
+        saved.set(name, { bytes, artifactId: artifact.id, sha256: artifact.sha256, mediaType });
+        const code = codeLive();
+        let placed = false;
+        if (code && !code.lost) placed = (await placeInput(code, name, bytes, artifact.sha256, tool)) === null;
+        else await toolEvent(`${tool} ${name}`, "kept for the code sandbox (placed when it starts)", { tool, opState: "completed", artifactId: artifact.id, operationId: call.operationId, attemptId: call.attemptId });
+        return { path: `inputs/${name}`, bytes: bytes.byteLength, sha256: artifact.sha256, artifactId: artifact.id, mediaType, placed: placed || !code, ...(code ? {} : { note: "It will be placed under inputs/ when the code sandbox starts." }) };
+      };
+
+      /** The browser executor the ControlService runs human actions, live-view frames and approved submissions through. */
+      const executor = {
+        hasLiveBrowser: () => {
+          const l = browserLive();
+          return !!l && !l.lost;
+        },
+        exec: async (request: BrowserAnyOp, opts: { actor: Actor; tool: string; create: boolean }): Promise<BrowserExecOutcome> => {
+          const call = await execBrowser(opts.tool, request, opts.actor, opts.create);
+          // A person may have changed the page: the agent's saved observation is no longer current.
+          if (opts.actor === "human" && request.op !== "screenshot" && !request.op.startsWith("download.")) lastObservation = null;
+          if (call.kind === "error") return { ok: false, error: String(call.payload.error ?? "refused").slice(0, 300), payload: call.payload, ...(call.raw ? { raw: call.raw } : {}) };
+          const out = { ok: true as const, op: request.op, result: call.result, raw: call.raw, attemptId: call.attemptId, ...(call.operationId ? { operationId: call.operationId } : {}) };
+          if (request.op === "screenshot") {
+            const stored = await storeScreenshot(call, opts.tool, opts.actor);
+            if (typeof stored === "string") return { ok: false, error: stored, payload: { error: stored }, raw: call.raw };
+            return { ...out, artifactId: stored.artifact.id };
+          }
+          if (request.op === "download.read") {
+            const r = (call.result ?? {}) as { suggestedFilename?: unknown; downloadId?: unknown };
+            const saved = await saveDownload(call, safeFilename(r.suggestedFilename, `${String(r.downloadId ?? "download")}.bin`), opts.tool, opts.actor, false);
+            if (typeof saved.error === "string") return { ok: false, error: saved.error, payload: saved, raw: call.raw };
+            return { ...out, artifactId: String(saved.artifactId) };
+          }
+          const r = (call.result ?? {}) as { generation?: unknown; url?: unknown };
+          await toolEvent(`${opts.tool} ${request.op}`, `by the person holding control${typeof r.url === "string" ? `; ${r.url.slice(0, 300)}` : ""}`, {
+            tool: opts.tool,
+            actor: opts.actor,
+            op: request.op,
+            opState: "completed",
+            operationId: call.operationId,
+            attemptId: call.attemptId,
+            ...(typeof r.url === "string" ? { url: r.url.slice(0, 2048) } : {}),
+            ...(typeof r.generation === "number" ? { generation: r.generation } : {}),
+          });
+          return out;
+        },
+      };
+
+      // ---- supported final actions (airlock-forms-v1) ----------------------------------------------
+      const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+      const settleProposal = async (p: ActionProposal, from: ActionProposal["status"][], status: ActionProposal["status"], detail: string, extra: Partial<ActionProposal> = {}): Promise<ActionProposal> => {
+        const next = (await transitionProposal(deps.store, owner, p.id, from, { status, ...extra })) ?? (await deps.store.get<ActionProposal>(owner, STORE_KIND_PROPOSALS, p.id)) ?? p;
+        const title = next.status === "confirmed" ? "Final action confirmed by the destination" : next.status === "failed" ? "Final action not completed" : next.status === "outcome_unknown" ? "Final action outcome unknown" : `Proposal ${next.status}`;
+        await ctx.event(next.status === "failed" ? "error" : "lifecycle", title, detail, { proposalId: p.id, status: next.status, formId: p.formId, destination: p.destination, payloadDigest: p.payloadDigest, ...(next.receipt ? { receipt: next.receipt } : {}) });
+        return next;
+      };
+      /**
+       * After approval, the CONTROLLER (never the model) drives the submission: open the form,
+       * observe, type each approved value into the one control matching its label, type the
+       * approval code (minted here; never shown to the model or recorded), click Submit, then
+       * verify by reading the destination's receipt. A lost response is `outcome_unknown` and is
+       * reconciled by reads only; the submission is never repeated.
+       */
+      const submitApproved = async (p: ActionProposal, formUrl: string, form: { fields: readonly { name: string; label: string }[] }): Promise<ActionProposal> => {
+        const tool = "approved_submit";
+        const fail = (why: string) => settleProposal(p, ["claimed"], "failed", `not submitted: ${why}`);
+        const forms = deps.forms;
+        if (!forms) return fail("no final-action destination is configured");
+        if (now() >= Date.parse(p.expiresAt)) return fail("the approval expired before the submission started");
+        const nav = await execBrowser(tool, { op: "navigate", args: { url: formUrl } }, "controller");
+        if (nav.kind === "error") return fail(`the form page could not be opened (${String(nav.payload.error).slice(0, 200)})`);
+        const observed = await execBrowser(tool, { op: "observe" }, "controller");
+        lastObservation = null;
+        if (observed.kind === "error") return fail(`the form page could not be read (${String(observed.payload.error).slice(0, 200)})`);
+        const parsedObs = BrowserObserveResult.safeParse(observed.result);
+        if (!parsedObs.success) return fail("the form page observation was malformed");
+        const o = parsedObs.data;
+        if (o.url.split("#")[0] !== formUrl) return fail(`the browser is on ${o.url.slice(0, 200)}, not on the form`);
+        const textbox = (c: { role: string }) => c.role === "textbox" || c.role === "searchbox";
+        const unique = (pred: (c: (typeof o.controls)[number]) => boolean) => {
+          const matches = o.controls.filter(pred);
+          return matches.length === 1 ? matches[0]! : null;
+        };
+        const plan: { ref: string; name: string; text: string }[] = [];
+        for (const f of form.fields) {
+          const c = unique((c) => textbox(c) && (c.name.trim() === f.label || c.name.trim() === f.name));
+          if (!c) return fail(`field "${f.name}" could not be matched to exactly one input on the page`);
+          plan.push({ ref: c.ref, name: f.name, text: p.fields[f.name] ?? "" });
+        }
+        const codeInput = unique((c) => textbox(c) && (c.name.trim() === "Approval code" || c.name.trim() === APPROVAL_FIELD));
+        const button = unique((c) => c.role === "button" && c.name.trim() === "Submit");
+        if (!codeInput) return fail("the approval-code input could not be matched uniquely");
+        if (!button) return fail("the submit button could not be matched uniquely");
+        if (new Set([...plan.map((x) => x.ref), codeInput.ref, button.ref]).size !== plan.length + 2) return fail("two fields matched the same control");
+        let generation = o.generation;
+        const nextGeneration = (call: BrowserCall) => (call.kind === "ok" && typeof (call.result as { generation?: unknown })?.generation === "number" ? ((call.result as { generation: number }).generation) : generation);
+        for (const step of plan) {
+          const typed = await execBrowser(tool, { op: "type", args: { ref: step.ref, generation, text: step.text } }, "controller");
+          if (typed.kind === "error") return fail(`field "${step.name}" could not be filled (${String(typed.payload.error).slice(0, 200)})`);
+          generation = nextGeneration(typed);
+        }
+        const code = approvalCodeFor(forms, { proposalId: p.id, payloadDigest: p.payloadDigest, expiresAt: p.expiresAt });
+        const typedCode = await execBrowser(tool, { op: "type", args: { ref: codeInput.ref, generation, text: code } }, "controller");
+        if (typedCode.kind === "error") return fail(`the approval code could not be entered (${String(typedCode.payload.error).slice(0, 200)})`);
+        generation = nextGeneration(typedCode);
+        await ctx.event("lifecycle", "Form filled with the approved values", `${plan.length} field(s) and the approval code (never shown) entered on ${formUrl}; submitting`, { proposalId: p.id, fields: plan.map((x) => x.name) });
+        const click = await execBrowser(tool, { op: "click", args: { ref: button.ref, generation } }, "controller");
+        const notSent = click.kind === "error" && click.raw?.status === "completed" && click.raw.response !== null && !click.raw.response.ok && ["stale_reference", "invalid_request", "pending_review", "tab_not_found", "unknown_op"].includes(click.raw.response.error);
+        if (notSent) return fail(`the submit button was not clicked (${String((click as { payload: Payload }).payload.error).slice(0, 200)})`);
+        let current = p;
+        let pageText = "";
+        const sent = click.kind === "ok";
+        if (sent) {
+          current = (await transitionProposal(deps.store, owner, p.id, ["claimed"], { status: "submitted" })) ?? current;
+          const after = await execBrowser(tool, { op: "observe" }, "controller");
+          if (after.kind === "ok") pageText = BrowserObserveResult.safeParse(after.result).data?.text ?? "";
+        } else {
+          current = await settleProposal(p, ["claimed"], "outcome_unknown", `the submit click's response was lost (${String(click.payload.error).slice(0, 200)}); it is NOT re-submitted. Reconciling by reading the destination's receipt.`);
+        }
+        const refusedPage = /Submission refused/i.test(pageText);
+        const acceptedPage = /Submission accepted/i.test(pageText);
+        const delays = deps.receiptRetryDelaysMs ?? [0, 500, 1000, 2000, 4000];
+        let read: ReceiptRead = { kind: "error", detail: "no receipt read" };
+        for (let i = 0; i < delays.length; i++) {
+          if (delays[i]! > 0) await sleep(delays[i]!);
+          await ctx.guard();
+          read = await readReceipt(forms, p.destination, p.id, ctx.signal);
+          await ctx.event("check", `Receipt read ${i + 1}: ${read.kind}`, read.kind === "confirmed" ? `receipt ${read.receiptId} (payload digest ${read.payloadDigest})` : read.kind === "error" ? read.detail : "the destination has no receipt for this proposal", { proposalId: p.id, receiptRead: read.kind, read: i + 1 });
+          if (read.kind === "confirmed") break;
+          if (read.kind === "none" && sent && refusedPage) break;
+        }
+        const from: ActionProposal["status"][] = ["submitted", "outcome_unknown", "claimed"];
+        if (read.kind === "confirmed") {
+          if (read.payloadDigest !== p.payloadDigest) return settleProposal(current, from, "failed", `the destination's receipt ${read.receiptId} carries payload digest ${read.payloadDigest}, not the approved ${p.payloadDigest}`);
+          return settleProposal(current, from, "confirmed", `receipt ${read.receiptId}: the destination recorded exactly the approved values`, { receipt: { receiptId: read.receiptId, payloadDigest: read.payloadDigest, at: read.at } });
+        }
+        if (read.kind === "none" && sent && (refusedPage || !acceptedPage))
+          return settleProposal(current, from, "failed", `the destination did not record the submission${refusedPage ? " (it showed a refusal page)" : ""}; nothing was re-submitted`);
+        if (current.status === "outcome_unknown") return current;
+        return settleProposal(current, from, "outcome_unknown", `whether the destination recorded the submission is unknown (${read.kind === "error" ? read.detail : "no receipt yet"}); it is NOT re-submitted`);
+      };
+
+      const proposeSubmit = async (a: { formUrl: string; formId: string; fields: Record<string, string>; summary: string }): Promise<Payload> => {
+        const tool = "browser_propose_submit";
+        const refuse = async (why: string, extra: Record<string, unknown> = {}) => {
+          await toolEvent(`${tool} refused`, why, { tool, opState: "failed", policy: "final-action", ...extra });
+          return { error: why };
+        };
+        const resolved = resolveFormUrl(deps.forms, a.formUrl, a.formId);
+        if (!resolved.ok) return refuse(resolved.reason);
+        const host = urlHost(resolved.url);
+        if (!host || !hostAllowed(host, egressAllow)) return refuse(`${host ?? resolved.origin} is not an allowed destination for this task (allowed: ${egressAllow.join(", ")})`);
+        const normalized = normalizeFields(a.formId, a.fields);
+        if (!normalized.ok) return refuse(`the fields do not match form ${a.formId}: ${normalized.reason}${normalized.field ? ` (${normalized.field})` : ""}. Give every field of the form exactly once, by name, without the approval code.`, { reason: normalized.reason });
+        const l = await ensureBrowser();
+        if (typeof l === "string") return refuse(l);
+        const payloadDigest = await formPayloadDigest(resolved.origin, a.formId, normalized.fields);
+        const createdAt = now();
+        const proposal: ActionProposal = {
+          schemaVersion: SCHEMA_VERSION,
+          id: newId("prop"),
+          owner,
+          taskId: task.id,
+          attemptId: l.ref.attemptId,
+          browserGeneration: control.generationOf(task.id) ?? 0,
+          destination: resolved.origin,
+          adapter: "airlock-forms-v1",
+          formId: a.formId,
+          fields: normalized.fields,
+          payloadDigest,
+          summary: a.summary.slice(0, 2000),
+          createdAt: iso(createdAt),
+          expiresAt: iso(createdAt + (deps.proposalTtlMs ?? PROPOSAL_TTL_MS)),
+          status: "pending",
+        };
+        if (!(await deps.store.insertImmutable(owner, STORE_KIND_PROPOSALS, proposal))) return refuse("proposal id collision; retry");
+        await toolEvent(`${tool} ${a.formId}`, `proposal ${proposal.id} recorded; waiting for a person to review it`, { tool, opState: "allowed", policy: "final-action", proposalId: proposal.id, destination: proposal.destination, formId: proposal.formId });
+        await ctx.event("lifecycle", "Waiting for review", `${proposal.formId} on ${proposal.destination}: ${proposal.summary.slice(0, 500)} (expires ${proposal.expiresAt})`, {
+          proposalId: proposal.id,
+          waitingForReview: true,
+          proposal: { id: proposal.id, destination: proposal.destination, adapter: proposal.adapter, formId: proposal.formId, fields: proposal.fields, payloadDigest, summary: proposal.summary, expiresAt: proposal.expiresAt, status: "pending" },
+        });
+        // Wait (bounded by the proposal's expiry and the task's wall clock) for the one-use decision.
+        let current = proposal;
+        for (;;) {
+          current = (await deps.store.get<ActionProposal>(owner, STORE_KIND_PROPOSALS, proposal.id)) ?? current;
+          if (current.status !== "pending") break;
+          const t = now();
+          if (t >= Date.parse(current.expiresAt) || t >= wallDeadline) {
+            const expired = await transitionProposal(deps.store, owner, proposal.id, ["pending"], { status: "expired" });
+            if (expired) {
+              current = expired;
+              await ctx.event("lifecycle", "Proposal expired", `no decision before ${t >= wallDeadline ? "the task's wall-clock limit" : current.expiresAt}; nothing was submitted`, { proposalId: proposal.id, status: "expired" });
+              break;
+            }
+            continue;
+          }
+          await ctx.guard();
+          await control.waitNotify(task.id, Math.max(1, Math.min(deps.proposalPollMs ?? 250, Date.parse(current.expiresAt) - t, wallDeadline - t)));
+        }
+        if (current.status === "rejected") {
+          await ctx.event("lifecycle", "Proposal rejected", `rejected by ${current.decidedBy ?? "the reviewer"}; nothing was submitted`, { proposalId: current.id, status: "rejected" });
+          return { proposalId: current.id, status: "rejected", note: "A person rejected this submission; nothing was submitted. Do not try to submit it another way; continue without it or call submit_result." };
+        }
+        if (current.status === "expired") return { proposalId: current.id, status: "expired", note: "No decision arrived in time; nothing was submitted." };
+        if (current.status !== "approved") return { error: `the proposal is ${current.status}; nothing was submitted by this call` };
+        const claimed = await transitionProposal(deps.store, owner, current.id, ["approved"], { status: "claimed" });
+        if (!claimed) return { error: "the approval could not be claimed (one-use); nothing was submitted" };
+        await ctx.event("lifecycle", "Approved: Airlock submits the form", `approved by ${claimed.decidedBy ?? "a reviewer"}; the controller fills in exactly the approved values and the approval code`, { proposalId: claimed.id, status: "claimed" });
+        const gate = await control.runAgent(task.id, () => submitApproved(claimed, resolved.url, resolved.form), {
+          deadlineMs: Math.min(wallDeadline, Date.parse(claimed.expiresAt)),
+          guard: ctx.guard,
+          onPaused: (holder) => ctx.event("lifecycle", "Approved submission paused: human control", `the approved submission waits while ${holder === "human" ? "a person holds" : "someone is taking"} control of the browser`, { proposalId: claimed.id }),
+        });
+        const final = gate.ran ? gate.value : await settleProposal(claimed, ["claimed"], "failed", "not submitted: a person held browser control until the approval expired");
+        const note =
+          final.status === "confirmed"
+            ? "The destination confirmed the submission with exactly the approved values."
+            : final.status === "outcome_unknown"
+              ? "Whether the destination recorded the submission is unknown. It was NOT retried and must not be submitted again; Airlock reconciles by reading the destination's receipt."
+              : "The submission was not completed; nothing was re-submitted.";
+        return { proposalId: final.id, status: final.status, ...(final.receipt ? { receiptId: final.receipt.receiptId } : {}), note };
+      };
 
       const runTool = async (rawName: unknown, rawArgs: unknown, turn: { cutOff: boolean; maxTokens: number }): Promise<Payload> => {
         const name = String(rawName).slice(0, 64);
@@ -627,7 +1034,7 @@ export function createGeneralHandler(deps: GeneralDeps): TaskHandler {
               return { error: "malformed observation from the browser runner" };
             }
             const o = parsed.data;
-            lastObservation = { url: o.url, text: o.text, generation: o.generation };
+            lastObservation = { url: o.url, text: o.text, generation: o.generation, controls: o.controls.map((c) => ({ ref: c.ref, role: c.role, name: c.name })) };
             const text = o.text.length > OBSERVE_TEXT_CHARS ? o.text.slice(0, OBSERVE_TEXT_CHARS) : o.text;
             await toolEvent(`browser_observe ${o.url.slice(0, 200)}`, `${o.title.slice(0, 200)} — ${o.text.length} chars, ${o.controls.length} controls, ${o.tabs.length} tab(s)${o.pendingReview ? "; dialog pending review" : ""}\n\n${bounded(o.text, 4000)}`, {
               tool: name,
@@ -668,6 +1075,19 @@ export function createGeneralHandler(deps: GeneralDeps): TaskHandler {
                 : name === "browser_type"
                   ? { op: "type", args: { ref: String(args.ref), generation: Number(args.generation), text: String(args.text), ...(args.submit !== undefined ? { submit: Boolean(args.submit) } : {}) } }
                   : { op: "key", args: { key: args.key as never, generation: Number(args.generation) } };
+            // Final-action guard (best effort; the destination is the enforcement): on a supported
+            // adapter form, the model may fill fields but never submit — no button click, no Enter,
+            // no type-with-submit. Approved submissions are driven by the controller.
+            const onForm = adapterPath(deps.forms, currentUrl);
+            if (onForm && !onForm.submit) {
+              const target = name === "browser_click" ? lastObservation?.controls.find((c) => c.ref === String(args.ref)) : undefined;
+              const blocked = name === "browser_key" ? args.key === "Enter" : name === "browser_type" ? args.submit === true : !target || target.role === "button";
+              if (blocked) {
+                const why = `final_action_requires_approval: submitting the ${onForm.formId} form on ${onForm.origin} needs a reviewed proposal. Call browser_propose_submit with the exact field values; a person approves, then Airlock submits it.`;
+                await toolEvent(`${name} refused: final action needs approval`, why, { tool: name, opState: "failed", policy: "final-action", adapter: "airlock-forms-v1", formId: onForm.formId, destination: onForm.origin });
+                return { error: why };
+              }
+            }
             const call = await browserCall(name, request);
             if (call.kind === "error") return call.payload;
             const r = (call.result ?? {}) as { generation?: number; invalidated?: boolean; url?: string };
@@ -705,35 +1125,9 @@ export function createGeneralHandler(deps: GeneralDeps): TaskHandler {
           case "browser_screenshot": {
             const call = await browserCall(name, { op: "screenshot" });
             if (call.kind === "error") return call.payload;
-            const parsed = BrowserScreenshotResult.safeParse(call.result);
-            const bytes = parsed.success ? decodeBase64Strict(parsed.data.png) : null;
-            const png = bytes ? inspectPng(bytes) : null;
-            const digest = bytes ? await sha256(bytes) : null;
-            if (!parsed.success || !bytes || !png?.ok || digest !== parsed.data.sha256 || bytes.byteLength !== parsed.data.bytes) {
-              await toolEvent("browser_screenshot rejected", "the runner's screenshot is malformed or does not match its digest", { tool: name, opState: "failed", operationId: call.operationId, attemptId: call.attemptId });
-              return { error: "the screenshot was malformed and was not stored" };
-            }
-            screenshotSeq += 1;
-            const s = parsed.data;
-            const artifact = await deps.artifacts.record(owner, {
-              taskId: task.id,
-              kind: "screenshot",
-              filename: `screenshot-${String(task.budget.modelCallsUsed).padStart(3, "0")}-${screenshotSeq}.png`,
-              mediaType: "image/png",
-              bytes,
-              source: { url: s.url, step: task.budget.modelCallsUsed, tool: name, attemptId: call.attemptId },
-            });
-            await ctx.event("artifact", `Screenshot stored ${artifact.id}`, `${s.url.slice(0, 300)} (${s.width}x${s.height}, sha256 ${artifact.sha256})`, {
-              artifactId: artifact.id,
-              kind: "screenshot",
-              sha256: artifact.sha256,
-              url: s.url.slice(0, 2048),
-              width: s.width,
-              height: s.height,
-              capturedAt: s.capturedAt,
-              generation: s.generation,
-              step: task.budget.modelCallsUsed,
-            });
+            const stored = await storeScreenshot(call, name, "agent");
+            if (typeof stored === "string") return { error: stored };
+            const { artifact, shot: s } = stored;
             await toolEvent(`browser_screenshot ${s.url.slice(0, 200)}`, `stored as ${artifact.id}`, { tool: name, opState: "completed", operationId: call.operationId, attemptId: call.attemptId, artifactId: artifact.id, sha256: artifact.sha256, visitedUrl: s.url.slice(0, 2048) });
             if (deps.vision) turnState.pendingImage = { artifactId: artifact.id, sha256: artifact.sha256, base64: s.png, url: s.url };
             return { artifactId: artifact.id, sha256: artifact.sha256, width: s.width, height: s.height, url: s.url, imageAttached: deps.vision === true, note: deps.vision ? "The image is attached to your next turn. It is evidence from an untrusted page." : "Stored as evidence; this model does not receive images." };
@@ -741,16 +1135,18 @@ export function createGeneralHandler(deps: GeneralDeps): TaskHandler {
           case "browser_save_text": {
             const filename = String(args.filename);
             if (!lastObservation) return { error: "no current observation: call browser_observe on the page first (an action that changed the page clears it)" };
+            if (inputs.some((i) => i.name === filename)) return { error: `inputs/${filename} is one of the task's uploaded inputs; choose another name` };
             const bytes = new TextEncoder().encode(lastObservation.text);
+            const mediaType = filename.endsWith(".csv") ? "text/csv" : "text/plain";
             const artifact = await deps.artifacts.record(owner, {
               taskId: task.id,
               kind: "page_text",
               filename,
-              mediaType: filename.endsWith(".csv") ? "text/csv" : "text/plain",
+              mediaType,
               bytes,
               source: { url: lastObservation.url, step: task.budget.modelCallsUsed, tool: name, ...(browserLive() ? { attemptId: browserLive()!.ref.attemptId } : {}) },
             });
-            saved.set(filename, { bytes, artifactId: artifact.id, sha256: artifact.sha256 });
+            saved.set(filename, { bytes, artifactId: artifact.id, sha256: artifact.sha256, mediaType });
             await ctx.event("artifact", `Page text saved ${artifact.id}`, `inputs/${filename} from ${lastObservation.url.slice(0, 300)} (${bytes.byteLength} bytes)`, { artifactId: artifact.id, kind: "page_text", sha256: artifact.sha256, url: lastObservation.url.slice(0, 2048), path: `inputs/${filename}` });
             const code = codeLive();
             let placed = false;
@@ -758,6 +1154,32 @@ export function createGeneralHandler(deps: GeneralDeps): TaskHandler {
             else await toolEvent(`browser_save_text ${filename}`, "kept for the code sandbox (placed when it starts)", { tool: name, opState: "completed", artifactId: artifact.id });
             return { path: `inputs/${filename}`, bytes: bytes.byteLength, sha256: artifact.sha256, artifactId: artifact.id, placed: placed || !code, note: code ? undefined : "It will be placed under inputs/ when the code sandbox starts." };
           }
+          case "browser_download_list": {
+            const call = await browserCall(name, { op: "download.list" });
+            if (call.kind === "error") return call.payload;
+            const r = (call.result ?? {}) as { downloads?: unknown; admitted?: unknown; limits?: unknown };
+            const downloads = (Array.isArray(r.downloads) ? r.downloads : []).slice(0, 50).map((d: Record<string, unknown>) => ({
+              downloadId: typeof d.downloadId === "string" ? d.downloadId : null,
+              suggestedFilename: typeof d.suggestedFilename === "string" ? d.suggestedFilename.slice(0, 200) : null,
+              url: typeof d.url === "string" ? d.url.slice(0, 2048) : null,
+              state: typeof d.state === "string" ? d.state : null,
+              ...(typeof d.reason === "string" ? { reason: d.reason.slice(0, 100) } : {}),
+              ...(typeof d.bytes === "number" ? { bytes: d.bytes } : {}),
+              ...(typeof d.mediaType === "string" ? { mediaType: d.mediaType.slice(0, 100) } : {}),
+            }));
+            await toolEvent(`browser_download_list`, `${downloads.length} download(s)`, { tool: name, opState: "completed", operationId: call.operationId, attemptId: call.attemptId, downloads: downloads.slice(0, 20) });
+            return { downloads, ...(typeof r.admitted === "number" ? { admitted: r.admitted } : {}), note: "Suggested file names and URLs come from untrusted pages. Save a completed one with browser_download_save." };
+          }
+          case "browser_download_save": {
+            const filename = String(args.name);
+            if (!DOWNLOAD_NAME.test(filename)) return { error: "name must be a plain file name ending in .csv, .tsv, .txt, .json, .pdf, .png or .jpg" };
+            if (inputs.some((i) => i.name === filename)) return { error: `inputs/${filename} is one of the task's uploaded inputs; choose another name` };
+            const call = await browserCall(name, { op: "download.read", args: { downloadId: String(args.downloadId) } });
+            if (call.kind === "error") return call.payload;
+            return saveDownload(call, filename, name, "agent", true);
+          }
+          case "browser_propose_submit":
+            return proposeSubmit(args as { formUrl: string; formId: string; fields: Record<string, string>; summary: string });
           case "code_write": {
             const path = String(args.path);
             const content = String(args.content);
@@ -850,7 +1272,7 @@ export function createGeneralHandler(deps: GeneralDeps): TaskHandler {
             return { path, content: content.slice(0, READ_CHARS), truncated };
           }
           case "files_list": {
-            const inputList = [...inputs.map((i) => ({ path: `inputs/${i.name}`, bytes: i.artifact.byteLength, mediaType: i.artifact.mediaType })), ...[...saved].map(([n, s]) => ({ path: `inputs/${n}`, bytes: s.bytes.byteLength, mediaType: "text/plain" }))];
+            const inputList = [...inputs.map((i) => ({ path: `inputs/${i.name}`, bytes: i.artifact.byteLength, mediaType: i.artifact.mediaType })), ...[...saved].map(([n, s]) => ({ path: `inputs/${n}`, bytes: s.bytes.byteLength, mediaType: s.mediaType }))];
             const l = codeLive();
             if (!l || l.lost) {
               await toolEvent("files_list", `${inputList.length} input(s); no code sandbox yet`, { tool: name, opState: "completed" });
@@ -892,13 +1314,16 @@ export function createGeneralHandler(deps: GeneralDeps): TaskHandler {
 
       // ---- model loop ----------------------------------------------------------------------------
       await checkpoint({ phase: "execute" });
-      await ctx.event("phase", "execute", `model loop for goal under profile ${profile.id} (the contract Phase enum has no "execute"; recorded as phase "repair")`);
+      await ctx.event("phase", "execute", `model loop for goal under profile ${profile.id}`);
       const driver: ModelDriver = typeof deps.driver === "function" ? await deps.driver(task) : deps.driver;
       const identity = driver.describe?.() ?? { model: "unknown", host: "unknown" };
       const tools = toolSpecsFor(profile);
       const system = generalSystemPrompt(profile, { egressAllow, inputs: inputs.map((i) => ({ name: i.name, mediaType: i.artifact.mediaType, byteLength: i.artifact.byteLength })), vision: deps.vision === true });
       const messages: ChatMessage[] = [{ role: "user", content: generalTaskMessage(task.issueText, recovering ? RECOVERY_NOTE : undefined) }];
       const toolsChars = JSON.stringify(tools).length;
+      // Human control, live view and approved submissions reach this run's browser through the
+      // ControlService, serialized with the agent's own operations.
+      if (profile.browser) detachControl = await control.attach(owner, task.id, executor);
       const failures = new Map<string, number>();
       let textOnlyTurns = 0;
       let nudged = false;
@@ -1008,6 +1433,12 @@ export function createGeneralHandler(deps: GeneralDeps): TaskHandler {
             : end
               ? { error: `not run: the task is ending (${"reason" in end ? end.reason : "submitted"})` }
               : await runTool(call.name, call.args, { cutOff, maxTokens: allowance });
+          // After a person held the browser, the model is told once: observe before acting on refs.
+          const epoch = control.epochOf(task.id);
+          if (epoch !== announcedEpoch && control.holderOf(task.id) === "agent") {
+            announcedEpoch = epoch;
+            payload.control_note = CONTROL_RETURNED_NOTE;
+          }
           messages.push({ role: "tool", toolCallId, content: bounded(JSON.stringify(payload), TOOL_RESULT_CAP) });
           if (typeof payload.error === "string" && !turnState.submitted) {
             const key = `${String(call.name)}\n${canonicalJson(call.args ?? null).slice(0, 4000)}\n${payload.error.slice(0, 500)}`;
@@ -1027,9 +1458,12 @@ export function createGeneralHandler(deps: GeneralDeps): TaskHandler {
 
       // ---- finish: collect → close → check -----------------------------------------------------
       stopRenewal();
+      await detach();
+      await settleOpenProposals();
       const final = end!;
       if (final.kind !== "submitted") {
         for (const l of [...live.values()]) await closeLive(l, "run ended");
+        if (final.kind === "unresolved" && infra.refusal) return finish(infra.refusal.outcome, `${final.reason}; ${infra.refusal.reason}`, { result: failedResult(infra.refusal.reason, "sandbox") });
         const outcome: Outcome = final.kind === "limit" ? "STOPPED_LIMIT" : final.kind === "driver-failed" ? "INCONCLUSIVE" : "RESULT_FAILED";
         return finish(outcome, final.reason, { result: failedResult(final.reason, "submitted") });
       }
@@ -1095,7 +1529,8 @@ export function createGeneralHandler(deps: GeneralDeps): TaskHandler {
         }
       }
       const taskArtifacts = await deps.artifacts.listForTask(owner, task);
-      const screenshots = taskArtifacts.filter((a) => a.kind === "screenshot");
+      // Evidence is the agent's own screenshots; live-view frames and a human holder's screenshots are kept but do not count.
+      const screenshots = taskArtifacts.filter((a) => a.kind === "screenshot" && a.source?.tool !== "live_view" && a.source?.tool !== "human_screenshot");
       const checks = runCompletionChecks({ profile, claimed, collected, ...(collectionProblem ? { collectionProblem } : {}), screenshots: screenshots.length, sources: submit.sources, visited, egressAllow });
       const sources = [...new Set(submit.sources)].slice(0, 50).map((url) => {
         const n = normalizeUrl(url);
@@ -1121,6 +1556,11 @@ export function createGeneralHandler(deps: GeneralDeps): TaskHandler {
       } else if (outputArtifacts.length > 0 || screenshots.length > 0) {
         outcome = "RESULT_PARTIAL";
         why = `${checks.filter((c) => !c.passed).length} of ${checks.length} completion checks failed: ${checks.filter((c) => !c.passed).map((c) => c.name).join(", ")}`;
+      } else if (infra.refusal) {
+        // No result because the deployment refused a sandbox: not the model's failure.
+        outcome = infra.refusal.outcome;
+        why = `${infra.refusal.outcome === "UNSUPPORTED" ? "a sandbox this task needs is not configured on this deployment" : "a sandbox this task needs was refused by the supervisor"}: ${infra.refusal.reason}`;
+        checks.unshift({ name: "sandbox", passed: false, detail: infra.refusal.reason.slice(0, 1024) });
       } else {
         outcome = "RESULT_FAILED";
         why = `no acceptable result: ${checks.filter((c) => !c.passed).map((c) => `${c.name} (${c.detail})`).join("; ").slice(0, 800)}`;
@@ -1130,6 +1570,7 @@ export function createGeneralHandler(deps: GeneralDeps): TaskHandler {
       return finish(outcome, why, { result });
     } catch (error) {
       stopRenewal();
+      await detach();
       const lost = error instanceof LostLeaseError || ctx.signal.aborted;
       // Never leave a sandbox behind: every live attempt is torn down (the cancel pass and the next
       // claim tear down again from the attempt rows and confirm).
@@ -1166,6 +1607,28 @@ export function createGeneralHandler(deps: GeneralDeps): TaskHandler {
       throw error;
     } finally {
       stopRenewal();
+      await detach();
+    }
+
+    /**
+     * At the end of a run: a proposal still pending can no longer be carried out (expired); one
+     * whose outcome is unknown gets one more receipt READ (never a re-submission).
+     */
+    async function settleOpenProposals(): Promise<void> {
+      const rows = (await deps.store.scanWhere<ActionProposal>(STORE_KIND_PROPOSALS, { taskId: task.id })).filter((r) => r.owner === owner);
+      for (const { value: p } of rows) {
+        if (p.status === "pending" || p.status === "approved") {
+          const next = await transitionProposal(deps.store, owner, p.id, [p.status], { status: "expired" });
+          if (next) await ctx.event("lifecycle", "Proposal expired", "the task's run ended before it could be carried out; nothing was submitted", { proposalId: p.id, status: "expired" });
+        } else if (p.status === "outcome_unknown" && deps.forms) {
+          const read = await readReceipt(deps.forms, p.destination, p.id, ctx.signal);
+          await ctx.event("check", `Receipt read at the end of the run: ${read.kind}`, read.kind === "confirmed" ? `receipt ${read.receiptId}` : read.kind === "error" ? read.detail : "no receipt", { proposalId: p.id, receiptRead: read.kind });
+          if (read.kind === "confirmed" && read.payloadDigest === p.payloadDigest) {
+            const next = await transitionProposal(deps.store, owner, p.id, ["outcome_unknown"], { status: "confirmed", receipt: { receiptId: read.receiptId, payloadDigest: read.payloadDigest, at: read.at } });
+            if (next) await ctx.event("lifecycle", "Final action confirmed by the destination", `receipt ${read.receiptId} (reconciled)`, { proposalId: p.id, status: "confirmed", receipt: next.receipt });
+          }
+        }
+      }
     }
 
     async function finish(outcome: Outcome, why: string, extra: Partial<Task> = {}): Promise<Partial<Task>> {
@@ -1201,6 +1664,13 @@ export function createGeneralHandler(deps: GeneralDeps): TaskHandler {
       if (found.length > 0) await ctx.event("lifecycle", "Reconciled outstanding supervisor operations", found.join("\n").slice(0, DETAIL_CAP), { operations: found.length });
     }
   }
+}
+
+/** A safe artifact file name from an untrusted suggested name (never a path). */
+function safeFilename(raw: unknown, fallback: string): string {
+  const base = typeof raw === "string" ? (raw.split(/[\\/]/).pop() ?? "") : "";
+  const name = base.normalize("NFC").replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^[._-]+/, "").slice(0, 100);
+  return name || fallback.replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 100) || "download.bin";
 }
 
 function failedResult(reason: string, check: string): TaskResult {

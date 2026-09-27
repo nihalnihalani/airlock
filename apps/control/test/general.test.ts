@@ -82,7 +82,7 @@ describe("general tasks: hero combined flow", () => {
     const catalog = await openScriptedCatalog(join(import.meta.dir, "fixtures/scripted-general"));
     expect(catalog.names).toEqual(["general-analysis", "general-hero"]);
     const hero = await catalog.load("general-hero");
-    const url = "https://airlock-fixtures.example.com/regional-sales.html";
+    const url = "https://airlock-fixtures.example.com/data/regional-sales";
     const supervisor = supervisorFor({ pages: { [url]: HERO_PAGES[HERO_URL]! } });
     const h = await makeGeneralHarness(fixture, supervisor, () => createScriptedDriver(hero.turns, { name: hero.name }));
     try {

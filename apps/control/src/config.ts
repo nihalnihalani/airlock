@@ -5,6 +5,7 @@
 import { existsSync, statSync } from "node:fs";
 import { isIP } from "node:net";
 import { join, resolve } from "node:path";
+import { parseFormsOrigins } from "./forms-adapter.ts";
 import { log } from "./log.ts";
 
 /** `scriptPath` is one script file or a directory of `<name>.json` scripts (see scripted.ts). */
@@ -67,6 +68,21 @@ export interface Config {
   /** Minimum interval between any two hostile runs, whoever starts them. */
   hostileGlobalMinIntervalMs: number;
   previewMinIntervalMs: number;
+  /**
+   * Supported final-action destinations (airlock-forms-v1): AIRLOCK_FORMS_ORIGINS, a comma-separated
+   * list of origins, with the shared AIRLOCK_FORMS_SECRET (≥ 32 chars). Empty: browser_propose_submit
+   * is refused and no final action is possible.
+   */
+  formsOrigins: string[];
+  formsSecret: string | null;
+  /** Public origin of the Airlock fixtures service, substituted for {{AIRLOCK_FIXTURES_ORIGIN}} in scripted diagnostics. */
+  fixturesOrigin: string | null;
+  /** Human browser control returns to the agent after this long without a human action (AIRLOCK_CONTROL_IDLE_MS). */
+  controlIdleMs: number;
+  /** How long taking control waits for the in-flight browser op (AIRLOCK_CONTROL_SETTLE_MS). */
+  controlSettleMs: number;
+  /** Lifetime of an action proposal and its approval code (AIRLOCK_PROPOSAL_TTL_MS). */
+  proposalTtlMs: number;
 }
 
 export class ConfigError extends Error {
@@ -162,7 +178,33 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   const instanceId = env.AIRLOCK_INSTANCE_ID?.trim() || null;
   if (instanceId !== null && !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(instanceId)) throw new ConfigError("AIRLOCK_INSTANCE_ID must be a plain identifier (letters, digits, . _ : -; at most 128)");
 
+  let formsOrigins: string[];
+  try {
+    formsOrigins = parseFormsOrigins(env.AIRLOCK_FORMS_ORIGINS);
+  } catch (error) {
+    throw new ConfigError(`AIRLOCK_FORMS_ORIGINS: ${error instanceof Error ? error.message : "invalid"}`);
+  }
+  const formsSecret = env.AIRLOCK_FORMS_SECRET?.trim() || null;
+  if (formsOrigins.length > 0 && (!formsSecret || formsSecret.length < 32)) throw new ConfigError("AIRLOCK_FORMS_SECRET (at least 32 characters, shared with the forms destination) is required when AIRLOCK_FORMS_ORIGINS is set");
+  const fixturesRaw = env.AIRLOCK_FIXTURES_ORIGIN?.trim() || "";
+  let fixturesOrigin: string | null = null;
+  if (fixturesRaw) {
+    try {
+      const url = new URL(fixturesRaw);
+      if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password) throw new Error("not an http(s) origin");
+      fixturesOrigin = url.origin;
+    } catch {
+      throw new ConfigError("AIRLOCK_FIXTURES_ORIGIN must be an http(s) origin, e.g. https://fixtures.example.org");
+    }
+  }
+
   return {
+    formsOrigins,
+    formsSecret,
+    fixturesOrigin,
+    controlIdleMs: intEnv(env, "AIRLOCK_CONTROL_IDLE_MS", 5 * 60_000, 10_000, 60 * 60_000),
+    controlSettleMs: intEnv(env, "AIRLOCK_CONTROL_SETTLE_MS", 10_000, 1000, 120_000),
+    proposalTtlMs: intEnv(env, "AIRLOCK_PROPOSAL_TTL_MS", 15 * 60_000, 60_000, 24 * 60 * 60_000),
     port: intEnv(env, "PORT", 3000, 1, 65535),
     bind: env.CONTROL_BIND?.trim() || "0.0.0.0",
     dataDir: resolve(env.AIRLOCK_DATA_DIR?.trim() || "./data"),
@@ -252,6 +294,7 @@ export function redactConfig(config: Config): Record<string, unknown> {
     supervisorToken: "[redacted]",
     operatorPassword: config.operatorPassword ? "[set]" : null,
     judgePassword: config.judgePassword ? "[set]" : null,
+    formsSecret: config.formsSecret ? "[redacted]" : null,
     vultr: { ...config.vultr, apiKey: config.vultr.apiKey ? "[redacted]" : null },
   };
 }

@@ -1217,8 +1217,19 @@ export const ControlState = z.object({
 });
 export type ControlState = z.infer<typeof ControlState>;
 
-/** A human browser action, sent through the control plane (never to the runner directly). */
-export const HumanBrowserAction = z.object({ request: BrowserOp });
+/**
+ * A human browser action, sent through the control plane (never to the runner directly). Uploads
+ * name one of the caller's own artifacts; the control plane supplies the bytes.
+ */
+export const HumanBrowserAction = z.object({
+  request: z.union([
+    BrowserOp,
+    z.object({ op: z.literal("download.list"), args: z.object({}).strict().optional() }),
+    z.object({ op: z.literal("download.read"), args: z.object({ downloadId: z.string().regex(/^dl-[0-9]{1,6}$/) }).strict() }),
+    z.object({ op: z.literal("upload"), args: z.object({ ref: browserRef, generation: browserGeneration, artifactId: plainId }).strict() }),
+  ]),
+});
+export type HumanBrowserAction = z.infer<typeof HumanBrowserAction>;
 
 /**
  * A proposed final action (a form submission to a supported destination), bound to exactly one

@@ -20,6 +20,9 @@ const safeRel = (prefixes: string[]) =>
     .regex(/^[A-Za-z0-9][A-Za-z0-9._/-]*$/, "letters, digits, '.', '_', '-' and '/' only")
     .refine((p) => p.split("/").every((s) => s !== "" && s !== "." && s !== "..") && prefixes.some((prefix) => p.startsWith(prefix) && p.length > prefix.length), `must be under ${prefixes.join(" or ")}`);
 
+/** Names a saved download may take under inputs/ (the bytes are kept as they were downloaded). */
+export const DOWNLOAD_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*\.(csv|tsv|txt|json|pdf|png|jpg)$/;
+
 export const CODE_FILE_EXTENSIONS = [".py", ".js", ".mjs", ".csv", ".json", ".txt", ".md"] as const;
 export const MAX_CODE_FILE_BYTES = 256 * 1024;
 
@@ -35,6 +38,21 @@ export const GENERAL_TOOL_ARGS = {
   browser_screenshot: z.object({}).strict(),
   browser_tabs: z.object({ action: z.enum(["list", "switch", "close"]), tabId: z.string().regex(/^tab-[0-9]{1,6}$/).optional() }).strict(),
   browser_save_text: z.object({ filename: z.string().min(1).max(80).regex(/^[A-Za-z0-9][A-Za-z0-9._-]*\.(txt|csv)$/, "a plain name ending in .txt or .csv") }).strict(),
+  browser_download_list: z.object({}).strict(),
+  browser_download_save: z
+    .object({
+      downloadId: z.string().regex(/^dl-[0-9]{1,6}$/, "a downloadId from browser_download_list"),
+      name: z.string().min(1).max(80).regex(DOWNLOAD_NAME, "a plain name ending in .csv, .tsv, .txt, .json, .pdf, .png or .jpg"),
+    })
+    .strict(),
+  browser_propose_submit: z
+    .object({
+      formUrl: z.string().min(1).max(BROWSER_LIMITS.urlChars),
+      formId: z.string().min(1).max(128),
+      fields: z.record(z.string().min(1).max(128), z.string().max(4096)).refine((f) => Object.keys(f).length <= 32, "at most 32 fields"),
+      summary: z.string().min(1).max(2000),
+    })
+    .strict(),
   code_write: z.object({ path: safeRel(["code/"]), content: z.string().max(MAX_CODE_FILE_BYTES) }).strict(),
   code_run: z.object({ language: z.enum(["python", "node"]), file: safeRel(["code/"]) }).strict(),
   code_read: z.object({ path: safeRel(["code/", "outputs/", "inputs/"]) }).strict(),
@@ -97,6 +115,30 @@ const SPECS: Record<GeneralToolName, ToolSpec> = {
     description: "Save the text of your latest browser_observe (as returned, bounded to 32 KiB) as inputs/<filename> for your code. Airlock copies the bytes; nothing else crosses from the browser to the code sandbox.",
     parameters: obj({ filename: { type: "string", description: "e.g. page.csv or page.txt" } }, ["filename"]),
   },
+  browser_download_list: {
+    name: "browser_download_list",
+    description: "List the files this browser session downloaded (clicking a download link saves the file; it never opens). Each has a downloadId, the page's suggested name (untrusted), state, size and a media type sniffed from the bytes. At most 10 downloads of 10 MiB each per session.",
+    parameters: obj({}),
+  },
+  browser_download_save: {
+    name: "browser_download_save",
+    description: "Keep a completed download as task evidence and place its exact bytes at inputs/<name> for your code (placed now if the code sandbox is running, otherwise when it starts). Prefer this over browser_save_text when the page offers the data as a file.",
+    parameters: obj({ downloadId: { type: "string", description: "dl-N from browser_download_list" }, name: { type: "string", description: "e.g. regional-sales.csv" } }, ["downloadId", "name"]),
+  },
+  browser_propose_submit: {
+    name: "browser_propose_submit",
+    description:
+      "Propose submitting a form on a SUPPORTED destination (a controlled airlock-forms-v1 form that the operator configured; its URL is /f/<formId>). You never submit it yourself: a person reviews the exact values, and only after approval does Airlock fill in the form, add a one-use approval code and submit it, then verify the destination's receipt. Clicking the form's submit button, pressing Enter in it or typing with submit is refused. This task waits for the decision and you get the outcome (confirmed, rejected, expired, failed or outcome_unknown). Irreversible actions on any other site (purchases, messages, account changes) are not supported: say so with submit_result instead.",
+    parameters: obj(
+      {
+        formUrl: { type: "string", description: "The form page, e.g. https://forms.example.org/f/contact-request" },
+        formId: { type: "string", description: "The form id shown on the page, e.g. contact-request" },
+        fields: { type: "object", additionalProperties: { type: "string" }, description: "Every field of the form by name (not the approval code), with the exact values to submit" },
+        summary: { type: "string", description: "One or two sentences for the reviewer: what this submission does and why" },
+      },
+      ["formUrl", "formId", "fields", "summary"],
+    ),
+  },
   code_write: {
     name: "code_write",
     description: "Write a file under code/ in the offline code sandbox (.py, .js, .mjs, .csv, .json, .txt, .md; at most 256 KiB). Your program reads inputs/ and must write its results under outputs/.",
@@ -156,7 +198,10 @@ export function generalSystemPrompt(profile: TaskProfile, context: { egressAllow
       "Take a browser_screenshot of each page that supports your answer; screenshots are stored as evidence.",
       context.vision ? "Screenshots you take are attached to your next turn as images." : "This model receives no images; rely on browser_observe text.",
       "If the browser session is lost, the last action's outcome is unknown and is never replayed; the next browser tool starts a fresh session with no pages open.",
+      "A person may take control of the browser for a while; your browser tools then wait. When control returns, observe before any click or type (earlier refs are invalid).",
     );
+    if (profile.tools.includes("browser_propose_submit"))
+      lines.push("Final actions: you may not submit forms or take irreversible actions yourself. Only forms on a supported destination can be submitted, through browser_propose_submit and a person's approval; anything else irreversible is unsupported.");
   }
   if (profile.codeLanguages.length > 0) {
     lines.push(
@@ -165,6 +210,7 @@ export function generalSystemPrompt(profile: TaskProfile, context: { egressAllow
       context.inputs.length > 0 ? `Inputs: ${context.inputs.map((i) => `inputs/${i.name} (${i.mediaType}, ${i.byteLength} bytes)`).join(", ")}.` : "Inputs: none uploaded.",
     );
     if (profile.tools.includes("browser_save_text")) lines.push("To analyse page data, observe the page, then browser_save_text to place that text under inputs/ for your code.");
+    if (profile.tools.includes("browser_download_save")) lines.push("When the page offers the data as a downloadable file (e.g. a CSV link), click it, then browser_download_list and browser_download_save to place the exact file under inputs/.");
   }
   lines.push(
     "",

@@ -294,7 +294,7 @@ ${values}
       if (!variant) return errorPage(400, "Unknown variant", "Use ?variant=a (default) or ?variant=b.");
       if (path.endsWith(".csv"))
         return new Response(DATASETS[variant], {
-          headers: { ...baseHeaders("text/csv; charset=utf-8"), "content-disposition": `inline; filename="regional-sales-${variant}.csv"` },
+          headers: { ...baseHeaders("text/csv; charset=utf-8"), "content-disposition": `attachment; filename="regional-sales-${variant}.csv"` },
         });
       return dataPage(variant);
     }

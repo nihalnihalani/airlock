@@ -59,7 +59,16 @@ export async function makeGeneralHarness(
   fixture: Fixture,
   supervisor: FakeSupervisor,
   driver: GeneralDeps["driver"],
-  options: { profiles?: Record<string, Partial<Omit<TaskProfile, "budgets">> & { budgets?: Partial<TaskProfile["budgets"]> }>; vision?: boolean; leaseMs?: number; cancelRetries?: number; cancelRetryDelayMs?: number; store?: Store } = {},
+  options: {
+    profiles?: Record<string, Partial<Omit<TaskProfile, "budgets">> & { budgets?: Partial<TaskProfile["budgets"]> }>;
+    vision?: boolean;
+    leaseMs?: number;
+    cancelRetries?: number;
+    cancelRetryDelayMs?: number;
+    store?: Store;
+    /** Extra general-handler deps (control service, forms destination, timings). */
+    general?: (store: Store, bus: TaskEventBus) => Partial<GeneralDeps>;
+  } = {},
 ): Promise<GeneralHarness> {
   const store = options.store ?? (await createStore());
   const blobs = new MemoryArtifactStore();
@@ -70,7 +79,7 @@ export async function makeGeneralHarness(
     const base = profiles.get(id)!;
     profiles.set(id, { ...base, ...patch, budgets: { ...base.budgets, ...(patch.budgets ?? {}) } } as TaskProfile);
   }
-  const general = createGeneralHandler({ supervisor, driver, store, artifacts, blobs, taskProfiles: profiles, vision: options.vision === true, capacityRetryDelaysMs: [], renewIntervalMs: 50, authorizationMs: 5000 });
+  const general = createGeneralHandler({ supervisor, driver, store, artifacts, blobs, taskProfiles: profiles, vision: options.vision === true, capacityRetryDelaysMs: [], renewIntervalMs: 50, authorizationMs: 5000, ...(options.general?.(store, bus) ?? {}) });
   const repair = createRepairHandler({
     profiles: new Map([[fixture.profile.manifest.id, fixture.profile]]),
     supervisor,

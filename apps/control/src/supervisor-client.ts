@@ -25,7 +25,7 @@ import {
   type AttemptRef,
   type AdapterRequest,
   type AuthorToolArgs,
-  type BrowserOp,
+  type BrowserAnyOp,
   type CandidateBundle,
   type Operation,
   type SandboxRole,
@@ -33,6 +33,8 @@ import {
 import { log } from "./log.ts";
 
 export class SupervisorError extends Error {
+  /** The supervisor's machine-readable refusal code (e.g. unsupported_profile, probe_failed), when it sent one. */
+  code?: string;
   constructor(
     message: string,
     readonly status: number,
@@ -108,7 +110,7 @@ export interface SupervisorClient {
    * One runner operation on a live browser attempt (`POST /attempts/:id/browser`). `interrupted`
    * means the runner was lost: the outcome is unknown, the attempt is closed, never replay it.
    */
-  browserOp(input: { ref: AttemptRef; request: BrowserOp }, opts?: CallOptions): Promise<BrowserOpResult>;
+  browserOp(input: { ref: AttemptRef; request: BrowserAnyOp }, opts?: CallOptions): Promise<BrowserOpResult>;
   /** What the supervisor established when it created the browser attempt (`GET /attempts/:id/browser`). */
   browserEvidence(attemptId: string, signal?: AbortSignal): Promise<BrowserEvidence>;
   /** The per-attempt egress proxy's decisions (`GET /attempts/:id/egress`). */
@@ -243,7 +245,7 @@ export class HttpSupervisorClient implements SupervisorClient {
   hostile(input: { profileId: string; command: string }, opts?: CallOptions) {
     return this.mutate("/hostile", input, BlastRadiusCard, DEFAULT_TIMEOUTS.hostile, opts);
   }
-  browserOp(input: { ref: AttemptRef; request: BrowserOp }, opts?: CallOptions) {
+  browserOp(input: { ref: AttemptRef; request: BrowserAnyOp }, opts?: CallOptions) {
     return this.mutate(`/attempts/${encodeURIComponent(input.ref.attemptId)}/browser`, input, BrowserOpResult, DEFAULT_TIMEOUTS.browserOp, opts);
   }
   async browserEvidence(attemptId: string, signal?: AbortSignal) {
@@ -357,12 +359,19 @@ export class HttpSupervisorClient implements SupervisorClient {
 
   private async decode<T>(response: Response, schema: z.ZodType<T>, operationId?: string): Promise<T> {
     if (!response.ok) {
-      const message = await errorText(response);
-      if (response.status === 409) throw new SupervisorFenceError(message, operationId);
-      if (response.status === 404) throw new SupervisorNotFoundError(message, operationId);
-      if (response.status === 429) throw new SupervisorCapacityError(message, operationId);
-      if (response.status === 503) throw new SupervisorUnavailableError(message, operationId);
-      throw new SupervisorError(message, response.status, operationId);
+      const { message, code } = await errorBody(response);
+      const error =
+        response.status === 409
+          ? new SupervisorFenceError(message, operationId)
+          : response.status === 404
+            ? new SupervisorNotFoundError(message, operationId)
+            : response.status === 429
+              ? new SupervisorCapacityError(message, operationId)
+              : response.status === 503
+                ? new SupervisorUnavailableError(message, operationId)
+                : new SupervisorError(message, response.status, operationId);
+      if (code) error.code = code;
+      throw error;
     }
     let json: unknown;
     try {
@@ -375,6 +384,22 @@ export class HttpSupervisorClient implements SupervisorClient {
       throw new SupervisorError(`Supervisor response failed validation: ${parsed.error.issues[0]?.message ?? "invalid"}`, 502, operationId);
     }
     return parsed.data;
+  }
+}
+
+async function errorBody(response: Response): Promise<{ message: string; code?: string }> {
+  try {
+    const text = (await response.text()).slice(0, 2000);
+    try {
+      const json = JSON.parse(text) as { error?: unknown; code?: unknown };
+      const code = typeof json?.code === "string" && /^[a-z_]{1,64}$/.test(json.code) ? json.code : undefined;
+      if (json && typeof json.error === "string") return { message: `supervisor ${response.status}: ${json.error}`, ...(code ? { code } : {}) };
+    } catch {
+      // fall through to raw text
+    }
+    return { message: `supervisor ${response.status}: ${text || response.statusText}` };
+  } catch {
+    return { message: `supervisor ${response.status}` };
   }
 }
 
