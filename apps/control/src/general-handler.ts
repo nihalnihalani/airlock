@@ -744,14 +744,14 @@ export function createGeneralHandler(deps: GeneralDeps): TaskHandler {
             const bytes = new TextEncoder().encode(lastObservation.text);
             const artifact = await deps.artifacts.record(owner, {
               taskId: task.id,
-              kind: "download",
+              kind: "page_text",
               filename,
               mediaType: filename.endsWith(".csv") ? "text/csv" : "text/plain",
               bytes,
               source: { url: lastObservation.url, step: task.budget.modelCallsUsed, tool: name, ...(browserLive() ? { attemptId: browserLive()!.ref.attemptId } : {}) },
             });
             saved.set(filename, { bytes, artifactId: artifact.id, sha256: artifact.sha256 });
-            await ctx.event("artifact", `Page text saved ${artifact.id}`, `inputs/${filename} from ${lastObservation.url.slice(0, 300)} (${bytes.byteLength} bytes)`, { artifactId: artifact.id, kind: "download", sha256: artifact.sha256, url: lastObservation.url.slice(0, 2048), path: `inputs/${filename}` });
+            await ctx.event("artifact", `Page text saved ${artifact.id}`, `inputs/${filename} from ${lastObservation.url.slice(0, 300)} (${bytes.byteLength} bytes)`, { artifactId: artifact.id, kind: "page_text", sha256: artifact.sha256, url: lastObservation.url.slice(0, 2048), path: `inputs/${filename}` });
             const code = codeLive();
             let placed = false;
             if (code && !code.lost) placed = (await placeInput(code, filename, bytes, artifact.sha256, name)) === null;
@@ -891,7 +891,7 @@ export function createGeneralHandler(deps: GeneralDeps): TaskHandler {
       };
 
       // ---- model loop ----------------------------------------------------------------------------
-      await checkpoint({ phase: "repair" });
+      await checkpoint({ phase: "execute" });
       await ctx.event("phase", "execute", `model loop for goal under profile ${profile.id} (the contract Phase enum has no "execute"; recorded as phase "repair")`);
       const driver: ModelDriver = typeof deps.driver === "function" ? await deps.driver(task) : deps.driver;
       const identity = driver.describe?.() ?? { model: "unknown", host: "unknown" };

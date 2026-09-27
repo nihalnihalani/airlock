@@ -87,7 +87,7 @@ function record(value: unknown): Data | null {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Data) : null;
 }
 
-const PHASES: readonly string[] = ["prepare", "baseline", "reproduce", "repair", "freeze", "verify", "ready"];
+const PHASES: readonly string[] = ["prepare", "baseline", "reproduce", "repair", "execute", "freeze", "verify", "ready"];
 
 function isPhase(value: string): value is Phase {
   return PHASES.includes(value);

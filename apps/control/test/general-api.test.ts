@@ -177,7 +177,7 @@ describe("uploads and artifacts API", () => {
       const done = await ctx.h.waitFor(task.id);
       expect(done.outcome).toBe("RESULT_VERIFIED");
       const list = (await (await ctx.app.request(`/api/tasks/${task.id}/artifacts`, { headers: { cookie: j } })).json()) as Artifact[];
-      expect(list.map((a) => a.kind).sort()).toEqual(["download", "output", "output", "screenshot"]);
+      expect(list.map((a) => a.kind).sort()).toEqual(["output", "output", "page_text", "screenshot"]);
       expect((await ctx.app.request(`/api/tasks/${task.id}/artifacts`, { headers: { cookie: other } })).status).toBe(404);
       const chart = list.find((a) => a.filename === "chart.png")!;
       const scoped = await ctx.app.request(`/api/tasks/${task.id}/artifacts/${chart.id}`, { headers: { cookie: j } });

@@ -51,7 +51,7 @@ describe("general tasks: hero combined flow", () => {
       expect(supervisor.toolCalls.find((t) => t.args.kind === "exec")!.args).toEqual({ kind: "exec", command: `${CODE_RUNNER} code/analysis.py` });
       // Artifacts with provenance.
       const artifacts = await h.artifacts.listForTask(OWNER, done);
-      expect(artifacts.map((a) => a.kind).sort()).toEqual(["download", "output", "output", "screenshot"]);
+      expect(artifacts.map((a) => a.kind).sort()).toEqual(["output", "output", "page_text", "screenshot"]);
       const shot = artifacts.find((a) => a.kind === "screenshot")!;
       expect(shot.source).toMatchObject({ url: HERO_URL, tool: "browser_screenshot" });
       expect(done.result!.sources).toEqual([{ url: HERO_URL, screenshotArtifactId: shot.id }]);

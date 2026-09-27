@@ -56,6 +56,8 @@ export const Phase = z.enum([
   "baseline",
   "reproduce",
   "repair",
+  /** General tasks: the model loop working through browser and code tools (repair is the repair flow's). */
+  "execute",
   "freeze",
   "verify",
   "ready",
@@ -672,6 +674,10 @@ export const Budget = z.object({
   attemptTokens: z.number().int().nonnegative().optional(),
   /** Controller recoveries (lost lease, restart, verify crash) so far. */
   recoveries: z.number().int().nonnegative().optional(),
+  /** General tasks: browser operations, code runs and sandbox sessions charged so far. */
+  browserOps: z.number().int().nonnegative().optional(),
+  codeRuns: z.number().int().nonnegative().optional(),
+  sessions: z.number().int().nonnegative().optional(),
 });
 
 /** One sealed candidate and its external comparison; a task may produce one per repair attempt. */
@@ -680,7 +686,7 @@ export const Budget = z.object({
  * collected output, a screenshot or a browser download. Bytes are served only to the owner (or an
  * operator), with a safe disposition and nosniff; never rendered as active content on the app origin.
  */
-export const ArtifactKind = z.enum(["upload", "output", "screenshot", "download"]);
+export const ArtifactKind = z.enum(["upload", "output", "screenshot", "download", "page_text"]);
 export const Artifact = z.object({
   schemaVersion: z.literal(SCHEMA_VERSION),
   id: plainId,

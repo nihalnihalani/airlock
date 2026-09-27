@@ -91,6 +91,7 @@ export const PHASE_LABEL: Record<Phase, string> = {
   reproduce: "Reproduce",
   baseline: "Baseline",
   repair: "Repair",
+  execute: "Execute",
   freeze: "Freeze",
   verify: "Verify",
   ready: "Ready",
